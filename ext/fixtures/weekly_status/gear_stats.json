@@ -1,0 +1,32 @@
+{
+ "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01": {
+  "gearPk": 76000001,
+  "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01",
+  "createDate": 1756684800000,
+  "updateDate": 1772870400000,
+  "totalDistance": 742000.0,
+  "totalActivities": 98,
+  "isProcessing": false,
+  "processing": false
+ },
+ "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a02": {
+  "gearPk": 76000002,
+  "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a02",
+  "createDate": 1768435200000,
+  "updateDate": 1772870400000,
+  "totalDistance": 210400.0,
+  "totalActivities": 21,
+  "isProcessing": false,
+  "processing": false
+ },
+ "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a03": {
+  "gearPk": 76000003,
+  "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a03",
+  "createDate": 1714521600000,
+  "updateDate": 1772870400000,
+  "totalDistance": 5123000.0,
+  "totalActivities": 240,
+  "isProcessing": false,
+  "processing": false
+ }
+}

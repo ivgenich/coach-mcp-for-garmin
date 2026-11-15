@@ -1,0 +1,103 @@
+{
+  "workoutName": "Technique swim",
+  "description": null,
+  "updatedDate": "2026-03-09T06:15:00.0",
+  "createdDate": "2026-03-09T06:15:00.0",
+  "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming", "displayOrder": 3},
+  "subSportType": null,
+  "estimatedDurationInSecs": null,
+  "estimatedDistanceInMeters": 2000.0,
+  "estimateType": null,
+  "poolLength": 25.0,
+  "poolLengthUnit": {"unitId": 1, "unitKey": "meter", "factor": 100.0},
+  "workoutSegments": [
+    {
+      "segmentOrder": 1,
+      "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming", "displayOrder": 3},
+      "poolLengthUnit": {"unitId": 1, "unitKey": "meter", "factor": 100.0},
+      "poolLength": 25.0,
+      "avgTrainingSpeed": null,
+      "estimatedDurationInSecs": null,
+      "estimatedDistanceInMeters": null,
+      "workoutSteps": [
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 1,
+          "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup", "displayOrder": 1},
+          "description": null,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 300.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null,
+          "strokeType": {"strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6},
+          "equipmentType": {"equipmentTypeId": 0, "equipmentTypeKey": null, "displayOrder": 0}
+        },
+        {
+          "type": "RepeatGroupDTO",
+          "stepOrder": 2,
+          "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+          "numberOfIterations": 8,
+          "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": false},
+          "endConditionValue": 8.0,
+          "smartRepeat": false,
+          "workoutSteps": [
+            {
+              "type": "ExecutableStepDTO",
+              "stepOrder": 3,
+              "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+              "description": null,
+              "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+              "endConditionValue": 50.0,
+              "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+              "targetValueOne": null,
+              "targetValueTwo": null,
+              "zoneNumber": null,
+              "strokeType": {"strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6},
+              "drillType": {"drillTypeId": 3, "drillTypeKey": "drill", "displayOrder": 3}
+            },
+            {
+              "type": "ExecutableStepDTO",
+              "stepOrder": 4,
+              "stepType": {"stepTypeId": 5, "stepTypeKey": "rest", "displayOrder": 5},
+              "description": null,
+              "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+              "endConditionValue": 20.0,
+              "targetType": null,
+              "targetValueOne": null,
+              "targetValueTwo": null,
+              "zoneNumber": null
+            }
+          ]
+        },
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 5,
+          "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+          "description": null,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 800.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null,
+          "strokeType": {"strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6}
+        },
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 6,
+          "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown", "displayOrder": 2},
+          "description": null,
+          "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true},
+          "endConditionValue": 200.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null,
+          "strokeType": {"strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6}
+        }
+      ]
+    }
+  ]
+}

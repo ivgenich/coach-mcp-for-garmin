@@ -1,0 +1,50 @@
+# Tools the server exposes, one per line. Text after '#', whitespace and blank
+# lines are ignored. Baked into the image (Dockerfile); ext/launch.py exposes
+# only these, and every name must be a read-only tool or the build and the
+# start fail. The GARMIN_ENABLED_TOOLS variable can only narrow this list.
+# Apply a change: redeploy (./scripts/deploy.sh).
+
+# Activities
+get_activities
+get_activities_by_date
+get_activity
+get_activity_splits
+get_activity_hr_in_timezones
+get_activity_power_in_timezones
+get_activity_fit_data
+
+# Planned workouts
+get_scheduled_workouts
+get_workout_by_id
+
+# Saved courses (routes)
+get_courses
+get_course_details
+get_course_profile
+
+# Daily status (this repo's ext/: computed level, flags, recommendation)
+get_daily_status
+get_weekly_status
+
+# Daily summary, sleep & recovery
+get_stats
+get_sleep_summary
+get_sleep_summary_range
+get_hrv_trend
+get_body_battery
+get_weekly_stress
+get_training_readiness
+
+# Training & fitness
+get_training_status
+get_training_load_trend
+get_vo2max_trend
+get_endurance_score
+get_lactate_threshold
+get_cycling_ftp
+get_heart_rate_zones
+get_race_predictions
+get_personal_record
+
+# Totals by sport
+get_progress_summary_between_dates

@@ -1,0 +1,55 @@
+{
+  "mostRecentVO2Max": {
+    "generic": {"calendarDate": "2026-03-17", "vo2MaxPreciseValue": 55.4, "vo2MaxValue": 55.0, "fitnessAge": null},
+    "cycling": {"calendarDate": "2026-03-15", "vo2MaxPreciseValue": 53.1, "vo2MaxValue": 53.0},
+    "heatAltitudeAcclimation": null
+  },
+  "mostRecentTrainingLoadBalance": {
+    "metricsTrainingLoadBalanceDTOMap": {
+      "device-a": {
+        "calendarDate": "2026-03-18",
+        "monthlyLoadAerobicLow": 1800.5,
+        "monthlyLoadAerobicHigh": 640.2,
+        "monthlyLoadAnaerobic": 210.7,
+        "trainingBalanceFeedbackPhrase": "BALANCED",
+        "primaryTrainingDevice": true
+      }
+    },
+    "recordedDevices": []
+  },
+  "mostRecentTrainingStatus": {
+    "latestTrainingStatusData": {
+      "device-a": {
+        "calendarDate": "2026-03-18",
+        "sinceDate": "2026-03-12",
+        "weeklyTrainingLoad": null,
+        "trainingStatus": 4,
+        "timestamp": 1773806400000,
+        "loadTunnelMin": null,
+        "loadTunnelMax": null,
+        "loadLevelTrend": null,
+        "sport": "RUNNING",
+        "subSport": "GENERIC",
+        "fitnessTrendSport": "RUNNING",
+        "fitnessTrend": 2,
+        "trainingStatusFeedbackPhrase": "PRODUCTIVE_2",
+        "trainingPaused": false,
+        "acuteTrainingLoadDTO": {
+          "acwrPercent": 44,
+          "acwrStatus": "OPTIMAL",
+          "acwrStatusFeedback": "FEEDBACK_2",
+          "dailyTrainingLoadAcute": 640,
+          "maxTrainingLoadChronic": 873.0,
+          "minTrainingLoadChronic": 465.6,
+          "dailyTrainingLoadChronic": 582,
+          "dailyAcuteChronicWorkloadRatio": 1.1
+        },
+        "primaryTrainingDevice": true
+      }
+    },
+    "recordedDevices": [],
+    "showSelector": false,
+    "lastPrimarySyncDate": "2026-03-18"
+  },
+  "heatAltitudeAcclimationDTO": null
+}

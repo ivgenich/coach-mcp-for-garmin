@@ -1,0 +1,27 @@
+# Keep the image minimal: only what the container needs gets sent to the build.
+# Patterns match from the context root; **/ reaches into subdirectories.
+# config/ is NOT ignored: the Dockerfile bakes config/enabled-tools.txt into
+# the image (the read-only tool list launch.py enforces).
+scripts/
+recipes/
+README.md
+.git
+.gitignore
+.env*
+tokens/
+*.secret
+**/*.token
+garmin_tokens.json
+.garminconnect*
+**/*garminconnect_base64*
+.DS_Store
+**/.DS_Store
+.venv/
+venv/
+**/*.local.md
+# ext/ is copied whole (COPY ext/ /opt/garmin-ext/), minus its tests and docs.
+ext/test_*.py
+ext/fixtures/
+ext/README.md
+**/__pycache__
+**/*.pyc

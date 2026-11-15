@@ -1,0 +1,39 @@
+{
+  "data": {
+    "workoutScheduleSummariesScalar": [
+      {
+        "scheduleDate": "2026-03-18",
+        "workoutName": "Easy aerobic run",
+        "workoutType": "running",
+        "estimatedDurationInSecs": 2880,
+        "estimatedDistanceInMeters": 6800.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false
+      },
+      {
+        "scheduleDate": "2026-03-19",
+        "workoutName": "Threshold intervals 5x6",
+        "workoutType": "running",
+        "estimatedDurationInSecs": 4800,
+        "estimatedDistanceInMeters": 13200.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false
+      },
+      {
+        "scheduleDate": "2026-03-19",
+        "workoutName": "Technique swim",
+        "workoutType": "swimming",
+        "estimatedDurationInSecs": null,
+        "estimatedDistanceInMeters": 2000.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false
+      }
+    ]
+  }
+}

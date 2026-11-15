@@ -1,0 +1,266 @@
+{
+ "2026-03-07": {
+  "userId": 71000001,
+  "mostRecentVO2Max": {
+   "userId": 71000001,
+   "generic": {
+    "calendarDate": "2026-03-06",
+    "vo2MaxPreciseValue": 56.3,
+    "vo2MaxValue": 56.0,
+    "fitnessAge": null,
+    "fitnessAgeDescription": null,
+    "maxMetCategory": 0
+   },
+   "cycling": {
+    "calendarDate": "2026-03-07",
+    "vo2MaxPreciseValue": 53.8,
+    "vo2MaxValue": 54.0,
+    "fitnessAge": null,
+    "fitnessAgeDescription": null,
+    "maxMetCategory": 1
+   },
+   "heatAltitudeAcclimation": null
+  },
+  "mostRecentTrainingLoadBalance": {
+   "userId": 71000001,
+   "metricsTrainingLoadBalanceDTOMap": {
+    "72000002": {
+     "calendarDate": "2026-03-07",
+     "deviceId": 72000002,
+     "monthlyLoadAerobicLow": 900.0,
+     "monthlyLoadAerobicHigh": 300.0,
+     "monthlyLoadAnaerobic": 60.0,
+     "trainingBalanceFeedbackPhrase": "ANAEROBIC_SHORTAGE",
+     "primaryTrainingDevice": false
+    },
+    "72000001": {
+     "calendarDate": "2026-03-07",
+     "deviceId": 72000001,
+     "monthlyLoadAerobicLow": 2100.5,
+     "monthlyLoadAerobicHigh": 640.2,
+     "monthlyLoadAnaerobic": 180.0,
+     "monthlyLoadAerobicLowTargetMin": 2300,
+     "monthlyLoadAerobicLowTargetMax": 3900,
+     "monthlyLoadAerobicHighTargetMin": 500,
+     "monthlyLoadAerobicHighTargetMax": 1100,
+     "monthlyLoadAnaerobicTargetMin": 150,
+     "monthlyLoadAnaerobicTargetMax": 600,
+     "trainingBalanceFeedbackPhrase": "AEROBIC_LOW_SHORTAGE",
+     "primaryTrainingDevice": true
+    }
+   },
+   "recordedDevices": [
+    {
+     "deviceId": 72000001,
+     "imageURL": null,
+     "deviceName": "Synthetic Watch",
+     "category": 0
+    }
+   ]
+  },
+  "mostRecentTrainingStatus": {
+   "userId": 71000001,
+   "latestTrainingStatusData": {
+    "72000002": {
+     "calendarDate": "2026-03-07",
+     "sinceDate": "2026-02-20",
+     "weeklyTrainingLoad": null,
+     "trainingStatus": 4,
+     "timestamp": 1772870400000,
+     "deviceId": 72000002,
+     "loadTunnelMin": null,
+     "loadTunnelMax": null,
+     "loadLevelTrend": null,
+     "sport": "CYCLING",
+     "subSport": "GENERIC",
+     "fitnessTrendSport": "CYCLING",
+     "fitnessTrend": 1,
+     "trainingStatusFeedbackPhrase": "MAINTAINING_1",
+     "trainingPaused": false,
+     "acuteTrainingLoadDTO": {
+      "acwrPercent": 20,
+      "acwrStatus": "LOW",
+      "acwrStatusFeedback": "FEEDBACK_1",
+      "dailyTrainingLoadAcute": 420,
+      "maxTrainingLoadChronic": 750.0,
+      "minTrainingLoadChronic": 400.0,
+      "dailyTrainingLoadChronic": 500,
+      "dailyAcuteChronicWorkloadRatio": 0.8
+     },
+     "primaryTrainingDevice": false
+    },
+    "72000001": {
+     "calendarDate": "2026-03-07",
+     "sinceDate": "2026-02-26",
+     "weeklyTrainingLoad": null,
+     "trainingStatus": 7,
+     "timestamp": 1772870400000,
+     "deviceId": 72000001,
+     "loadTunnelMin": null,
+     "loadTunnelMax": null,
+     "loadLevelTrend": null,
+     "sport": "RUNNING",
+     "subSport": "GENERIC",
+     "fitnessTrendSport": "RUNNING",
+     "fitnessTrend": 2,
+     "trainingStatusFeedbackPhrase": "PRODUCTIVE_2",
+     "trainingPaused": false,
+     "acuteTrainingLoadDTO": {
+      "acwrPercent": 52,
+      "acwrStatus": "OPTIMAL",
+      "acwrStatusFeedback": "FEEDBACK_2",
+      "dailyTrainingLoadAcute": 812,
+      "maxTrainingLoadChronic": 1164.0,
+      "minTrainingLoadChronic": 620.8,
+      "dailyTrainingLoadChronic": 776,
+      "dailyAcuteChronicWorkloadRatio": 1.05
+     },
+     "primaryTrainingDevice": true
+    }
+   },
+   "recordedDevices": [
+    {
+     "deviceId": 72000001,
+     "imageURL": null,
+     "deviceName": "Synthetic Watch",
+     "category": 0
+    }
+   ],
+   "showSelector": false,
+   "lastPrimarySyncDate": "2026-03-07"
+  },
+  "heatAltitudeAcclimationDTO": null
+ },
+ "2026-02-28": {
+  "userId": 71000001,
+  "mostRecentVO2Max": {
+   "userId": 71000001,
+   "generic": {
+    "calendarDate": "2026-03-06",
+    "vo2MaxPreciseValue": 56.3,
+    "vo2MaxValue": 56.0,
+    "fitnessAge": null,
+    "fitnessAgeDescription": null,
+    "maxMetCategory": 0
+   },
+   "cycling": {
+    "calendarDate": "2026-02-28",
+    "vo2MaxPreciseValue": 53.8,
+    "vo2MaxValue": 54.0,
+    "fitnessAge": null,
+    "fitnessAgeDescription": null,
+    "maxMetCategory": 1
+   },
+   "heatAltitudeAcclimation": null
+  },
+  "mostRecentTrainingLoadBalance": {
+   "userId": 71000001,
+   "metricsTrainingLoadBalanceDTOMap": {
+    "72000002": {
+     "calendarDate": "2026-02-28",
+     "deviceId": 72000002,
+     "monthlyLoadAerobicLow": 900.0,
+     "monthlyLoadAerobicHigh": 300.0,
+     "monthlyLoadAnaerobic": 60.0,
+     "trainingBalanceFeedbackPhrase": "ANAEROBIC_SHORTAGE",
+     "primaryTrainingDevice": false
+    },
+    "72000001": {
+     "calendarDate": "2026-02-28",
+     "deviceId": 72000001,
+     "monthlyLoadAerobicLow": 2100.5,
+     "monthlyLoadAerobicHigh": 640.2,
+     "monthlyLoadAnaerobic": 180.0,
+     "monthlyLoadAerobicLowTargetMin": 2300,
+     "monthlyLoadAerobicLowTargetMax": 3900,
+     "monthlyLoadAerobicHighTargetMin": 500,
+     "monthlyLoadAerobicHighTargetMax": 1100,
+     "monthlyLoadAnaerobicTargetMin": 150,
+     "monthlyLoadAnaerobicTargetMax": 600,
+     "trainingBalanceFeedbackPhrase": "BALANCED",
+     "primaryTrainingDevice": true
+    }
+   },
+   "recordedDevices": [
+    {
+     "deviceId": 72000001,
+     "imageURL": null,
+     "deviceName": "Synthetic Watch",
+     "category": 0
+    }
+   ]
+  },
+  "mostRecentTrainingStatus": {
+   "userId": 71000001,
+   "latestTrainingStatusData": {
+    "72000002": {
+     "calendarDate": "2026-02-28",
+     "sinceDate": "2026-02-20",
+     "weeklyTrainingLoad": null,
+     "trainingStatus": 4,
+     "timestamp": 1772870400000,
+     "deviceId": 72000002,
+     "loadTunnelMin": null,
+     "loadTunnelMax": null,
+     "loadLevelTrend": null,
+     "sport": "CYCLING",
+     "subSport": "GENERIC",
+     "fitnessTrendSport": "CYCLING",
+     "fitnessTrend": 1,
+     "trainingStatusFeedbackPhrase": "MAINTAINING_1",
+     "trainingPaused": false,
+     "acuteTrainingLoadDTO": {
+      "acwrPercent": 20,
+      "acwrStatus": "LOW",
+      "acwrStatusFeedback": "FEEDBACK_1",
+      "dailyTrainingLoadAcute": 420,
+      "maxTrainingLoadChronic": 750.0,
+      "minTrainingLoadChronic": 400.0,
+      "dailyTrainingLoadChronic": 500,
+      "dailyAcuteChronicWorkloadRatio": 0.8
+     },
+     "primaryTrainingDevice": false
+    },
+    "72000001": {
+     "calendarDate": "2026-02-28",
+     "sinceDate": "2026-02-26",
+     "weeklyTrainingLoad": null,
+     "trainingStatus": 7,
+     "timestamp": 1772870400000,
+     "deviceId": 72000001,
+     "loadTunnelMin": null,
+     "loadTunnelMax": null,
+     "loadLevelTrend": null,
+     "sport": "RUNNING",
+     "subSport": "GENERIC",
+     "fitnessTrendSport": "RUNNING",
+     "fitnessTrend": 2,
+     "trainingStatusFeedbackPhrase": "PRODUCTIVE_1",
+     "trainingPaused": false,
+     "acuteTrainingLoadDTO": {
+      "acwrPercent": 52,
+      "acwrStatus": "OPTIMAL",
+      "acwrStatusFeedback": "FEEDBACK_2",
+      "dailyTrainingLoadAcute": 760,
+      "maxTrainingLoadChronic": 1096.5,
+      "minTrainingLoadChronic": 584.8,
+      "dailyTrainingLoadChronic": 731,
+      "dailyAcuteChronicWorkloadRatio": 1.04
+     },
+     "primaryTrainingDevice": true
+    }
+   },
+   "recordedDevices": [
+    {
+     "deviceId": 72000001,
+     "imageURL": null,
+     "deviceName": "Synthetic Watch",
+     "category": 0
+    }
+   ],
+   "showSelector": false,
+   "lastPrimarySyncDate": "2026-02-28"
+  },
+  "heatAltitudeAcclimationDTO": null
+ }
+}

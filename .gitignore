@@ -1,0 +1,24 @@
+# Environment files with real values (only .env.example is committed)
+.env
+.env.*
+!.env.example
+
+# Garmin OAuth tokens: never commit credentials (`railway up` honors this file too)
+tokens/
+*.token
+*.secret
+garmin_tokens.json
+.garminconnect*
+*garminconnect_base64*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local notes
+*.local.md
+
+# OS noise
+.DS_Store

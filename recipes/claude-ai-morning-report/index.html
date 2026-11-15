@@ -1,0 +1,551 @@
+<title>Morning report</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one phone-first column. Level band on top, metric tiles, then the day's plan;
+   history / weekly / calibration live behind a sticky tab bar. */
+:root {
+  --bg: #eef3f1;
+  --surface: #ffffff;
+  --ink: #13211d;
+  --muted: #5a6b66;
+  --line: #d6e0dc;
+  --accent: #23627a;
+  --accent-ink: #ffffff;
+  --ok: #23774c;   --ok-bg: #dff1e7;
+  --warn: #946000; --warn-bg: #fbefd4;
+  --bad: #b5372a;  --bad-bg: #f8e1dd;
+  --none: #5f6c68; --none-bg: #e4e9e7;
+  --band: #cfe3da;
+  --font-display: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --r: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1513; --surface: #16201d; --ink: #e2ece8; --muted: #95a8a2; --line: #2a3834;
+    --accent: #6fb3cc; --accent-ink: #0b1a20;
+    --ok: #6fd19c; --ok-bg: #173126; --warn: #f0c060; --warn-bg: #352a12;
+    --bad: #ff8f80; --bad-bg: #3a1c18; --none: #a3b0ac; --none-bg: #242e2b; --band: #24443a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1513; --surface: #16201d; --ink: #e2ece8; --muted: #95a8a2; --line: #2a3834;
+  --accent: #6fb3cc; --accent-ink: #0b1a20;
+  --ok: #6fd19c; --ok-bg: #173126; --warn: #f0c060; --warn-bg: #352a12;
+  --bad: #ff8f80; --bad-bg: #3a1c18; --none: #a3b0ac; --none-bg: #242e2b; --band: #24443a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.wrap {
+  direction: ltr; max-width: 760px; margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 18px 40px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; font-weight: 500; }
+h3 { font-size: 1rem; font-weight: 500; }
+p { margin: 0; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 0.875rem; }
+
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.top p { color: var(--muted); font-size: 0.9rem; }
+
+.tabs {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  display: flex; gap: 6px; padding-block: 8px; background: var(--bg);
+  overflow-x: auto; scrollbar-width: none;
+}
+.tabs button {
+  flex: 0 0 auto; font: 600 0.95rem var(--font-body); color: var(--muted);
+  background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.view { display: flex; flex-direction: column; gap: 14px; }
+
+/* Level band: the whole band takes the day's colour */
+.hero { border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.hero.ok { background: var(--ok-bg); } .hero.warn { background: var(--warn-bg); }
+.hero.bad { background: var(--bad-bg); } .hero.none { background: var(--none-bg); }
+.hero-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.level { font: 700 1.9rem/1 var(--font-display); }
+.hero.ok .level { color: var(--ok); } .hero.warn .level { color: var(--warn); }
+.hero.bad .level { color: var(--bad); } .hero.none .level { color: var(--none); }
+.hero .date { font-weight: 600; color: var(--muted); }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px; font-size: 0.85rem; font-weight: 600; background: var(--surface); border: 1px solid var(--line); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--none); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.none { background: var(--none); }
+.note { font-size: 0.9rem; color: var(--muted); }
+
+.feel { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feel .q { font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.seg button { font: 600 0.9rem var(--font-body); color: var(--ink); background: transparent; border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-inline-start: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.seg button:disabled { cursor: default; opacity: 0.6; }
+.seg.small button { padding: 3px 9px; font-size: 0.8rem; }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+@media (min-width: 560px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tile .k { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.tile .v { font: 700 1.6rem/1.1 var(--font-display); font-variant-numeric: tabular-nums; }
+.tile .v small { font: 600 0.85rem var(--font-body); color: var(--muted); }
+.tile .s { font-size: 0.85rem; color: var(--muted); }
+.tile.flag-warn .v { color: var(--warn); } .tile.flag-bad .v { color: var(--bad); }
+.band { direction: ltr; position: relative; height: 8px; border-radius: 4px; background: var(--line); margin-top: 4px; }
+.band i { position: absolute; top: 0; bottom: 0; background: var(--band); border-radius: 4px; }
+.band b { position: absolute; top: -3px; width: 4px; height: 14px; margin-left: -2px; border-radius: 2px; background: var(--ink); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rows { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.rows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rows .lbl { font-weight: 600; min-width: 3.5em; }
+.tag { font-size: 0.78rem; font-weight: 700; border-radius: 6px; padding: 1px 7px; background: var(--none-bg); color: var(--none); }
+.tag.hard { background: var(--bad-bg); color: var(--bad); }
+.tag.easy { background: var(--ok-bg); color: var(--ok); }
+.tag.done { background: var(--ok-bg); color: var(--ok); }
+details summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+details[open] summary { margin-bottom: 8px; }
+
+.md { display: flex; flex-direction: column; gap: 8px; }
+.md ul { margin: 0; padding-inline-start: 1.1em; display: flex; flex-direction: column; gap: 4px; }
+.md h3, .md h4 { font-family: var(--font-display); font-weight: 500; margin: 6px 0 0; font-size: 1rem; }
+.scroll { overflow-x: auto; max-width: 100%; }
+table { border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: start; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+th { font-size: 0.78rem; letter-spacing: 0.02em; color: var(--muted); font-weight: 700; position: sticky; top: 0; background: var(--surface); }
+td.wrapcell { white-space: normal; min-width: 9em; }
+.hist th:first-child, .hist td:first-child { position: sticky; inset-inline-start: 0; background: var(--surface); z-index: 1; }
+
+.strip { display: grid; grid-template-columns: repeat(14, minmax(0, 1fr)); gap: 4px; }
+.strip span { aspect-ratio: 1; max-width: 100%; border-radius: 4px; background: transparent; border: 1px dashed var(--line); position: relative; }
+.strip span.ok { background: var(--ok); border: 0; } .strip span.warn { background: var(--warn); border: 0; }
+.strip span.bad { background: var(--bad); border: 0; } .strip span.none { background: var(--none); border: 0; }
+.strip span.today { outline: 2px solid var(--accent); outline-offset: 1px; }
+.strip span em { position: absolute; inset: auto 0 -9px; margin: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--ink); font-style: normal; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+.empty { text-align: start; padding: 22px 16px; border: 1px dashed var(--line); border-radius: var(--r); color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
+.empty strong { color: var(--ink); font-family: var(--font-display); font-weight: 500; font-size: 1.05rem; }
+.err { color: var(--bad); font-size: 0.9rem; }
+footer { font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); padding-top: 12px; }
+@media (prefers-reduced-motion: no-preference) { .seg button, .tabs button { transition: background-color .15s, color .15s; } }
+</style>
+<div class="wrap" dir="ltr" lang="en">
+  <header class="top">
+    <h1>Morning report</h1>
+    <p id="sub">Written from Garmin automatically every morning</p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" id="tab-today" data-view="today" aria-selected="true">Today</button>
+    <button type="button" role="tab" id="tab-history" data-view="history" aria-selected="false">History</button>
+    <button type="button" role="tab" id="tab-weekly" data-view="weekly" aria-selected="false">Weekly</button>
+    <button type="button" role="tab" id="tab-calibration" data-view="calibration" aria-selected="false">Calibration</button>
+  </nav>
+
+  <section class="view" id="v-today" role="tabpanel" aria-labelledby="tab-today">
+    <div class="empty"><strong>Loading the report…</strong><span>The data lives in this page's database and loads each time you open it.</span></div>
+  </section>
+  <section class="view" id="v-history" role="tabpanel" aria-labelledby="tab-history" hidden></section>
+  <section class="view" id="v-weekly" role="tabpanel" aria-labelledby="tab-weekly" hidden></section>
+  <section class="view" id="v-calibration" role="tabpanel" aria-labelledby="tab-calibration" hidden></section>
+
+  <footer id="foot">
+    <span>The report is written by a scheduled routine, several times each morning. The later runs only fill in data that was missing (for example sleep that hadn't synced yet).</span>
+    <span id="lastrun"></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  /* Your IANA time zone, the same as the server's REPORT_TZ (for example Europe/London).
+     If it is left unset or is not a valid zone, the browser's own zone is used. */
+  var TZ = "{{TZ}}";
+  try { new Intl.DateTimeFormat("en", { timeZone: TZ }); } catch (e) { TZ = undefined; }
+  var LEVEL = {
+    green: { en: "Green", cls: "ok" }, yellow: { en: "Yellow", cls: "warn" },
+    red: { en: "Red", cls: "bad" }, incomplete: { en: "Incomplete data", cls: "none" }
+  };
+  var FEEL = [["good", "Good"], ["ok", "OK"], ["tired", "Tired"]];
+  var FEEL_EN = { good: "Good", ok: "OK", tired: "Tired" };
+  var SPORT = { run: "Run", bike: "Bike", swim: "Swim", strength: "Strength", walk: "Walk", other: "Other" };
+  var HRV_ST = { BALANCED: "balanced", UNBALANCED: "unbalanced", LOW: "low", POOR: "poor" };
+  var READY = { POOR: "poor", LOW: "low", MODERATE: "moderate", HIGH: "high", PRIME: "prime" };
+  var ACWR_ST = { LOW: "low", OPTIMAL: "optimal", HIGH: "high", VERY_HIGH: "very high" };
+  var FLAG_TILE = { low_hrv: "hrv", hrv_low_trend: "hrv", high_rhr: "rhr", short_sleep: "sleep", sleep_debt: "sleep",
+    low_readiness: "ready", recovery_incomplete: "ready", load_spike: "acwr", load_rising: "acwr" };
+  /* Short names for flags stored without label_en. */
+  var FLAG_EN = { low_hrv: "Low HRV", hrv_low_trend: "Low HRV trend", high_rhr: "High resting HR", short_sleep: "Short sleep",
+    sleep_debt: "Sleep debt", low_readiness: "Low readiness", recovery_incomplete: "Recovery not finished",
+    load_spike: "Load spike", load_rising: "Load rising", hrv_down: "HRV down", short_nights: "Short nights",
+    volume_jump: "Volume jump", load_high: "Load high", low_completion: "Low plan completion", gear_near_limit: "Gear near end of life" };
+  var REC_EN = { as_planned: "Train as planned.", as_planned_may_stop: "Train as planned; stop if it doesn't feel right.",
+    zone2_or_shorten: "Turn the session into Zone 2 or shorten it.", short_zone2_or_rest: "Short Zone 2 or rest.",
+    shorten: "Shorten the session.", no_planned_workout: "No workout planned today.",
+    no_recovery_data: "No sleep or readiness data; decide by feel.", done_today: "Today's workout is already done." };
+  var RUN_EN = { wrote: "new report written", updated: "report completed", no_change: "no change", failed: "couldn't read from Garmin" };
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  var VIEWS = ["today", "history", "weekly", "calibration"];
+
+  var state = { days: [], feel: {}, weeks: [], calib: [], run: null, ready: { days: false, weeks: false, calib: false },
+    noDb: false, canWrite: false, readOnly: false, err: "" };
+  var db = null, pending = {}, openDetails = {};
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function isNum(v) { return typeof v === "number" && isFinite(v); }
+  function val(v, unit) { return v == null || v === "" ? "no data" : esc(v) + (unit ? " " + unit : ""); }
+  function parts(iso) { var p = String(iso || "").split("-"); return p.length === 3 && +p[1] >= 1 && +p[1] <= 12 ? p : null; }
+  function dm(iso) { var p = parts(iso); return p ? (+p[2]) + " " + MONTHS[+p[1] - 1] : String(iso || ""); }
+  function weekday(iso, short) {
+    var p = parts(iso); if (!p) return "";
+    var name = WEEKDAYS[new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).getUTCDay()];
+    return short ? name.slice(0, 3) : name;
+  }
+  function hhmm(ts) { var m = /T(\d\d:\d\d)/.exec(String(ts || "")); return m ? m[1] : ""; }
+  function todayLocal() {
+    try { return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+    catch (e) { return new Date().toISOString().slice(0, 10); }
+  }
+  function addDays(iso, n) {
+    var p = iso.split("-"); var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2] + n));
+    return d.toISOString().slice(0, 10);
+  }
+  function arr(x) { return Array.isArray(x) ? x : []; }
+  function own(m, k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(m, k) ? m[k] : undefined; }
+  function lv(level) { return own(LEVEL, level) || LEVEL.incomplete; }
+  function levelText(d) { return d.level_en || lv(d.level).en; }
+  function flagLabel(f) { return f.label_en || own(FLAG_EN, f.id) || f.id || ""; }
+  function flagShort(f) { var s = String(flagLabel(f)); var i = s.indexOf(":"); return i > 0 ? s.slice(0, i) : s; }
+  function lvlCls(l) { return l === "red" ? "bad" : l === "yellow" ? "warn" : l === "green" ? "ok" : "none"; }
+  function sport(s) { return own(SPORT, s) || (typeof s === "string" ? s : ""); }
+
+  /* Small markdown reader for the server's report text: **bold**, "- " lists, #-headings, pipe tables. */
+  function md(src) {
+    var lines = String(src || "").replace(/\r/g, "").split("\n");
+    var out = [], list = null, table = null, para = [];
+    /* The server escapes Markdown characters with a backslash (VERY\_HIGH); show them plain,
+       and never let an escaped * start bold text. */
+    function inline(s) {
+      var lit = [];
+      s = String(s).replace(/\\([\\`*_\[\]<>#|~])/g, function (_, c) { lit.push(c); return "\u0001" + (lit.length - 1) + "\u0002"; });
+      return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\u0001(\d+)\u0002/g, function (_, i) { return esc(lit[+i]); });
+    }
+    function flushPara() { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } }
+    function flushList() { if (list) { out.push("<ul>" + list.map(function (x) { return "<li>" + inline(x) + "</li>"; }).join("") + "</ul>"); list = null; } }
+    function flushTable() {
+      if (!table) return;
+      var head = table[0], body = table.slice(1);
+      out.push('<div class="scroll"><table><thead><tr>' + head.map(function (c) { return "<th>" + inline(c) + "</th>"; }).join("") +
+        "</tr></thead><tbody>" + body.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") + "</tr>"; }).join("") +
+        "</tbody></table></div>");
+      table = null;
+    }
+    lines.forEach(function (raw) {
+      var t = raw.replace(/^[\u200e\u200f\s]+/, "").replace(/\s+$/, "");
+      if (/^\|.*\|$/.test(t)) {
+        flushPara(); flushList();
+        if (/^\|[\s:|\-]+\|$/.test(t)) return;
+        var cells = t.slice(1, -1).split("|").map(function (c) { return c.trim(); });
+        (table = table || []).push(cells);
+        return;
+      }
+      flushTable();
+      var m;
+      if ((m = /^[-*]\s+(.*)$/.exec(t))) { flushPara(); (list = list || []).push(m[1]); return; }
+      flushList();
+      if ((m = /^(#{1,4})\s+(.*)$/.exec(t))) { flushPara(); out.push((m[1].length <= 2 ? "<h3>" : "<h4>") + inline(m[2]) + (m[1].length <= 2 ? "</h3>" : "</h4>")); return; }
+      if (!t) { flushPara(); return; }
+      para.push(t);
+    });
+    flushPara(); flushList(); flushTable();
+    return '<div class="md">' + out.join("") + "</div>";
+  }
+
+  function feelControl(date, small) {
+    var cur = state.feel[date];
+    var dis = !state.canWrite || state.readOnly || pending[date];
+    return '<span class="seg' + (small ? " small" : "") + '" role="group" aria-label="How you felt on ' + esc(dm(date)) + '">' +
+      FEEL.map(function (f) {
+        return '<button type="button" data-feel="' + f[0] + '" data-date="' + esc(date) + '" aria-pressed="' + (cur === f[0]) + '"' + (dis ? " disabled" : "") + ">" + f[1] + "</button>";
+      }).join("") + "</span>";
+  }
+
+  function workoutLine(w, withDone) {
+    var bits = [];
+    if (w.sport) bits.push(sport(w.sport));
+    if (isNum(w.minutes)) bits.push(w.minutes + " min");
+    if (isNum(w.km)) bits.push(w.km + " km");
+    var cls = w.hard && w.long ? ["hard", "Hard and long"] : w.hard ? ["hard", "Hard"] : w.long ? ["", "Long"] : ["easy", "Easy"];
+    return "<li><bdi>" + esc(w.name || sport(w.sport)) + '</bdi><span class="muted small num">' + esc(bits.join(" · ")) + "</span>" +
+      '<span class="tag ' + cls[0] + '">' + cls[1] + "</span>" +
+      (withDone && w.completed ? '<span class="tag done">Done</span>' : "") + "</li>";
+  }
+
+  function hrvBand(r) {
+    var rg = r.hrv_range || {};
+    if (!isNum(r.hrv) || !isNum(rg.balanced_low) || !isNum(rg.balanced_upper)) return "";
+    var lo = Math.min(rg.balanced_low, r.hrv) - 8, hi = Math.max(rg.balanced_upper, r.hrv) + 8, span = hi - lo;
+    var a = (rg.balanced_low - lo) / span * 100, b = (rg.balanced_upper - lo) / span * 100, x = (r.hrv - lo) / span * 100;
+    return '<div class="band" role="img" aria-label="HRV ' + esc(r.hrv) + " against the balanced range " + esc(rg.balanced_low) + "–" + esc(rg.balanced_upper) + '">' +
+      '<i style="left:' + a.toFixed(1) + "%;width:" + (b - a).toFixed(1) + '%"></i><b style="left:' + x.toFixed(1) + '%"></b></div>' +
+      '<span class="s num">Balanced range ' + esc(rg.balanced_low) + "–" + esc(rg.balanced_upper) + "</span>";
+  }
+
+  function tile(key, label, value, unit, sub, extra, flagged) {
+    return '<div class="tile' + (flagged ? " flag-" + flagged : "") + '" data-k="' + key + '"><span class="k">' +
+      (flagged ? '<span class="dot ' + flagged + '"></span>' : "") + label + '</span><span class="v">' +
+      (value == null ? '<small>no data</small>' : esc(value) + (unit ? " <small>" + unit + "</small>" : "")) +
+      "</span>" + (sub ? '<span class="s num">' + sub + "</span>" : "") + (extra || "") + "</div>";
+  }
+
+  function renderToday() {
+    var el = document.getElementById("v-today");
+    if (state.noDb) {
+      el.innerHTML = '<div class="empty"><strong>This page\'s database isn\'t available here</strong><span>Open the page from claude.ai or the Claude app while signed in.</span></div>';
+      return;
+    }
+    if (!state.ready.days) { if (state.err) el.innerHTML = '<div class="empty"><strong>' + esc(state.err) + "</strong></div>"; return; }
+    var d = state.days[0];
+    if (!d) {
+      el.innerHTML = '<div class="empty"><strong>No report yet</strong><span>The first report is written automatically by the morning routine. If it isn\'t here after the first run, Garmin probably hasn\'t synced yet; the later runs will try again.</span></div>';
+      return;
+    }
+    var r = d.recovery || {}, ld = d.load || {}, L = lv(d.level), today = todayLocal();
+    var flagBy = {};
+    arr(d.flags).forEach(function (f) {
+      var t = FLAG_TILE[f.id]; if (!t) return;
+      var c = lvlCls(f.level); if (flagBy[t] !== "bad") flagBy[t] = c;
+    });
+    var stale = d.date !== today ? '<p class="note">Today\'s report isn\'t written yet. Showing the latest one, from ' + esc(dm(d.date)) + ".</p>" : "";
+    var flags = arr(d.flags).length
+      ? '<div class="flags">' + arr(d.flags).map(function (f) { return '<span class="chip" title="' + esc(flagLabel(f)) + '"><span class="dot ' + lvlCls(f.level) + '"></span>' + esc(flagShort(f)) + "</span>"; }).join("") + "</div>"
+      : d.level === "incomplete" ? '<p class="small">Some data is still missing, so the level isn\'t set.</p>' : '<p class="small">No flags: every metric is in range.</p>';
+    var summary = d.summary_en;
+    var h = "";
+    h += '<div class="hero ' + L.cls + '"><div class="hero-head"><span class="level">' + esc(levelText(d)) + '</span><span class="date num">' +
+      esc(weekday(d.date)) + " " + esc(dm(d.date)) + (hhmm(d.generated_at) ? " · updated " + esc(hhmm(d.generated_at)) : "") + "</span></div>" +
+      (summary ? "<p>" + esc(summary) + "</p>" : "") + flags + stale + "</div>";
+    h += '<div class="feel"><span class="q">' + (stale ? "How did you feel on the morning of " + esc(dm(d.date)) + "?" : "How do you feel this morning?") + '</span>' + feelControl(d.date) +
+      (state.canWrite ? "" : '<span class="small muted">Only the page owner can mark this.</span>') + "</div>";
+    if (state.err) h += '<p class="err">' + esc(state.err) + "</p>";
+
+    var sleepSub = (isNum(r.sleep_score) ? "score " + esc(r.sleep_score) : "") +
+      (isNum(r.deep_min) ? " · deep " + esc(r.deep_min) + " min" : "") + (isNum(r.rem_min) ? " · REM " + esc(r.rem_min) + " min" : "");
+    var hrvSub = (isNum(r.hrv_7d) ? "7-day avg " + esc(r.hrv_7d) : "") + (r.hrv_status ? " · " + esc(HRV_ST[r.hrv_status] || r.hrv_status) : "");
+    var rhrSub = (isNum(r.rhr_7d) ? "7-day avg " + esc(r.rhr_7d) : "") + (isNum(r.rhr_delta) ? " · " + (r.rhr_delta > 0 ? "+" : "") + esc(r.rhr_delta) : "");
+    var rdySub = (r.readiness_level ? esc(READY[r.readiness_level] || r.readiness_level) : "") + (isNum(r.recovery_hours) ? " · recovery " + esc(r.recovery_hours) + " h" : "");
+    var acwrSub = (ld.acwr_status ? esc(ACWR_ST[ld.acwr_status] || ld.acwr_status) : "") + (isNum(ld.acute) ? " · acute " + esc(ld.acute) + " · chronic " + esc(ld.chronic) : "");
+    h += '<div class="tiles">' +
+      tile("sleep", "Sleep", r.sleep_hhmm, "h", sleepSub, "", flagBy.sleep) +
+      tile("hrv", "HRV", r.hrv, "ms", hrvSub, hrvBand(r), flagBy.hrv) +
+      tile("rhr", "Resting HR", r.rhr, "bpm", rhrSub, "", flagBy.rhr) +
+      tile("ready", "Training readiness", r.readiness, "", rdySub, "", flagBy.ready) +
+      tile("acwr", "Load (ACWR)", ld.acwr, "", acwrSub, "", flagBy.acwr) +
+      tile("bb", "Body Battery", r.body_battery, "", isNum(r.stress_avg) ? "avg stress " + esc(r.stress_avg) : "", "", null) +
+      "</div>";
+
+    var rec = d.recommendation_en || own(REC_EN, d.recommendation) || "";
+    var lists = '<div class="card"><ul class="rows">' +
+      (rec ? '<li><span class="lbl">Recommendation</span><strong>' + esc(rec) + "</strong></li>" : "") + "</ul>";
+    if (arr(d.today).length) lists += "<h3>Planned today</h3><ul class=\"rows\">" + arr(d.today).map(function (w) { return workoutLine(w, true); }).join("") + "</ul>";
+    if (arr(d.tomorrow).length) lists += "<h3>Tomorrow</h3><ul class=\"rows\">" + arr(d.tomorrow).map(function (w) { return workoutLine(w, false); }).join("") + "</ul>";
+    var y = arr(ld.yesterday);
+    if (y.length) {
+      lists += "<h3>Yesterday</h3><ul class=\"rows\">" + y.map(function (a) {
+        var bits = [];
+        if (isNum(a.minutes)) bits.push(a.minutes + " min"); if (isNum(a.km)) bits.push(a.km + " km");
+        if (isNum(a.load)) bits.push("load " + a.load); if (isNum(a.avg_hr)) bits.push("HR " + a.avg_hr);
+        if (isNum(a.aerobic_te)) bits.push("TE " + a.aerobic_te);
+        return "<li><bdi>" + esc(sport(a.sport) || a.name) + '</bdi><span class="muted small num">' + esc(bits.join(" · ")) + "</span></li>";
+      }).join("") + "</ul>";
+    }
+    lists += "</div>";
+    h += lists;
+    var text = d.text;
+    if (text) {
+      h += '<details class="card" data-det="today-text"' + (openDetails["today-text"] ? " open" : "") + "><summary>Full report as text</summary>" + md(text) + "</details>";
+    }
+    if (arr(d.missing).length) h += '<p class="note">Missing data: ' + esc(arr(d.missing).join(", ")) + "</p>";
+    el.innerHTML = h;
+  }
+
+  function renderHistory() {
+    var el = document.getElementById("v-history");
+    if (state.noDb || !state.ready.days) { el.innerHTML = ""; return; }
+    if (!state.days.length) {
+      el.innerHTML = '<div class="empty"><strong>No history yet</strong><span>A row is added here every morning. Mark how you felt, and after about four weeks the calibration will compare your marks with the flags.</span></div>';
+      return;
+    }
+    var byDate = {}; state.days.forEach(function (d) { byDate[d.date] = d; });
+    var today = todayLocal(), cells = [];
+    for (var i = 27; i >= 0; i--) {
+      var iso = addDays(today, -i), d = byDate[iso];
+      cells.push('<span class="' + (d ? lv(d.level).cls : "") + (i === 0 ? " today" : "") + '" title="' + esc(weekday(iso, true) + " " + dm(iso)) +
+        (d ? " · " + esc(levelText(d)) : " · no report") + (state.feel[iso] ? " · " + FEEL_EN[state.feel[iso]] : "") + '">' +
+        (state.feel[iso] ? "<em></em>" : "") + "</span>");
+    }
+    var picked = state.days.filter(function (d) { return state.feel[d.date]; }).length;
+    var h = '<div class="card"><h2>Last four weeks</h2><div class="strip" aria-label="Days, oldest to newest">' + cells.join("") + "</div>" +
+      '<div class="legend"><span><span class="dot ok"></span>Green</span><span><span class="dot warn"></span>Yellow</span><span><span class="dot bad"></span>Red</span>' +
+      '<span><span class="dot none"></span>Incomplete data</span><span>Dot = you marked how you felt</span><span>Left to right: oldest to newest</span></div>' +
+      '<p class="small muted num">' + state.days.length + (state.days.length === 1 ? " day" : " days") + " with a report · " + picked + " with a feeling marked. The calibration needs at least 14 marks.</p></div>";
+    h += '<div class="card"><div class="scroll"><table class="hist"><thead><tr><th>Date</th><th>Level</th><th>Flags</th><th>Sleep</th><th>HRV (avg)</th><th>Resting HR (avg)</th><th>Readiness</th><th>ACWR</th><th>Feeling</th></tr></thead><tbody>';
+    h += state.days.map(function (d) {
+      var r = d.recovery || {}, ld = d.load || {}, L = lv(d.level);
+      var fl = arr(d.flags).map(flagShort).join(", ") || "—";
+      return "<tr><td class=\"num\">" + esc(weekday(d.date, true)) + " " + esc(dm(d.date)) + '</td><td><span class="chip"><span class="dot ' + L.cls + '"></span>' + esc(levelText(d)) +
+        '</span></td><td class="wrapcell">' + esc(fl) + "</td><td>" + val(r.sleep_hhmm) + (isNum(r.sleep_score) ? ' <span class="muted">(' + esc(r.sleep_score) + ")</span>" : "") +
+        "</td><td>" + val(r.hrv) + ' <span class="muted">(' + val(r.hrv_7d) + ")</span></td><td>" + val(r.rhr) + ' <span class="muted">(' + val(r.rhr_7d) + ")</span></td><td>" +
+        val(r.readiness) + "</td><td>" + val(ld.acwr) + (ld.acwr_status ? ' <span class="muted">(' + esc(ACWR_ST[ld.acwr_status] || ld.acwr_status) + ")</span>" : "") +
+        "</td><td>" + feelControl(d.date, true) + "</td></tr>";
+    }).join("");
+    h += "</tbody></table></div></div>";
+    el.innerHTML = h;
+  }
+
+  function renderWeekly() {
+    var el = document.getElementById("v-weekly");
+    if (state.noDb || !state.ready.weeks) { el.innerHTML = ""; return; }
+    if (!state.weeks.length) {
+      el.innerHTML = '<div class="empty"><strong>No weekly summary yet</strong><span>The summary is written every Sunday morning, for the week that ended on Saturday.</span></div>';
+      return;
+    }
+    el.innerHTML = state.weeks.map(function (w) {
+      var L = lv(w.level), p = w.plan || {};
+      var key = "week-" + w.start, summary = w.summary_en, text = w.text;
+      return '<article class="card"><div class="hero-head"><h2 class="num">Week of ' + esc(dm(w.start)) + "–" + esc(dm(w.end)) + '</h2><span class="chip"><span class="dot ' + L.cls + '"></span>' +
+        esc(levelText(w)) + "</span></div>" + (summary ? "<p>" + esc(summary) + "</p>" : "") +
+        (isNum(p.scheduled) && p.scheduled > 0 ? '<p class="small muted num">Plan: ' + (isNum(p.completed)
+          ? esc(p.completed) + " of " + esc(p.scheduled) + " done" + (isNum(p.on_planned_day) ? ", " + esc(p.on_planned_day) + " on the planned day" : "")
+          : esc(p.scheduled) + " scheduled · done: no data") + "</p>" : "") +
+        (text ? '<details data-det="' + esc(key) + '"' + (openDetails[key] || state.weeks[0] === w ? " open" : "") + "><summary>Full summary</summary>" + md(text) + "</details>" : "") + "</article>";
+    }).join("");
+  }
+
+  function renderCalib() {
+    var el = document.getElementById("v-calibration");
+    if (state.noDb || !state.ready.calib) { el.innerHTML = ""; return; }
+    if (!state.calib.length) {
+      el.innerHTML = '<div class="empty"><strong>The calibration runs once, about four weeks after the first report</strong><span>After about four weeks of reports and feeling marks, the analysis compares the flags with how you felt and proposes up to five threshold changes. No threshold changes without your approval in chat.</span></div>';
+      return;
+    }
+    el.innerHTML = state.calib.map(function (c) {
+      return '<article class="card"><h2 class="num">Analysis of ' + esc(dm(c.date)) + "</h2>" + md(c.md) + "</article>";
+    }).join("");
+  }
+
+  function renderFoot() {
+    var el = document.getElementById("lastrun"), r = state.run;
+    if (!r || !r.at) { el.textContent = ""; return; }
+    el.textContent = "Last check: " + localStamp(r.at) + " · " + (own(RUN_EN, r.result) || r.result || "");
+  }
+
+  function localStamp(ts) {
+    var t = new Date(String(ts || "")), p = {};
+    if (isNaN(t.getTime())) return "";
+    new Intl.DateTimeFormat("en-GB", { timeZone: TZ, day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(t).forEach(function (x) { p[x.type] = x.value; });
+    return (+p.day) + " " + MONTHS[+p.month - 1] + " " + p.hour + ":" + p.minute;
+  }
+
+  /* One bad document must not blank the other views. */
+  function render() {
+    [renderToday, renderHistory, renderWeekly, renderCalib, renderFoot].forEach(function (f) {
+      try { f(); } catch (e) { if (window.console) console.error(e); }
+    });
+  }
+
+  function show(view) {
+    if (VIEWS.indexOf(view) < 0) view = "today";
+    VIEWS.forEach(function (v) {
+      document.getElementById("v-" + v).hidden = v !== view;
+      document.getElementById("tab-" + v).setAttribute("aria-selected", String(v === view));
+    });
+  }
+  function fromHash() { show((location.hash || "").replace("#", "") || "today"); }
+  document.querySelector(".tabs").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-view]"); if (!b) return;
+    var v = b.getAttribute("data-view");
+    if (location.hash !== "#" + v) { try { history.replaceState(null, "", "#" + v); } catch (err) {} }
+    show(v);
+  });
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+
+  document.addEventListener("toggle", function (e) {
+    var t = e.target; if (t && t.getAttribute && t.getAttribute("data-det")) openDetails[t.getAttribute("data-det")] = t.open;
+  }, true);
+
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-feel]"); if (!b || b.disabled) return;
+    setFeel(b.getAttribute("data-date"), b.getAttribute("data-feel"));
+  });
+
+  function setFeel(date, value) {
+    if (!db || pending[date] || !/^\d{4}-\d\d-\d\d$/.test(date)) return;
+    var cur = state.feel[date], next = cur === value ? undefined : value;
+    pending[date] = true; state.err = "";
+    if (next) state.feel[date] = next; else delete state.feel[date];
+    render();
+    var ref = db.doc("feel/" + date);
+    var p = next ? ref.set({ value: next, at: new Date().toISOString() }) : ref.delete();
+    p.catch(function (err) {
+      if (cur) state.feel[date] = cur; else delete state.feel[date];
+      if (err && err.code === "invalid_argument") { state.readOnly = true; state.err = "You don't have permission to mark this page."; }
+      else state.err = "Your mark wasn't saved. Try again in a moment.";
+    }).then(function () { delete pending[date]; render(); });
+  }
+
+  function onErr(e) { state.err = e && e.code === "revoked" ? "" : "Some data didn't load. Refresh the page."; render(); }
+
+  (async function start() {
+    var c = window.claude;
+    if (!c || typeof c.use !== "function") { state.noDb = true; render(); return; }
+    var res = await Promise.all([c.use("db"), c.use("user")]);
+    db = res[0];
+    var user = res[1];
+    if (!db) { state.noDb = true; render(); return; }
+    try { state.canWrite = user ? await user.isOwner() : true; } catch (e) { state.canWrite = false; }
+    db.collection("days").orderBy("date", "desc").limit(400).onSnapshot(function (s) {
+      var today = todayLocal();
+      state.days = s.docs.map(function (x) { return x.data(); }).filter(function (d) { return d && /^\d{4}-\d\d-\d\d$/.test(d.date) && d.date <= today; });
+      state.ready.days = true; render();
+    }, onErr);
+    db.collection("feel").limit(1000).onSnapshot(function (s) {
+      var f = {};
+      s.docs.forEach(function (x) { var v = (x.data() || {}).value; if (FEEL_EN[v]) f[x.id] = v; });
+      Object.keys(pending).forEach(function (k) { if (state.feel[k]) f[k] = state.feel[k]; else delete f[k]; });
+      state.feel = f; render();
+    }, onErr);
+    db.collection("weeks").orderBy("start", "desc").limit(104).onSnapshot(function (s) {
+      state.weeks = s.docs.map(function (x) { return x.data(); }).filter(function (w) { return w && w.start; });
+      state.ready.weeks = true; render();
+    }, onErr);
+    db.collection("calibration").orderBy("date", "desc").limit(24).onSnapshot(function (s) {
+      state.calib = s.docs.map(function (x) { return x.data(); }).filter(function (c2) { return c2 && c2.date; });
+      state.ready.calib = true; render();
+    }, onErr);
+    db.doc("runs/latest").onSnapshot(function (s) { state.run = s.exists ? s.data() : null; renderFoot(); }, onErr);
+  })();
+})();
+</script>

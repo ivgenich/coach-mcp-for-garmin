@@ -1,0 +1,30 @@
+[
+  {
+    "calendarDate": "2026-03-18",
+    "timestamp": "2026-03-18T03:58:41.0",
+    "timestampLocal": "2026-03-18T05:58:41.0",
+    "level": "MODERATE",
+    "feedbackLong": "MOD_RT_MOD_SS_GOOD",
+    "feedbackShort": "READY_FOR_MODERATE",
+    "score": 52,
+    "sleepScore": 74,
+    "sleepScoreFactorPercent": 70,
+    "sleepScoreFactorFeedback": "GOOD",
+    "recoveryTime": 540,
+    "recoveryTimeFactorPercent": 66,
+    "recoveryTimeFactorFeedback": "MODERATE",
+    "acwrFactorPercent": 88,
+    "acwrFactorFeedback": "GOOD",
+    "acuteLoad": 610,
+    "stressHistoryFactorPercent": 80,
+    "stressHistoryFactorFeedback": "GOOD",
+    "hrvFactorPercent": 75,
+    "hrvFactorFeedback": "GOOD",
+    "hrvWeeklyAverage": 63,
+    "sleepHistoryFactorPercent": 57,
+    "sleepHistoryFactorFeedback": "MODERATE",
+    "validSleep": true,
+    "inputContext": "AFTER_WAKEUP_RESET",
+    "recoveryTimeChangePhrase": null
+  }
+]

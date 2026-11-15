@@ -1,0 +1,101 @@
+# Public edge of the container. Caddy listens on Railway's $PORT and gates
+# garmin-mcp (127.0.0.1:8000) behind MCP_BEARER_TOKEN, accepted two ways:
+#     Authorization: Bearer <token>      on https://<domain>/mcp   (preferred)
+#     https://<domain>/<token>/mcp       for claude.ai accounts without the
+#                                        beta "Request headers" option
+# /healthz and /readyz pass without auth so Railway's healthcheck can reach them.
+#
+# PORT and MCP_BEARER_TOKEN are substituted from the environment once, when
+# Caddy reads this file at startup. entrypoint.sh refuses to start unless
+# MCP_BEARER_TOKEN is 32+ characters of [A-Za-z0-9._~-], so the matchers below
+# can never become "Bearer " (empty), a "*" wildcard match, a path with extra
+# segments, or break out of their quotes.
+{
+	# No admin API: nothing local can read the token back out of the config.
+	admin off
+	auto_https off
+	persist_config off
+}
+
+(garmin_mcp) {
+	reverse_proxy 127.0.0.1:8000 {
+		# FastMCP bound to 127.0.0.1 turns on DNS-rebinding protection: it
+		# answers 421 to any Host other than 127.0.0.1/localhost and 403 to a
+		# non-local Origin. Present the loopback Host and drop Origin; the
+		# token check is the real gate.
+		header_up Host {upstream_hostport}
+		header_up -Origin
+		# The token stops at the proxy; garmin-mcp never sees it.
+		header_up -Authorization
+		header_down -Server
+		# Streamable HTTP: flush every write, never buffer a response.
+		flush_interval -1
+	}
+}
+
+http://:{$PORT:8080} {
+	# Access log to stdout for `railway logs`. Caddy redacts the
+	# Authorization header in logs by default.
+	log {
+		output stdout
+	}
+	# No software banners: Caddy adds "Via: 1.1 Caddy" to proxied responses.
+	header -Server
+	header -Via
+
+	# Starlette would answer /mcp/ with a 307 to the internal 127.0.0.1 address.
+	rewrite /mcp/ /mcp
+
+	# Probes, no auth. /readyz stays 503 until garmin-mcp has logged in to Garmin.
+	# The path matcher cleans and case-folds the path (/HEALTHZ, /x/../readyz),
+	# but the proxy would forward the raw one: garmin-mcp only ever gets exactly
+	# /healthz or /readyz (the trailing "?" drops any query string).
+	@healthz {
+		method GET HEAD
+		path /healthz
+	}
+	handle @healthz {
+		rewrite * /healthz?
+		import garmin_mcp
+	}
+	@readyz {
+		method GET HEAD
+		path /readyz
+	}
+	handle @readyz {
+		rewrite * /readyz?
+		import garmin_mcp
+	}
+
+	@authorized header Authorization "Bearer {$MCP_BEARER_TOKEN}"
+	handle @authorized {
+		import garmin_mcp
+	}
+
+	# The token is part of this URL, so these requests stay out of the access log.
+	handle /{$MCP_BEARER_TOKEN}/* {
+		log_skip
+		uri strip_prefix /{$MCP_BEARER_TOKEN}
+		# The top-level /mcp/ rewrite ran before the prefix was stripped, so
+		# /<token>/mcp/ needs its own (else the same 307 to 127.0.0.1).
+		uri path_regexp ^/mcp/$ /mcp
+		import garmin_mcp
+	}
+
+	# A proxy failure (garmin-mcp restarting, as on every deploy) is an error to
+	# Caddy, and an unhandled error is logged at ERROR with the request URI,
+	# which in URL-token mode is the token: log_skip covers only the access log.
+	# With an error route Caddy logs the failure at DEBUG, which is off. The
+	# client still gets the bare status (502), empty body.
+	handle_errors {
+		respond "" {err.status_code}
+	}
+
+	# Missing or wrong token: 401, empty body. Unlogged, because a mistyped URL
+	# (e.g. https://<domain>/<token> without /mcp) would put the token in the log;
+	# Railway's own HTTP logs still show these 401s.
+	handle {
+		log_skip
+		respond 401
+	}
+}

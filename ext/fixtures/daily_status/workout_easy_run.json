@@ -1,0 +1,72 @@
+{
+  "workoutName": "Easy aerobic run",
+  "description": null,
+  "updatedDate": "2026-03-10T08:00:00.0",
+  "createdDate": "2026-03-10T08:00:00.0",
+  "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+  "subSportType": null,
+  "estimatedDurationInSecs": 2880,
+  "estimatedDistanceInMeters": 6800.0,
+  "estimateType": null,
+  "workoutSegments": [
+    {
+      "segmentOrder": 1,
+      "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+      "poolLengthUnit": null,
+      "poolLength": null,
+      "avgTrainingSpeed": null,
+      "estimatedDurationInSecs": null,
+      "estimatedDistanceInMeters": null,
+      "workoutSteps": [
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 1,
+          "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup", "displayOrder": 1},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 600.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null,
+          "secondaryTargetType": null,
+          "secondaryTargetValueOne": null,
+          "secondaryTargetValueTwo": null,
+          "secondaryZoneNumber": null
+        },
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 2,
+          "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 1980.0,
+          "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone", "displayOrder": 4},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": 2,
+          "secondaryTargetType": null,
+          "secondaryTargetValueOne": null,
+          "secondaryTargetValueTwo": null,
+          "secondaryZoneNumber": null
+        },
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 3,
+          "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown", "displayOrder": 2},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 300.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null,
+          "secondaryTargetType": null,
+          "secondaryTargetValueOne": null,
+          "secondaryTargetValueTwo": null,
+          "secondaryZoneNumber": null
+        }
+      ]
+    }
+  ]
+}

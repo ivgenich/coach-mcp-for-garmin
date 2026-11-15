@@ -1,0 +1,40 @@
+{
+  "workoutName": "Aerobic pace run",
+  "description": "Steady, conversational pace",
+  "updatedDate": "2026-03-12T20:10:00.0",
+  "createdDate": "2026-03-12T20:10:00.0",
+  "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+  "subSportType": null,
+  "estimatedDurationInSecs": 3000,
+  "estimatedDistanceInMeters": 9000.0,
+  "estimateType": null,
+  "workoutSegments": [
+    {
+      "segmentOrder": 1,
+      "sportType": {"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+      "poolLengthUnit": null,
+      "poolLength": null,
+      "avgTrainingSpeed": null,
+      "estimatedDurationInSecs": null,
+      "estimatedDistanceInMeters": null,
+      "workoutSteps": [
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 1,
+          "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 3000.0,
+          "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6},
+          "targetValueOne": 2.9,
+          "targetValueTwo": 3.1,
+          "zoneNumber": null,
+          "secondaryTargetType": null,
+          "secondaryTargetValueOne": null,
+          "secondaryTargetValueTwo": null,
+          "secondaryZoneNumber": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "activityName": "Morning run",
+    "startTimeLocal": "2026-03-18 05:10:00",
+    "startTimeGMT": "2026-03-18 03:10:00",
+    "activityType": {"typeId": 1, "typeKey": "running", "parentTypeId": 17, "isHidden": false, "restricted": false, "trimmable": true},
+    "eventType": {"typeId": 9, "typeKey": "uncategorized", "sortOrder": 10},
+    "distance": 6900.0,
+    "duration": 2760.0,
+    "elapsedDuration": 2790.0,
+    "movingDuration": 2750.0,
+    "averageSpeed": 2.5,
+    "averageHR": 134.0,
+    "maxHR": 148.0,
+    "calories": 410.0,
+    "aerobicTrainingEffect": 2.5,
+    "anaerobicTrainingEffect": 0.1,
+    "activityTrainingLoad": 58.3,
+    "trainingEffectLabel": "AEROBIC_BASE",
+    "sportTypeId": 1,
+    "hasPolyline": false,
+    "manualActivity": false
+  }
+]

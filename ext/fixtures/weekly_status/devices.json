@@ -1,0 +1,16 @@
+[
+ {
+  "deviceId": 72000002,
+  "productDisplayName": "Synthetic Bike Computer",
+  "primaryDevice": false,
+  "deviceTypePk": 2,
+  "deviceStatus": "active"
+ },
+ {
+  "deviceId": 72000001,
+  "productDisplayName": "Synthetic Watch",
+  "primaryDevice": true,
+  "deviceTypePk": 1,
+  "deviceStatus": "active"
+ }
+]

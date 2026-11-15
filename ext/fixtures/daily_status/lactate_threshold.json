@@ -1,0 +1,19 @@
+{
+  "speed_and_heart_rate": {
+    "userProfilePK": null,
+    "version": null,
+    "calendarDate": "2026-02-20T07:40:00.0",
+    "sequence": null,
+    "speed": 0.37,
+    "heartRate": 172,
+    "heartRateCycling": null
+  },
+  "power": {
+    "calendarDate": "2026-02-20T07:35:00.0",
+    "functionalThresholdPower": 310,
+    "weight": null,
+    "powerToWeight": null,
+    "sport": "RUNNING",
+    "isStale": false
+  }
+}

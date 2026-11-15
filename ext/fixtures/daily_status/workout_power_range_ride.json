@@ -1,0 +1,83 @@
+{
+  "workoutName": "Threshold 4x8",
+  "description": null,
+  "updatedDate": "2026-03-13T19:00:00.0",
+  "createdDate": "2026-03-13T19:00:00.0",
+  "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling", "displayOrder": 2},
+  "subSportType": null,
+  "estimatedDurationInSecs": 4080,
+  "estimatedDistanceInMeters": null,
+  "estimateType": null,
+  "workoutSegments": [
+    {
+      "segmentOrder": 1,
+      "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling", "displayOrder": 2},
+      "poolLengthUnit": null,
+      "poolLength": null,
+      "avgTrainingSpeed": null,
+      "estimatedDurationInSecs": null,
+      "estimatedDistanceInMeters": null,
+      "workoutSteps": [
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 1,
+          "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup", "displayOrder": 1},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 600.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null
+        },
+        {
+          "type": "RepeatGroupDTO",
+          "stepOrder": 2,
+          "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+          "numberOfIterations": 4,
+          "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": false},
+          "endConditionValue": 4.0,
+          "smartRepeat": false,
+          "workoutSteps": [
+            {
+              "type": "ExecutableStepDTO",
+              "stepOrder": 3,
+              "stepType": {"stepTypeId": 3, "stepTypeKey": "interval", "displayOrder": 3},
+              "description": null,
+              "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+              "endConditionValue": 480.0,
+              "targetType": {"workoutTargetTypeId": 10, "workoutTargetTypeKey": "power.3s", "displayOrder": 10},
+              "targetValueOne": 225.0,
+              "targetValueTwo": 245.0,
+              "zoneNumber": null
+            },
+            {
+              "type": "ExecutableStepDTO",
+              "stepOrder": 4,
+              "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery", "displayOrder": 4},
+              "description": null,
+              "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+              "endConditionValue": 240.0,
+              "targetType": {"workoutTargetTypeId": 10, "workoutTargetTypeKey": "power.3s", "displayOrder": 10},
+              "targetValueOne": 120.0,
+              "targetValueTwo": 150.0,
+              "zoneNumber": null
+            }
+          ]
+        },
+        {
+          "type": "ExecutableStepDTO",
+          "stepOrder": 5,
+          "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown", "displayOrder": 2},
+          "description": null,
+          "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true},
+          "endConditionValue": 600.0,
+          "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1},
+          "targetValueOne": null,
+          "targetValueTwo": null,
+          "zoneNumber": null
+        }
+      ]
+    }
+  ]
+}

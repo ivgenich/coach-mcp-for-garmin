@@ -1,0 +1,62 @@
+# Exact runtime pins for the image (python:3.12.15-slim), applied with
+# `pip install -c` by the Dockerfile. garmin-mcp itself is installed with
+# --no-deps, so nothing here pins it.
+#
+# Why mcp 2.3.0 although upstream's pyproject says mcp>=1.28.1,<2:
+# claude.ai and Claude Code open with `server/discover` at protocol version
+# 2026-07-28, which only mcp 2.x serves (1.28.1 answers 400 "Unsupported
+# protocol version"). Upstream (garmin_mcp 202913fd, issue #344) is not ported
+# to 2.x; ext/mcp2_compat.py adapts mcp 2.x's MCPServer to the FastMCP API
+# upstream calls, so the cap is bypassed on purpose. `pip check` therefore
+# reports exactly one conflict, "garmin-mcp 0.1.0 has requirement mcp<2".
+#
+# Generated 13 Nov 2026 by a real resolve on python 3.12 of upstream's
+# dependencies at that commit plus mcp==2.3.0:
+#   pip install --dry-run --report r.json -c <old pins> \
+#     python-dotenv==1.2.2 garminconnect==0.3.2 requests==2.33.0 \
+#     "fitparse>=1.2.0" mcp==2.3.0
+# The Garmin-side packages (garminconnect, curl-cffi, ua-generator, requests,
+# certifi, urllib3, charset-normalizer) keep the pins of upstream's uv.lock;
+# idna moved because httpx2 (mcp 2.x) needs >=3.18. Regenerate when bumping
+# GARMIN_MCP_REF or mcp.
+annotated-types==0.8.0
+anyio==4.16.0
+attrs==25.4.0
+certifi==2025.1.31
+cffi==2.0.0
+charset-normalizer==3.4.1
+click==8.5.1
+cryptography==50.0.2
+curl-cffi==0.15.0
+fitparse==1.2.0
+garminconnect==0.3.2
+h11==0.16.0
+httpcore2==2.16.0
+httpx2==2.16.0
+idna==3.20
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+markdown-it-py==4.3.0
+mcp==2.3.0
+mcp-types==2.3.0
+mdurl==0.1.2
+opentelemetry-api==1.45.2
+pycparser==3.0
+pydantic==2.14.3
+pydantic-core==2.50.4
+pygments==2.21.0
+pyjwt==2.15.1
+python-dotenv==1.2.2
+python-multipart==0.0.33
+referencing==0.37.0
+requests==2.33.0
+rich==15.0.0
+rpds-py==0.30.0
+sse-starlette==3.7.0
+starlette==1.10.0
+truststore==0.10.5
+typing-inspection==0.4.5
+typing-extensions==4.16.0
+ua-generator==2.0.24
+urllib3==2.8.0
+uvicorn==0.54.0
