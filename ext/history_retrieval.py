@@ -934,7 +934,7 @@ def embed_doc(job: Any, ctx: Any) -> None:
     fp = ctx.store.meta_get(hs.META_ACCOUNT, conn=conn)
     if not fp:
         raise jobqueue.Defer(3600, "no_account")
-    index = getattr(ctx, "doc_index", None) or doc_index(os.environ.get("DATABASE_URL", ""), fp)
+    index = getattr(ctx, "doc_index", None) or doc_index(_ctx_dsn(ctx), fp)
     doc = history_docs.build_document(ctx.store, fp, kind, start, conn=conn)
     try:
         if doc is None:
@@ -1008,6 +1008,16 @@ class VectorRows:
         except Exception:  # noqa: BLE001
             log.warning("history vector delete: %s", DB_ERROR_TEXT)
             raise HistoryUnavailable("database") from None
+
+
+def _ctx_dsn(ctx: Any) -> str:
+    """The worker's database URL. worker.main() removes DATABASE_URL from the environment at startup
+    (feature_config.take_secrets), so it comes from the job context: the store's or the vector rows' DSN."""
+    for holder, attr in ((getattr(ctx, "store", None), "_dsn"), (getattr(ctx, "vectors", None), "dsn")):
+        value = getattr(holder, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return os.environ.get("DATABASE_URL", "")
 
 
 def worker_vectors(dsn: str) -> VectorRows:

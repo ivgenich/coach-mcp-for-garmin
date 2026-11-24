@@ -355,6 +355,21 @@ class EmbedDocJob(unittest.TestCase):
             hr.embed_doc(self.job(kind="week", start=MONDAY.isoformat()), self.ctx)
         self.assertEqual(cm.exception.group, "model_unavailable")
 
+    def test_the_database_url_comes_from_the_job_context_not_the_environment(self):
+        # worker.main() removes DATABASE_URL from the environment before any job runs.
+        seen = []
+        store = types.SimpleNamespace(_dsn="postgres://from-the-store")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DATABASE_URL", None)
+            self.assertEqual(hr._ctx_dsn(types.SimpleNamespace(store=store)), "postgres://from-the-store")
+            vectors = types.SimpleNamespace(dsn="postgresql://from-the-vectors")
+            self.assertEqual(hr._ctx_dsn(types.SimpleNamespace(store=self.store, vectors=vectors)),
+                             "postgresql://from-the-vectors")
+            with mock.patch.object(hr, "doc_index", lambda dsn, fp: seen.append(dsn) or self.index):
+                ctx = types.SimpleNamespace(store=self.store, conn=None, vectors=vectors)
+                hr.embed_doc(self.job(kind="week", start=MONDAY.isoformat()), ctx)
+        self.assertEqual(seen, ["postgresql://from-the-vectors"])
+
     def test_registers_embed_doc_without_garmin(self):
         calls = []
         hr.register_jobs(lambda kind, fn, garmin=True: calls.append((kind, fn, garmin)))
