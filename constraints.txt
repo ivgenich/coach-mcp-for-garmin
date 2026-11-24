@@ -35,10 +35,10 @@ anyio==4.16.0
 attrs==26.1.0
 certifi==2026.10.23
 cffi==2.1.1
-charset-normalizer==3.4.1
+charset-normalizer==3.5.2
 click==8.5.1
 cryptography==50.0.2
-curl-cffi==0.15.0
+curl-cffi==0.17.0
 fitparse==1.2.0
 # Garmin's official Personal API client (Apache-2.0). Installed in every image by
 # hash from config/garmin-key-client.txt, imported only with GARMIN_AUTH=key.
@@ -80,6 +80,6 @@ starlette==1.10.0
 truststore==0.10.5
 typing-inspection==0.4.5
 typing-extensions==4.16.0
-ua-generator==2.0.24
+ua-generator==2.1.8
 urllib3==2.8.0
 uvicorn==0.54.0
