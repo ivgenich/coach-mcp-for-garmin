@@ -1519,9 +1519,11 @@ class ChangelogFile(unittest.TestCase):
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_the_release_step_keeps_both_checks_green(self):
-        # The release step inserts the dated heading under [Unreleased].
-        text = read(CHANGELOG).replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] - 2026-11-18\n"
-                                       % ".".join(map(str, code_version())), 1)
+        # The release step inserts the dated heading under [Unreleased]. Once this version is already
+        # released, take its heading out first so the step is replayed, not doubled.
+        version = ".".join(map(str, code_version()))
+        text = re.sub(r"\n## \[%s\] - \d{4}-\d{2}-\d{2}\n" % re.escape(version), "\n", read(CHANGELOG), count=1)
+        text = text.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] - 2026-11-18\n" % version, 1)
         self.assertEqual(changelog_problems(text) + version_problems(text, code_version()), [])
 
     def test_the_checks_catch_bad_headings(self):
@@ -1533,7 +1535,8 @@ class ChangelogFile(unittest.TestCase):
                     good + "\n[1.0.0]: https://example.com\n"):
             with self.subTest(bad=bad[-60:]):
                 self.assertTrue(changelog_problems(bad))
-        self.assertTrue(version_problems(good + "\n## [9.0.0] - 2026-11-01\n", (1, 0, 0)))
+        self.assertTrue(version_problems(good.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [9.0.0] - 2026-12-31\n", 1),
+                                         (1, 0, 0)))
         self.assertTrue(version_problems("## [Unreleased]\n\n## [0.9.0] - 2026-11-01\n", (1, 0, 0)))
 
 
