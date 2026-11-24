@@ -1,0 +1,4 @@
+# Eval harness only (never in the image): docs/evals.md. Install: scripts/evals.sh setup.
+# Lock: see requirements.txt header.
+-c ../constraints.txt
+anthropic==2.12.0

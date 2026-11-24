@@ -1,0 +1,3099 @@
+{
+ "note": "W0: the yellow week of ext/test_weekly_status.py (FakeClient), 2026-03-01..07, read on Sunday 2026-03-08 06:30 Europe/Athens. Flags short_nights and gear_near_limit; sleep 6:32 avg, 3 nights under 6 h; HRV 28-day avg 74; plan 7 of 8 (88%). Activities 2026-02-21..03-07 (ids 73000001-17).",
+ "anchor": {
+  "now": "2026-03-08T06:30",
+  "tz": "Europe/Athens"
+ },
+ "responses": {
+  "get_device_last_used": {
+   "*": {
+    "userDeviceId": 72000001,
+    "userProfileNumber": 71000001,
+    "applicationNumber": 1,
+    "lastUsedDeviceApplicationKey": "0000",
+    "lastUsedDeviceName": "Synthetic Watch",
+    "lastUsedDeviceUploadTime": 1772870400000
+   }
+  },
+  "get_devices": {
+   "*": [
+    {
+     "deviceId": 72000002,
+     "productDisplayName": "Synthetic Bike Computer",
+     "primaryDevice": false,
+     "deviceTypePk": 2,
+     "deviceStatus": "active"
+    },
+    {
+     "deviceId": 72000001,
+     "productDisplayName": "Synthetic Watch",
+     "primaryDevice": true,
+     "deviceTypePk": 1,
+     "deviceStatus": "active"
+    }
+   ]
+  },
+  "get_hrv_data": {
+   "2026-03-07": {
+    "userProfilePk": 71000001,
+    "hrvSummary": {
+     "calendarDate": "2026-03-07",
+     "weeklyAvg": 70,
+     "lastNightAvg": 67,
+     "lastNight5MinHigh": 86,
+     "baseline": {
+      "lowUpper": 58,
+      "balancedLow": 66,
+      "balancedUpper": 84,
+      "markerValue": 0.41
+     },
+     "status": "BALANCED",
+     "feedbackPhrase": "HRV_BALANCED_3",
+     "createTimeStamp": "2026-03-07T05:02:11.0"
+    },
+    "hrvReadings": [
+     {
+      "hrvValue": 67,
+      "readingTimeGMT": "2026-03-07T01:00:00.0",
+      "readingTimeLocal": "2026-03-07T03:00:00.0"
+     }
+    ],
+    "startTimestampGMT": "2026-03-07T00:10:00.0",
+    "endTimestampGMT": "2026-03-07T03:40:00.0",
+    "sleepStartTimestampGMT": "2026-03-07T00:05:00.0",
+    "sleepEndTimestampGMT": "2026-03-07T03:45:00.0"
+   },
+   "2026-02-28": {
+    "userProfilePk": 71000001,
+    "hrvSummary": {
+     "calendarDate": "2026-02-28",
+     "weeklyAvg": 74,
+     "lastNightAvg": 76,
+     "lastNight5MinHigh": 95,
+     "baseline": {
+      "lowUpper": 58,
+      "balancedLow": 66,
+      "balancedUpper": 85,
+      "markerValue": 0.41
+     },
+     "status": "BALANCED",
+     "feedbackPhrase": "HRV_BALANCED_3",
+     "createTimeStamp": "2026-02-28T05:02:11.0"
+    },
+    "hrvReadings": [
+     {
+      "hrvValue": 76,
+      "readingTimeGMT": "2026-02-28T01:00:00.0",
+      "readingTimeLocal": "2026-02-28T03:00:00.0"
+     }
+    ],
+    "startTimestampGMT": "2026-02-28T00:10:00.0",
+    "endTimestampGMT": "2026-02-28T03:40:00.0",
+    "sleepStartTimestampGMT": "2026-02-28T00:05:00.0",
+    "sleepEndTimestampGMT": "2026-02-28T03:45:00.0"
+   },
+   "2026-02-21": {
+    "userProfilePk": 71000001,
+    "hrvSummary": {
+     "calendarDate": "2026-02-21",
+     "weeklyAvg": 76,
+     "lastNightAvg": 79,
+     "lastNight5MinHigh": 98,
+     "baseline": {
+      "lowUpper": 57,
+      "balancedLow": 65,
+      "balancedUpper": 85,
+      "markerValue": 0.41
+     },
+     "status": "BALANCED",
+     "feedbackPhrase": "HRV_BALANCED_3",
+     "createTimeStamp": "2026-02-21T05:02:11.0"
+    },
+    "hrvReadings": [
+     {
+      "hrvValue": 79,
+      "readingTimeGMT": "2026-02-21T01:00:00.0",
+      "readingTimeLocal": "2026-02-21T03:00:00.0"
+     }
+    ],
+    "startTimestampGMT": "2026-02-21T00:10:00.0",
+    "endTimestampGMT": "2026-02-21T03:40:00.0",
+    "sleepStartTimestampGMT": "2026-02-21T00:05:00.0",
+    "sleepEndTimestampGMT": "2026-02-21T03:45:00.0"
+   },
+   "2026-02-14": {
+    "userProfilePk": 71000001,
+    "hrvSummary": {
+     "calendarDate": "2026-02-14",
+     "weeklyAvg": 75,
+     "lastNightAvg": 73,
+     "lastNight5MinHigh": 92,
+     "baseline": {
+      "lowUpper": 57,
+      "balancedLow": 65,
+      "balancedUpper": 84,
+      "markerValue": 0.41
+     },
+     "status": "BALANCED",
+     "feedbackPhrase": "HRV_BALANCED_3",
+     "createTimeStamp": "2026-02-14T05:02:11.0"
+    },
+    "hrvReadings": [
+     {
+      "hrvValue": 73,
+      "readingTimeGMT": "2026-02-14T01:00:00.0",
+      "readingTimeLocal": "2026-02-14T03:00:00.0"
+     }
+    ],
+    "startTimestampGMT": "2026-02-14T00:10:00.0",
+    "endTimestampGMT": "2026-02-14T03:40:00.0",
+    "sleepStartTimestampGMT": "2026-02-14T00:05:00.0",
+    "sleepEndTimestampGMT": "2026-02-14T03:45:00.0"
+   }
+  },
+  "get_sleep_data": {
+   "2026-03-01": {
+    "dailySleepDTO": {
+     "id": 1772300000000,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-01",
+     "sleepTimeSeconds": 25920,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772300000000,
+     "sleepEndTimestampGMT": 1772325920000,
+     "deepSleepSeconds": 5184,
+     "lightSleepSeconds": 14256,
+     "remSleepSeconds": 5702,
+     "awakeSleepSeconds": 777,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 78,
+       "qualifierKey": "GOOD"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-02": {
+    "dailySleepDTO": {
+     "id": 1772300000001,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-02",
+     "sleepTimeSeconds": 19800,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772386400000,
+     "sleepEndTimestampGMT": 1772406200000,
+     "deepSleepSeconds": 3960,
+     "lightSleepSeconds": 10890,
+     "remSleepSeconds": 4356,
+     "awakeSleepSeconds": 594,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 61,
+       "qualifierKey": "FAIR"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-03": {
+    "dailySleepDTO": {
+     "id": 1772300000002,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-03",
+     "sleepTimeSeconds": 24480,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772472800000,
+     "sleepEndTimestampGMT": 1772497280000,
+     "deepSleepSeconds": 4896,
+     "lightSleepSeconds": 13464,
+     "remSleepSeconds": 5385,
+     "awakeSleepSeconds": 734,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 74,
+       "qualifierKey": "GOOD"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-04": {
+    "dailySleepDTO": {
+     "id": 1772300000003,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-04",
+     "sleepTimeSeconds": 20880,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772559200000,
+     "sleepEndTimestampGMT": 1772580080000,
+     "deepSleepSeconds": 4176,
+     "lightSleepSeconds": 11484,
+     "remSleepSeconds": 4593,
+     "awakeSleepSeconds": 626,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 65,
+       "qualifierKey": "FAIR"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-05": {
+    "dailySleepDTO": {
+     "id": 1772300000004,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-05",
+     "sleepTimeSeconds": 25200,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772645600000,
+     "sleepEndTimestampGMT": 1772670800000,
+     "deepSleepSeconds": 5040,
+     "lightSleepSeconds": 13860,
+     "remSleepSeconds": 5544,
+     "awakeSleepSeconds": 756,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 80,
+       "qualifierKey": "GOOD"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-06": {
+    "dailySleepDTO": {
+     "id": 1772300000005,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-06",
+     "sleepTimeSeconds": 21240,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772732000000,
+     "sleepEndTimestampGMT": 1772753240000,
+     "deepSleepSeconds": 4248,
+     "lightSleepSeconds": 11682,
+     "remSleepSeconds": 4672,
+     "awakeSleepSeconds": 637,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 66,
+       "qualifierKey": "FAIR"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   },
+   "2026-03-07": {
+    "dailySleepDTO": {
+     "id": 1772300000006,
+     "userProfilePK": 71000001,
+     "calendarDate": "2026-03-07",
+     "sleepTimeSeconds": 27000,
+     "napTimeSeconds": 0,
+     "sleepWindowConfirmed": true,
+     "sleepStartTimestampGMT": 1772818400000,
+     "sleepEndTimestampGMT": 1772845400000,
+     "deepSleepSeconds": 5400,
+     "lightSleepSeconds": 14850,
+     "remSleepSeconds": 5940,
+     "awakeSleepSeconds": 810,
+     "averageRespirationValue": 14.0,
+     "lowestRespirationValue": 11.0,
+     "highestRespirationValue": 18.0,
+     "sleepScores": {
+      "overall": {
+       "value": 83,
+       "qualifierKey": "GOOD"
+      }
+     }
+    },
+    "avgOvernightHrv": 66.0,
+    "restingHeartRate": 46,
+    "wellnessSpO2SleepSummaryDTO": {
+     "averageSpo2": 95.0,
+     "lowestSpo2": 89
+    }
+   }
+  },
+  "connectapi": {
+   "/activitylist-service/activities/search/activities": [
+    {
+     "activityId": 73000008,
+     "activityName": "Synthetic Strength",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "strength_training",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-07 11:00:00",
+     "startTimeGMT": "2026-03-07 09:00:00",
+     "duration": 1800.0,
+     "elapsedDuration": 1830.0,
+     "movingDuration": 1780.0,
+     "distance": 0.0,
+     "averageHR": 104,
+     "maxHR": 125,
+     "activityTrainingLoad": 36.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false
+    },
+    {
+     "activityId": 73000007,
+     "activityName": "Synthetic Long Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "road_biking",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-07 07:30:00",
+     "startTimeGMT": "2026-03-07 05:30:00",
+     "duration": 11100.0,
+     "elapsedDuration": 11130.0,
+     "movingDuration": 11080.0,
+     "distance": 92400.0,
+     "averageHR": 132,
+     "maxHR": 153,
+     "activityTrainingLoad": 222.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 196
+    },
+    {
+     "activityId": 73000006,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-06 06:05:00",
+     "startTimeGMT": "2026-03-06 04:05:00",
+     "duration": 4800.0,
+     "elapsedDuration": 4830.0,
+     "movingDuration": 4780.0,
+     "distance": 15200.0,
+     "averageHR": 141,
+     "maxHR": 162,
+     "activityTrainingLoad": 96.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 251
+    },
+    {
+     "activityId": 73000005,
+     "activityName": "Synthetic Trainer Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-05 06:30:00",
+     "startTimeGMT": "2026-03-05 04:30:00",
+     "duration": 3600.0,
+     "elapsedDuration": 3630.0,
+     "movingDuration": 3580.0,
+     "distance": 30000.0,
+     "averageHR": 128,
+     "maxHR": 149,
+     "activityTrainingLoad": 72.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 188
+    },
+    {
+     "activityId": 73000004,
+     "activityName": "Synthetic Pool Swim",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-04 06:00:00",
+     "startTimeGMT": "2026-03-04 04:00:00",
+     "duration": 2700.0,
+     "elapsedDuration": 2730.0,
+     "movingDuration": 2680.0,
+     "distance": 2200.0,
+     "averageHR": 112,
+     "maxHR": 133,
+     "activityTrainingLoad": 54.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false
+    },
+    {
+     "activityId": 73000003,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-03 18:00:00",
+     "startTimeGMT": "2026-03-03 16:00:00",
+     "duration": 3300.0,
+     "elapsedDuration": 3330.0,
+     "movingDuration": 3280.0,
+     "distance": 10500.0,
+     "averageHR": 133,
+     "maxHR": 154,
+     "activityTrainingLoad": 66.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 238
+    },
+    {
+     "activityId": 73000002,
+     "activityName": "Synthetic Pool Swim",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-02 06:10:00",
+     "startTimeGMT": "2026-03-02 04:10:00",
+     "duration": 3000.0,
+     "elapsedDuration": 3030.0,
+     "movingDuration": 2980.0,
+     "distance": 2500.0,
+     "averageHR": 115,
+     "maxHR": 136,
+     "activityTrainingLoad": 60.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false
+    },
+    {
+     "activityId": 73000001,
+     "activityName": "Synthetic Endurance Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-03-01 07:00:00",
+     "startTimeGMT": "2026-03-01 05:00:00",
+     "duration": 5400.0,
+     "elapsedDuration": 5430.0,
+     "movingDuration": 5380.0,
+     "distance": 45000.0,
+     "averageHR": 125,
+     "maxHR": 146,
+     "activityTrainingLoad": 108.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 182
+    },
+    {
+     "activityId": 73000016,
+     "activityName": "Synthetic Late Treadmill",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "treadmill_running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-28 23:59:30",
+     "startTimeGMT": "2026-02-28 21:59:30",
+     "duration": 1200.0,
+     "elapsedDuration": 1230.0,
+     "movingDuration": 1180.0,
+     "distance": 4000.0,
+     "averageHR": 130,
+     "maxHR": 151,
+     "activityTrainingLoad": 24.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 230
+    },
+    {
+     "activityId": 73000015,
+     "activityName": "Synthetic Trainer Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-28 07:00:00",
+     "startTimeGMT": "2026-02-28 05:00:00",
+     "duration": 3600.0,
+     "elapsedDuration": 3630.0,
+     "movingDuration": 3580.0,
+     "distance": 29000.0,
+     "averageHR": 127,
+     "maxHR": 148,
+     "activityTrainingLoad": 72.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 185
+    },
+    {
+     "activityId": 73000014,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-27 06:05:00",
+     "startTimeGMT": "2026-02-27 04:05:00",
+     "duration": 4200.0,
+     "elapsedDuration": 4230.0,
+     "movingDuration": 4180.0,
+     "distance": 13400.0,
+     "averageHR": 140,
+     "maxHR": 161,
+     "activityTrainingLoad": 84.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 249
+    },
+    {
+     "activityId": 73000013,
+     "activityName": "Synthetic Trainer Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-26 06:30:00",
+     "startTimeGMT": "2026-02-26 04:30:00",
+     "duration": 4500.0,
+     "elapsedDuration": 4530.0,
+     "movingDuration": 4480.0,
+     "distance": 36000.0,
+     "averageHR": 129,
+     "maxHR": 150,
+     "activityTrainingLoad": 90.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 190
+    },
+    {
+     "activityId": 73000012,
+     "activityName": "Synthetic Pool Swim",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-25 06:00:00",
+     "startTimeGMT": "2026-02-25 04:00:00",
+     "duration": 3000.0,
+     "elapsedDuration": 3030.0,
+     "movingDuration": 2980.0,
+     "distance": 2600.0,
+     "averageHR": 113,
+     "maxHR": 134,
+     "activityTrainingLoad": 60.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false
+    },
+    {
+     "activityId": 73000011,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-24 18:00:00",
+     "startTimeGMT": "2026-02-24 16:00:00",
+     "duration": 3000.0,
+     "elapsedDuration": 3030.0,
+     "movingDuration": 2980.0,
+     "distance": 9800.0,
+     "averageHR": 131,
+     "maxHR": 152,
+     "activityTrainingLoad": 60.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 236
+    },
+    {
+     "activityId": 73000010,
+     "activityName": "Synthetic Pool Swim",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-23 06:10:00",
+     "startTimeGMT": "2026-02-23 04:10:00",
+     "duration": 2700.0,
+     "elapsedDuration": 2730.0,
+     "movingDuration": 2680.0,
+     "distance": 2300.0,
+     "averageHR": 114,
+     "maxHR": 135,
+     "activityTrainingLoad": 54.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false
+    },
+    {
+     "activityId": 73000009,
+     "activityName": "Synthetic Long Ride",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "road_biking",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-22 07:00:00",
+     "startTimeGMT": "2026-02-22 05:00:00",
+     "duration": 9000.0,
+     "elapsedDuration": 9030.0,
+     "movingDuration": 8980.0,
+     "distance": 75000.0,
+     "averageHR": 130,
+     "maxHR": 151,
+     "activityTrainingLoad": 180.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 192
+    },
+    {
+     "activityId": 73000017,
+     "activityName": "Synthetic Old Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventType": {
+      "typeId": 9,
+      "typeKey": "uncategorized"
+     },
+     "startTimeLocal": "2026-02-21 20:00:00",
+     "startTimeGMT": "2026-02-21 18:00:00",
+     "duration": 2400.0,
+     "elapsedDuration": 2430.0,
+     "movingDuration": 2380.0,
+     "distance": 8000.0,
+     "averageHR": 135,
+     "maxHR": 156,
+     "activityTrainingLoad": 48.0,
+     "aerobicTrainingEffect": 3.1,
+     "anaerobicTrainingEffect": 0.6,
+     "ownerId": 71000001,
+     "deviceId": 72000001,
+     "hasPolyline": false,
+     "avgPower": 240
+    }
+   ]
+  },
+  "get_training_status": {
+   "2026-03-07": {
+    "userId": 71000001,
+    "mostRecentVO2Max": {
+     "userId": 71000001,
+     "generic": {
+      "calendarDate": "2026-03-06",
+      "vo2MaxPreciseValue": 56.3,
+      "vo2MaxValue": 56.0,
+      "fitnessAge": null,
+      "fitnessAgeDescription": null,
+      "maxMetCategory": 0
+     },
+     "cycling": {
+      "calendarDate": "2026-03-07",
+      "vo2MaxPreciseValue": 53.8,
+      "vo2MaxValue": 54.0,
+      "fitnessAge": null,
+      "fitnessAgeDescription": null,
+      "maxMetCategory": 1
+     },
+     "heatAltitudeAcclimation": null
+    },
+    "mostRecentTrainingLoadBalance": {
+     "userId": 71000001,
+     "metricsTrainingLoadBalanceDTOMap": {
+      "72000002": {
+       "calendarDate": "2026-03-07",
+       "deviceId": 72000002,
+       "monthlyLoadAerobicLow": 900.0,
+       "monthlyLoadAerobicHigh": 300.0,
+       "monthlyLoadAnaerobic": 60.0,
+       "trainingBalanceFeedbackPhrase": "ANAEROBIC_SHORTAGE",
+       "primaryTrainingDevice": false
+      },
+      "72000001": {
+       "calendarDate": "2026-03-07",
+       "deviceId": 72000001,
+       "monthlyLoadAerobicLow": 2100.5,
+       "monthlyLoadAerobicHigh": 640.2,
+       "monthlyLoadAnaerobic": 180.0,
+       "monthlyLoadAerobicLowTargetMin": 2300,
+       "monthlyLoadAerobicLowTargetMax": 3900,
+       "monthlyLoadAerobicHighTargetMin": 500,
+       "monthlyLoadAerobicHighTargetMax": 1100,
+       "monthlyLoadAnaerobicTargetMin": 150,
+       "monthlyLoadAnaerobicTargetMax": 600,
+       "trainingBalanceFeedbackPhrase": "AEROBIC_LOW_SHORTAGE",
+       "primaryTrainingDevice": true
+      }
+     },
+     "recordedDevices": [
+      {
+       "deviceId": 72000001,
+       "imageURL": null,
+       "deviceName": "Synthetic Watch",
+       "category": 0
+      }
+     ]
+    },
+    "mostRecentTrainingStatus": {
+     "userId": 71000001,
+     "latestTrainingStatusData": {
+      "72000002": {
+       "calendarDate": "2026-03-07",
+       "sinceDate": "2026-02-20",
+       "weeklyTrainingLoad": null,
+       "trainingStatus": 4,
+       "timestamp": 1772870400000,
+       "deviceId": 72000002,
+       "loadTunnelMin": null,
+       "loadTunnelMax": null,
+       "loadLevelTrend": null,
+       "sport": "CYCLING",
+       "subSport": "GENERIC",
+       "fitnessTrendSport": "CYCLING",
+       "fitnessTrend": 1,
+       "trainingStatusFeedbackPhrase": "MAINTAINING_1",
+       "trainingPaused": false,
+       "acuteTrainingLoadDTO": {
+        "acwrPercent": 20,
+        "acwrStatus": "LOW",
+        "acwrStatusFeedback": "FEEDBACK_1",
+        "dailyTrainingLoadAcute": 420,
+        "maxTrainingLoadChronic": 750.0,
+        "minTrainingLoadChronic": 400.0,
+        "dailyTrainingLoadChronic": 500,
+        "dailyAcuteChronicWorkloadRatio": 0.8
+       },
+       "primaryTrainingDevice": false
+      },
+      "72000001": {
+       "calendarDate": "2026-03-07",
+       "sinceDate": "2026-02-26",
+       "weeklyTrainingLoad": null,
+       "trainingStatus": 7,
+       "timestamp": 1772870400000,
+       "deviceId": 72000001,
+       "loadTunnelMin": null,
+       "loadTunnelMax": null,
+       "loadLevelTrend": null,
+       "sport": "RUNNING",
+       "subSport": "GENERIC",
+       "fitnessTrendSport": "RUNNING",
+       "fitnessTrend": 2,
+       "trainingStatusFeedbackPhrase": "PRODUCTIVE_2",
+       "trainingPaused": false,
+       "acuteTrainingLoadDTO": {
+        "acwrPercent": 52,
+        "acwrStatus": "OPTIMAL",
+        "acwrStatusFeedback": "FEEDBACK_2",
+        "dailyTrainingLoadAcute": 812,
+        "maxTrainingLoadChronic": 1164.0,
+        "minTrainingLoadChronic": 620.8,
+        "dailyTrainingLoadChronic": 776,
+        "dailyAcuteChronicWorkloadRatio": 1.05
+       },
+       "primaryTrainingDevice": true
+      }
+     },
+     "recordedDevices": [
+      {
+       "deviceId": 72000001,
+       "imageURL": null,
+       "deviceName": "Synthetic Watch",
+       "category": 0
+      }
+     ],
+     "showSelector": false,
+     "lastPrimarySyncDate": "2026-03-07"
+    },
+    "heatAltitudeAcclimationDTO": null
+   },
+   "2026-02-28": {
+    "userId": 71000001,
+    "mostRecentVO2Max": {
+     "userId": 71000001,
+     "generic": {
+      "calendarDate": "2026-03-06",
+      "vo2MaxPreciseValue": 56.3,
+      "vo2MaxValue": 56.0,
+      "fitnessAge": null,
+      "fitnessAgeDescription": null,
+      "maxMetCategory": 0
+     },
+     "cycling": {
+      "calendarDate": "2026-02-28",
+      "vo2MaxPreciseValue": 53.8,
+      "vo2MaxValue": 54.0,
+      "fitnessAge": null,
+      "fitnessAgeDescription": null,
+      "maxMetCategory": 1
+     },
+     "heatAltitudeAcclimation": null
+    },
+    "mostRecentTrainingLoadBalance": {
+     "userId": 71000001,
+     "metricsTrainingLoadBalanceDTOMap": {
+      "72000002": {
+       "calendarDate": "2026-02-28",
+       "deviceId": 72000002,
+       "monthlyLoadAerobicLow": 900.0,
+       "monthlyLoadAerobicHigh": 300.0,
+       "monthlyLoadAnaerobic": 60.0,
+       "trainingBalanceFeedbackPhrase": "ANAEROBIC_SHORTAGE",
+       "primaryTrainingDevice": false
+      },
+      "72000001": {
+       "calendarDate": "2026-02-28",
+       "deviceId": 72000001,
+       "monthlyLoadAerobicLow": 2100.5,
+       "monthlyLoadAerobicHigh": 640.2,
+       "monthlyLoadAnaerobic": 180.0,
+       "monthlyLoadAerobicLowTargetMin": 2300,
+       "monthlyLoadAerobicLowTargetMax": 3900,
+       "monthlyLoadAerobicHighTargetMin": 500,
+       "monthlyLoadAerobicHighTargetMax": 1100,
+       "monthlyLoadAnaerobicTargetMin": 150,
+       "monthlyLoadAnaerobicTargetMax": 600,
+       "trainingBalanceFeedbackPhrase": "BALANCED",
+       "primaryTrainingDevice": true
+      }
+     },
+     "recordedDevices": [
+      {
+       "deviceId": 72000001,
+       "imageURL": null,
+       "deviceName": "Synthetic Watch",
+       "category": 0
+      }
+     ]
+    },
+    "mostRecentTrainingStatus": {
+     "userId": 71000001,
+     "latestTrainingStatusData": {
+      "72000002": {
+       "calendarDate": "2026-02-28",
+       "sinceDate": "2026-02-20",
+       "weeklyTrainingLoad": null,
+       "trainingStatus": 4,
+       "timestamp": 1772870400000,
+       "deviceId": 72000002,
+       "loadTunnelMin": null,
+       "loadTunnelMax": null,
+       "loadLevelTrend": null,
+       "sport": "CYCLING",
+       "subSport": "GENERIC",
+       "fitnessTrendSport": "CYCLING",
+       "fitnessTrend": 1,
+       "trainingStatusFeedbackPhrase": "MAINTAINING_1",
+       "trainingPaused": false,
+       "acuteTrainingLoadDTO": {
+        "acwrPercent": 20,
+        "acwrStatus": "LOW",
+        "acwrStatusFeedback": "FEEDBACK_1",
+        "dailyTrainingLoadAcute": 420,
+        "maxTrainingLoadChronic": 750.0,
+        "minTrainingLoadChronic": 400.0,
+        "dailyTrainingLoadChronic": 500,
+        "dailyAcuteChronicWorkloadRatio": 0.8
+       },
+       "primaryTrainingDevice": false
+      },
+      "72000001": {
+       "calendarDate": "2026-02-28",
+       "sinceDate": "2026-02-26",
+       "weeklyTrainingLoad": null,
+       "trainingStatus": 7,
+       "timestamp": 1772870400000,
+       "deviceId": 72000001,
+       "loadTunnelMin": null,
+       "loadTunnelMax": null,
+       "loadLevelTrend": null,
+       "sport": "RUNNING",
+       "subSport": "GENERIC",
+       "fitnessTrendSport": "RUNNING",
+       "fitnessTrend": 2,
+       "trainingStatusFeedbackPhrase": "PRODUCTIVE_1",
+       "trainingPaused": false,
+       "acuteTrainingLoadDTO": {
+        "acwrPercent": 52,
+        "acwrStatus": "OPTIMAL",
+        "acwrStatusFeedback": "FEEDBACK_2",
+        "dailyTrainingLoadAcute": 760,
+        "maxTrainingLoadChronic": 1096.5,
+        "minTrainingLoadChronic": 584.8,
+        "dailyTrainingLoadChronic": 731,
+        "dailyAcuteChronicWorkloadRatio": 1.04
+       },
+       "primaryTrainingDevice": true
+      }
+     },
+     "recordedDevices": [
+      {
+       "deviceId": 72000001,
+       "imageURL": null,
+       "deviceName": "Synthetic Watch",
+       "category": 0
+      }
+     ],
+     "showSelector": false,
+     "lastPrimarySyncDate": "2026-02-28"
+    },
+    "heatAltitudeAcclimationDTO": null
+   }
+  },
+  "query_garmin_graphql": {
+   "*": {
+    "data": {
+     "workoutScheduleSummariesScalar": [
+      {
+       "scheduledWorkoutId": 75000001,
+       "workoutUuid": null,
+       "workoutId": 74000001,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-01",
+       "workoutName": "Synthetic Endurance Ride",
+       "workoutType": "cycling",
+       "estimatedDurationInSecs": 5400,
+       "estimatedDistanceInMeters": null,
+       "associatedActivityId": 73000001,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000002,
+       "workoutUuid": null,
+       "workoutId": 74000002,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-02",
+       "workoutName": "Synthetic Swim Set",
+       "workoutType": "swimming",
+       "estimatedDurationInSecs": null,
+       "estimatedDistanceInMeters": 2500.0,
+       "associatedActivityId": 73000002,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000003,
+       "workoutUuid": null,
+       "workoutId": 74000003,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-02",
+       "workoutName": "Synthetic Easy Run",
+       "workoutType": "running",
+       "estimatedDurationInSecs": 3300,
+       "estimatedDistanceInMeters": 10000.0,
+       "associatedActivityId": null,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000004,
+       "workoutUuid": null,
+       "workoutId": 74000004,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-03",
+       "workoutName": "Rest",
+       "workoutType": "other",
+       "estimatedDurationInSecs": null,
+       "estimatedDistanceInMeters": null,
+       "associatedActivityId": null,
+       "isRestDay": true,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000005,
+       "workoutUuid": null,
+       "workoutId": 74000005,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-04",
+       "workoutName": "Synthetic Swim Drills",
+       "workoutType": "swimming",
+       "estimatedDurationInSecs": null,
+       "estimatedDistanceInMeters": 2400.0,
+       "associatedActivityId": null,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000006,
+       "workoutUuid": null,
+       "workoutId": 74000006,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-05",
+       "workoutName": "Synthetic Trainer Intervals",
+       "workoutType": "cycling",
+       "estimatedDurationInSecs": 3600,
+       "estimatedDistanceInMeters": null,
+       "associatedActivityId": 73000005,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000007,
+       "workoutUuid": null,
+       "workoutId": 74000007,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-05",
+       "workoutName": "Synthetic Brick Run",
+       "workoutType": "running",
+       "estimatedDurationInSecs": 1200,
+       "estimatedDistanceInMeters": 3500.0,
+       "associatedActivityId": null,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000008,
+       "workoutUuid": null,
+       "workoutId": 74000008,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-06",
+       "workoutName": "Synthetic Long Run",
+       "workoutType": "running",
+       "estimatedDurationInSecs": 4800,
+       "estimatedDistanceInMeters": 15000.0,
+       "associatedActivityId": 73000006,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000009,
+       "workoutUuid": null,
+       "workoutId": 74000009,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-07",
+       "workoutName": "Synthetic Long Ride",
+       "workoutType": "cycling",
+       "estimatedDurationInSecs": 10800,
+       "estimatedDistanceInMeters": 90000.0,
+       "associatedActivityId": 73000007,
+       "isRestDay": false,
+       "race": false
+      },
+      {
+       "scheduledWorkoutId": 75000010,
+       "workoutUuid": null,
+       "workoutId": 74000010,
+       "trainingPlanId": null,
+       "fbtAdaptivePlanId": null,
+       "tpType": null,
+       "scheduleDate": "2026-03-08",
+       "workoutName": "Synthetic Next Week Run",
+       "workoutType": "running",
+       "estimatedDurationInSecs": 3000,
+       "estimatedDistanceInMeters": 9000.0,
+       "associatedActivityId": null,
+       "isRestDay": false,
+       "race": false
+      }
+     ]
+    }
+   }
+  },
+  "get_weigh_ins": {
+   "*": {
+    "startDate": "2025-12-08",
+    "endDate": "2026-03-07",
+    "dailyWeightSummaries": [
+     {
+      "summaryDate": "2026-03-05",
+      "numOfWeightEntries": 1,
+      "minWeight": 70180.0,
+      "maxWeight": 70180.0,
+      "latestWeight": {
+       "samplePk": 1772690400000,
+       "date": 1772697600000,
+       "calendarDate": "2026-03-05",
+       "weight": 70180.0,
+       "bmi": null,
+       "bodyFat": null,
+       "bodyWater": null,
+       "boneMass": null,
+       "muscleMass": null,
+       "physiqueRating": null,
+       "visceralFat": null,
+       "metabolicAge": null,
+       "sourceType": "MANUAL",
+       "timestampGMT": 1772690400000,
+       "weightDelta": null
+      },
+      "allWeightMetrics": [
+       {
+        "samplePk": 1772690400000,
+        "date": 1772697600000,
+        "calendarDate": "2026-03-05",
+        "weight": 70180.0,
+        "bmi": null,
+        "bodyFat": null,
+        "bodyWater": null,
+        "boneMass": null,
+        "muscleMass": null,
+        "physiqueRating": null,
+        "visceralFat": null,
+        "metabolicAge": null,
+        "sourceType": "MANUAL",
+        "timestampGMT": 1772690400000,
+        "weightDelta": null
+       }
+      ]
+     },
+     {
+      "summaryDate": "2026-02-24",
+      "numOfWeightEntries": 1,
+      "minWeight": 70600.0,
+      "maxWeight": 70600.0,
+      "latestWeight": {
+       "samplePk": 1771912800000,
+       "date": 1771920000000,
+       "calendarDate": "2026-02-24",
+       "weight": 70600.0,
+       "bmi": null,
+       "bodyFat": null,
+       "bodyWater": null,
+       "boneMass": null,
+       "muscleMass": null,
+       "physiqueRating": null,
+       "visceralFat": null,
+       "metabolicAge": null,
+       "sourceType": "MANUAL",
+       "timestampGMT": 1771912800000,
+       "weightDelta": null
+      },
+      "allWeightMetrics": [
+       {
+        "samplePk": 1771912800000,
+        "date": 1771920000000,
+        "calendarDate": "2026-02-24",
+        "weight": 70600.0,
+        "bmi": null,
+        "bodyFat": null,
+        "bodyWater": null,
+        "boneMass": null,
+        "muscleMass": null,
+        "physiqueRating": null,
+        "visceralFat": null,
+        "metabolicAge": null,
+        "sourceType": "MANUAL",
+        "timestampGMT": 1771912800000,
+        "weightDelta": null
+       }
+      ]
+     },
+     {
+      "summaryDate": "2026-02-10",
+      "numOfWeightEntries": 1,
+      "minWeight": 71000.0,
+      "maxWeight": 71000.0,
+      "latestWeight": {
+       "samplePk": 1770703200000,
+       "date": 1770710400000,
+       "calendarDate": "2026-02-10",
+       "weight": 71000.0,
+       "bmi": null,
+       "bodyFat": null,
+       "bodyWater": null,
+       "boneMass": null,
+       "muscleMass": null,
+       "physiqueRating": null,
+       "visceralFat": null,
+       "metabolicAge": null,
+       "sourceType": "MANUAL",
+       "timestampGMT": 1770703200000,
+       "weightDelta": null
+      },
+      "allWeightMetrics": [
+       {
+        "samplePk": 1770703200000,
+        "date": 1770710400000,
+        "calendarDate": "2026-02-10",
+        "weight": 71000.0,
+        "bmi": null,
+        "bodyFat": null,
+        "bodyWater": null,
+        "boneMass": null,
+        "muscleMass": null,
+        "physiqueRating": null,
+        "visceralFat": null,
+        "metabolicAge": null,
+        "sourceType": "MANUAL",
+        "timestampGMT": 1770703200000,
+        "weightDelta": null
+       }
+      ]
+     }
+    ],
+    "totalAverage": {
+     "from": 1765152000000,
+     "until": 1772927999999,
+     "weight": 70593.3,
+     "bmi": null,
+     "bodyFat": null,
+     "bodyWater": null,
+     "boneMass": null,
+     "muscleMass": null,
+     "physiqueRating": null,
+     "visceralFat": null,
+     "metabolicAge": null
+    }
+   }
+  },
+  "get_gear": {
+   "*": [
+    {
+     "gearPk": 76000001,
+     "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01",
+     "userProfilePk": 71000001,
+     "gearMakeName": "Other",
+     "gearModelName": "Trainer Shoe",
+     "gearTypeName": "Shoes",
+     "gearStatusName": "active",
+     "displayName": "Synthetic Trainer Shoe",
+     "customMakeModel": "Synthetic Trainer Shoe",
+     "imageNameLarge": null,
+     "imageNameMedium": null,
+     "imageNameSmall": null,
+     "dateBegin": "2025-09-01T00:00:00.0",
+     "dateEnd": null,
+     "maximumMeters": 800000.0,
+     "notified": false,
+     "createDate": "2025-01-01T00:00:00.0",
+     "updateDate": "2026-03-01T00:00:00.0"
+    },
+    {
+     "gearPk": 76000002,
+     "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a02",
+     "userProfilePk": 71000001,
+     "gearMakeName": "Other",
+     "gearModelName": "Race Shoe",
+     "gearTypeName": "Shoes",
+     "gearStatusName": "active",
+     "displayName": "Synthetic Race Shoe",
+     "customMakeModel": "Synthetic Race Shoe",
+     "imageNameLarge": null,
+     "imageNameMedium": null,
+     "imageNameSmall": null,
+     "dateBegin": "2026-01-15T00:00:00.0",
+     "dateEnd": null,
+     "maximumMeters": 600000.0,
+     "notified": false,
+     "createDate": "2025-01-01T00:00:00.0",
+     "updateDate": "2026-03-01T00:00:00.0"
+    },
+    {
+     "gearPk": 76000003,
+     "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a03",
+     "userProfilePk": 71000001,
+     "gearMakeName": "Other",
+     "gearModelName": "Road Bike",
+     "gearTypeName": "Bike",
+     "gearStatusName": "active",
+     "displayName": "Synthetic Road Bike",
+     "customMakeModel": "Synthetic Road Bike",
+     "imageNameLarge": null,
+     "imageNameMedium": null,
+     "imageNameSmall": null,
+     "dateBegin": "2024-05-01T00:00:00.0",
+     "dateEnd": null,
+     "maximumMeters": 0.0,
+     "notified": false,
+     "createDate": "2025-01-01T00:00:00.0",
+     "updateDate": "2026-03-01T00:00:00.0"
+    },
+    {
+     "gearPk": 76000004,
+     "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a04",
+     "userProfilePk": 71000001,
+     "gearMakeName": "Other",
+     "gearModelName": "Old Shoe",
+     "gearTypeName": "Shoes",
+     "gearStatusName": "retired",
+     "displayName": "Synthetic Old Shoe",
+     "customMakeModel": "Synthetic Old Shoe",
+     "imageNameLarge": null,
+     "imageNameMedium": null,
+     "imageNameSmall": null,
+     "dateBegin": "2024-02-01T00:00:00.0",
+     "dateEnd": "2026-01-10T00:00:00.0",
+     "maximumMeters": 700000.0,
+     "notified": false,
+     "createDate": "2025-01-01T00:00:00.0",
+     "updateDate": "2026-03-01T00:00:00.0"
+    },
+    {
+     "gearPk": 76000005,
+     "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a05",
+     "userProfilePk": 71000001,
+     "gearMakeName": "Other",
+     "gearModelName": "Wetsuit",
+     "gearTypeName": "Other",
+     "gearStatusName": "active",
+     "displayName": "Synthetic Wetsuit",
+     "customMakeModel": "Synthetic Wetsuit",
+     "imageNameLarge": null,
+     "imageNameMedium": null,
+     "imageNameSmall": null,
+     "dateBegin": "2025-04-01T00:00:00.0",
+     "dateEnd": null,
+     "maximumMeters": 0.0,
+     "notified": false,
+     "createDate": "2025-01-01T00:00:00.0",
+     "updateDate": "2026-03-01T00:00:00.0"
+    }
+   ]
+  },
+  "get_gear_stats": {
+   "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01": {
+    "gearPk": 76000001,
+    "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01",
+    "createDate": 1756684800000,
+    "updateDate": 1772870400000,
+    "totalDistance": 742000.0,
+    "totalActivities": 98,
+    "isProcessing": false,
+    "processing": false
+   },
+   "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a02": {
+    "gearPk": 76000002,
+    "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a02",
+    "createDate": 1768435200000,
+    "updateDate": 1772870400000,
+    "totalDistance": 210400.0,
+    "totalActivities": 21,
+    "isProcessing": false,
+    "processing": false
+   },
+   "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a03": {
+    "gearPk": 76000003,
+    "uuid": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a03",
+    "createDate": 1714521600000,
+    "updateDate": 1772870400000,
+    "totalDistance": 5123000.0,
+    "totalActivities": 240,
+    "isProcessing": false,
+    "processing": false
+   }
+  },
+  "get_activity_details": {
+   "*": {
+    "activityId": 73000007,
+    "measurementCount": 4,
+    "metricsCount": 185,
+    "totalMetricsCount": 11100,
+    "metricDescriptors": [
+     {
+      "metricsIndex": 0,
+      "key": "sumDuration",
+      "unit": {
+       "id": 40,
+       "key": "second",
+       "factor": 1000.0
+      }
+     },
+     {
+      "metricsIndex": 1,
+      "key": "directHeartRate",
+      "unit": {
+       "id": 100,
+       "key": "bpm",
+       "factor": 1.0
+      }
+     },
+     {
+      "metricsIndex": 2,
+      "key": "directPower",
+      "unit": {
+       "id": 30,
+       "key": "watt",
+       "factor": 1.0
+      }
+     },
+     {
+      "metricsIndex": 3,
+      "key": "directSpeed",
+      "unit": {
+       "id": 20,
+       "key": "mps",
+       "factor": 0.1
+      }
+     }
+    ],
+    "geoPolylineDTO": null,
+    "heartRateDTOs": null,
+    "pendingData": null,
+    "detailsAvailable": true,
+    "activityDetailMetrics": [
+     {
+      "metrics": [
+       0.0,
+       128.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       60.0,
+       129.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       120.0,
+       130.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       180.0,
+       131.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       240.0,
+       132.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       300.0,
+       128.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       360.0,
+       129.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       420.0,
+       130.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       480.0,
+       131.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       540.0,
+       132.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       600.0,
+       128.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       660.0,
+       129.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       720.0,
+       130.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       780.0,
+       131.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       840.0,
+       132.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       900.0,
+       128.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       960.0,
+       129.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1020.0,
+       130.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1080.0,
+       131.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       1140.0,
+       132.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1200.0,
+       128.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1260.0,
+       129.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       1320.0,
+       130.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1380.0,
+       131.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1440.0,
+       132.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       1500.0,
+       128.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1560.0,
+       129.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1620.0,
+       130.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       1680.0,
+       131.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1740.0,
+       132.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1800.0,
+       128.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       1860.0,
+       129.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       1920.0,
+       130.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       1980.0,
+       131.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2040.0,
+       132.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       2100.0,
+       128.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       2160.0,
+       129.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2220.0,
+       130.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       2280.0,
+       131.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       2340.0,
+       132.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2400.0,
+       128.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       2460.0,
+       129.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       2520.0,
+       130.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2580.0,
+       131.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       2640.0,
+       132.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       2700.0,
+       128.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2760.0,
+       129.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       2820.0,
+       130.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       2880.0,
+       131.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       2940.0,
+       132.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3000.0,
+       128.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3060.0,
+       129.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       3120.0,
+       130.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3180.0,
+       131.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3240.0,
+       132.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       3300.0,
+       128.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3360.0,
+       129.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3420.0,
+       130.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       3480.0,
+       131.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3540.0,
+       132.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3600.0,
+       128.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       3660.0,
+       129.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3720.0,
+       130.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3780.0,
+       131.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       3840.0,
+       132.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       3900.0,
+       128.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       3960.0,
+       129.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4020.0,
+       130.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4080.0,
+       131.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       4140.0,
+       132.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4200.0,
+       128.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4260.0,
+       129.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       4320.0,
+       130.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4380.0,
+       131.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4440.0,
+       132.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       4500.0,
+       128.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4560.0,
+       129.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4620.0,
+       130.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       4680.0,
+       131.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4740.0,
+       132.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4800.0,
+       128.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       4860.0,
+       129.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       4920.0,
+       130.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       4980.0,
+       131.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5040.0,
+       132.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       5100.0,
+       128.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       5160.0,
+       129.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5220.0,
+       130.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       5280.0,
+       131.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       5340.0,
+       132.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5400.0,
+       128.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       5460.0,
+       129.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       5520.0,
+       139.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5580.0,
+       140.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       5640.0,
+       141.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       5700.0,
+       137.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5760.0,
+       138.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       5820.0,
+       139.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       5880.0,
+       140.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       5940.0,
+       141.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6000.0,
+       137.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6060.0,
+       138.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       6120.0,
+       139.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6180.0,
+       140.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6240.0,
+       141.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       6300.0,
+       137.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6360.0,
+       138.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6420.0,
+       139.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       6480.0,
+       140.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6540.0,
+       141.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6600.0,
+       137.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       6660.0,
+       138.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6720.0,
+       139.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6780.0,
+       140.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       6840.0,
+       141.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       6900.0,
+       137.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       6960.0,
+       138.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7020.0,
+       139.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7080.0,
+       140.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       7140.0,
+       141.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7200.0,
+       137.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7260.0,
+       138.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       7320.0,
+       139.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7380.0,
+       140.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7440.0,
+       141.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       7500.0,
+       137.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7560.0,
+       138.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7620.0,
+       139.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       7680.0,
+       140.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7740.0,
+       141.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7800.0,
+       137.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       7860.0,
+       138.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       7920.0,
+       139.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       7980.0,
+       140.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8040.0,
+       141.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       8100.0,
+       137.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       8160.0,
+       138.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8220.0,
+       139.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       8280.0,
+       140.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       8340.0,
+       141.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8400.0,
+       137.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       8460.0,
+       138.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       8520.0,
+       139.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8580.0,
+       140.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       8640.0,
+       141.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       8700.0,
+       137.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8760.0,
+       138.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       8820.0,
+       139.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       8880.0,
+       140.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       8940.0,
+       141.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9000.0,
+       137.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9060.0,
+       138.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       9120.0,
+       139.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9180.0,
+       140.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9240.0,
+       141.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       9300.0,
+       137.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9360.0,
+       138.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9420.0,
+       139.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       9480.0,
+       140.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9540.0,
+       141.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9600.0,
+       137.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       9660.0,
+       138.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9720.0,
+       139.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9780.0,
+       140.0,
+       197.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       9840.0,
+       141.0,
+       198.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       9900.0,
+       137.0,
+       199.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       9960.0,
+       138.0,
+       200.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10020.0,
+       139.0,
+       201.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10080.0,
+       140.0,
+       195.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       10140.0,
+       141.0,
+       196.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10200.0,
+       137.0,
+       197.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10260.0,
+       138.0,
+       198.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       10320.0,
+       139.0,
+       199.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10380.0,
+       140.0,
+       200.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10440.0,
+       141.0,
+       201.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       10500.0,
+       137.0,
+       195.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10560.0,
+       138.0,
+       196.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10620.0,
+       139.0,
+       197.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       10680.0,
+       140.0,
+       198.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10740.0,
+       141.0,
+       199.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10800.0,
+       137.0,
+       200.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       10860.0,
+       138.0,
+       201.0,
+       8.4
+      ]
+     },
+     {
+      "metrics": [
+       10920.0,
+       139.0,
+       195.0,
+       8.5
+      ]
+     },
+     {
+      "metrics": [
+       10980.0,
+       140.0,
+       196.0,
+       8.3
+      ]
+     },
+     {
+      "metrics": [
+       11040.0,
+       141.0,
+       197.0,
+       8.4
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "faults": {}
+}

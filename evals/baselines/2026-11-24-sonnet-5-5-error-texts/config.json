@@ -1,0 +1,32 @@
+{
+  "run_id": "20261124T095231Z-claude-sonnet-5-5",
+  "model": "claude-sonnet-5-5",
+  "judge_model": "claude-haiku-5-5",
+  "effort": "medium",
+  "max_usd": 2.0,
+  "smoke": false,
+  "max_turns": 8,
+  "started": "2026-11-24T09:52:32Z",
+  "plan": [
+    {
+      "case_id": "E02",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E06",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    }
+  ],
+  "sdk": "2.12.0",
+  "commit": "",
+  "complete": true,
+  "spent_usd": 0.070487,
+  "api_calls": 18,
+  "finished": "2026-11-24T09:53:03Z"
+}

@@ -1,0 +1,35 @@
+{
+ "note": "D1 on daily_2026_03_18: resting HR 53 vs 7-day 48 (high_rhr). Today only the easy run: level yellow, recommendation as_planned.",
+ "responses": {
+  "get_stats": {
+   "2026-03-18": {
+    "$replace": {
+     "calendarDate": "2026-03-18",
+     "totalKilocalories": 1776.0,
+     "activeKilocalories": 64.0,
+     "bmrKilocalories": 1712.0,
+     "totalSteps": 812,
+     "totalDistanceMeters": 655,
+     "minHeartRate": 46,
+     "maxHeartRate": 98,
+     "restingHeartRate": 53,
+     "lastSevenDaysAvgRestingHeartRate": 48,
+     "averageStressLevel": 24,
+     "maxStressLevel": 61,
+     "stressQualifier": "CALM",
+     "bodyBatteryChargedValue": 52,
+     "bodyBatteryDrainedValue": 9,
+     "bodyBatteryHighestValue": 77,
+     "bodyBatteryLowestValue": 27,
+     "bodyBatteryMostRecentValue": 71,
+     "averageSpo2": 95.0,
+     "lowestSpo2": 88,
+     "latestSpo2": 96,
+     "avgWakingRespirationValue": 14.0,
+     "privacyProtected": false
+    }
+   }
+  }
+ },
+ "faults": {}
+}

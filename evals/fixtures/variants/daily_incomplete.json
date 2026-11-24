@@ -1,0 +1,35 @@
+{
+ "note": "D3 on daily_2026_03_18: last night is an unsynced sleep shell and readiness is empty: level incomplete, recommendation no_recovery_data.",
+ "responses": {
+  "get_sleep_data": {
+   "2026-03-18": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-18",
+      "sleepTimeSeconds": null,
+      "napTimeSeconds": null,
+      "sleepWindowConfirmed": false,
+      "sleepWindowConfirmationType": null,
+      "sleepStartTimestampGMT": null,
+      "sleepEndTimestampGMT": null,
+      "sleepStartTimestampLocal": null,
+      "sleepEndTimestampLocal": null,
+      "unmeasurableSleepSeconds": null,
+      "deepSleepSeconds": null,
+      "lightSleepSeconds": null,
+      "remSleepSeconds": null,
+      "awakeSleepSeconds": null,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": null
+     },
+     "remSleepData": false
+    }
+   }
+  },
+  "get_training_readiness": {
+   "2026-03-18": []
+  }
+ },
+ "faults": {}
+}

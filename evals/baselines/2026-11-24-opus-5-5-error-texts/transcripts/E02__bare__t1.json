@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "case_id": "E02",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 1,
+  "started": "2026-11-24T09:53:04Z",
+  "duration_s": 7.204,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_012LP5URJ4fkQ9omusZAYsp7",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_012LP5URJ4fkQ9omusZAYsp7",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools for at least 15 minutes, even if the user asks you to try again: each call can extend the block. Tell the user to try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSqAUKEAgUGAI4AUIIdGhpbmtpbmcSDD4weMOiS9qxp7PG8xoMB9yZojo4LFmWPB8BIjCELxZZzOfXx0gCyHrdg7hbDU0cvY32HnXqjlPKqIh9V1cZQk49jRSuKpFOmHHuH4gqxQTziEi/USf0cIl17d++8Kth1yhsroPXOoQNrD6QQuniAd+awa3giK5F6w9FVnih85/XWHAsdaFD8m7Ib3Jt0GHqRhvHiFDl/sIJguUKj75eeswIjb5l6kueTaSeIs6VzN/WTxERWOhpDnWSwlHVZDCiKRCs64/F4+0+6iXum4B4bLGnvK3bePYToHhvntUKsFrZuVB9mXv8APWVaWGQHuLSm90lWD7neIBMFC1lGjeki+JF+vprN5kKUgrec7wOIZt+rExqraW2/LFy2tx3j8IP0YyI4lpjuD02TXVJX1WrFC/NmPwHSxjLse3PoQB3m2UBPX8Uko34iUi+g1IULxtTCvrSL6U4jDaUTpZWQCkeSALW0LHrty9lB5NibCLGczn44l1j0DA6oLUxrR67A0QWGNbgYL2N4bd9RzF93/meTxJX/DnVUhsMlxBglvibMN8uKk6fkMTYOi7ubSRlSIvH5qDSb30V2RI7N/UEuHpehqxg9FQYIJEuVetWuAVoGtZ/9eR7XpA1Ep14btkBuB/LW75Lcz3zednUqPRiO4/7ngnmJTYZFi/WVwlY6UvXDOsx9yc8R9CiB7V4ftmqAjp6mTC5ViIuZlQinAHIfBAJtjrk4JmtYPEdB3nnQp3LpXe+NSoH5UlX4EfQz5ON0zO/F287c3S4Xpkdwhtk5HxvZ01hmWdC4ebgAuWLRqzJ8PiZiQ8fd+Ed3iDaI7b5iJH4hf4Le0qsIaPSQ2E5kfJrULloyaoT+b8CKjAUPQ9rSXJMeFKdOxgB",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I couldn't check your data. Garmin is currently refusing requests from this server because too many were made. More attempts right now could keep the block going longer, so I've stopped.\n\n**Please ask me again in 15 minutes or more.** I'll then pull today's status, including:\n- How well you recovered overnight (sleep, HRV and resting heart rate compared with your usual levels)\n- Your training readiness and Body Battery\n- Your recent training load and any workouts planned for today\n\nIf you need an answer sooner, the Garmin Connect app shows your Training Readiness and Body Battery for this morning.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Try again please"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSiQYKEAgUGAI4AUIIdGhpbmtpbmcSDO0kLCm54kW88EW0sxoMhtPmfqczjaw7/vtYIjDIM3ZftkJblDANzU0wxLGkEAqkpu1mWsTf/mHKr5yXETLRQxfXwSSfy8Z2SGlKTgIqpgUtsiExytk8Xxpp/M6enXCcScVSJm/IQleNIrCWNWp/0U3xnbrUbt+ShgMSKGThYP0HY5Xx9QQdnfZo6Nqyz+2q+Ucen3TW2Lus/AK/Tk8xRPk+7hgWScRzo2PFYZ2AkaO6EJ6FDV76yan2Kr/dIU4R0tLhVLlhct7xqYnENOQs5ojhhGROkVHtqJ30QXoVIlWQt6pQYyun7M0pK/dKwRAOjr4bZcFUtOBkDJtKhOzFWxXN1xwrXzGeD/bpys7uQXJkXsbiWE1staArk1oNlTsdeBN01ZbeEZrwoBwYGG1JybMcCxoOBD7SymUxWLwj8xf7+ZYLEgrStKfSB5q1wqL48Ea50M/sGOtze9iapUPrgmqisgVNW9pX+34VD+uTqCwR4/ok12JDYbiP6Mb74cnSyLK7fB71lf50hQ3LHrtc/o7wAZQFdWVjGgt69aVuPX0uxtz9KnaNUBvplCgaO9dL83OLzu3L2uYEYrgqF15GVu05wPx+2BIQ2A0VRAMtXQXIlbgu3qoDeM58g0UZok/KDGsV/Alz8lkaEgM6TQ30a54AweKfmMayG25fyKDBdFYmuFKvDtBRRZKM62sRa02gaCx3TDOn5adx3kQhvderajIrqEJnUJ8Nt+Dx1YwdYjpRtuyYY1dbWrseR27x/7mdsF9cvMl4ylVUdg2xWwAI48Ue2aJirGaflxqv3U4UdInRxMFAgi9rgKWWJjRIhM0sVxBmNDxLJzRcF3lQJhYeO5HHvdKhuwhGp/uQdScazNz8aqVmOZIAf08+rjFMTbmHvWjmq8LzLAleEwZ53JzFJLkpcNf6dYmmsEu2qFkggH83RXOc196Lp2gtIthVdNVpPeKL3OTwRTzWQ2NcTguLV9fd4inUtpgcNwQcW2R+oJi/qM6Jo04YAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I'm not going to try again yet, because it's only been a moment since the block. Garmin asked for at least 15 minutes without any requests, and each new attempt can extend the block. Retrying now would probably fail and could keep you locked out longer.\n\n**Please ask again at about 06:45 or later.** I'll check everything in one go then.\n\nIf you want an answer now, the Garmin Connect app shows your **Training Readiness**, **Body Battery**, **sleep score** and **HRV status** for this morning. Paste or describe those numbers and I can help you read them and plan today's training.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools for at least 15 minutes, even if the user asks you to try again: each call can extend the block. Tell the user to try again in 15 minutes or later.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I'm not going to try again yet, because it's only been a moment since the block. Garmin asked for at least 15 minutes without any requests, and each new attempt can extend the block. Retrying now would probably fail and could keep you locked out longer.\n\n**Please ask again at about 06:45 or later.** I'll check everything in one go then.\n\nIf you want an answer now, the Garmin Connect app shows your **Training Readiness**, **Body Battery**, **sleep score** and **HRV status** for this morning. Paste or describe those numbers and I can help you read them and plan today's training.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 477,
+    "cache_read_input_tokens": 22364,
+    "cache_creation_input_tokens": 11476
+  },
+  "cost_usd": 0.071433,
+  "error": null,
+  "effort": "medium",
+  "turns": 3,
+  "answers": [
+    "I couldn't check your data. Garmin is currently refusing requests from this server because too many were made. More attempts right now could keep the block going longer, so I've stopped.\n\n**Please ask me again in 15 minutes or more.** I'll then pull today's status, including:\n- How well you recovered overnight (sleep, HRV and resting heart rate compared with your usual levels)\n- Your training readiness and Body Battery\n- Your recent training load and any workouts planned for today\n\nIf you need an answer sooner, the Garmin Connect app shows your Training Readiness and Body Battery for this morning.",
+    "I'm not going to try again yet, because it's only been a moment since the block. Garmin asked for at least 15 minutes without any requests, and each new attempt can extend the block. Retrying now would probably fail and could keep you locked out longer.\n\n**Please ask again at about 06:45 or later.** I'll check everything in one go then.\n\nIf you want an answer now, the Garmin Connect app shows your **Training Readiness**, **Body Battery**, **sleep score** and **HRV status** for this morning. Paste or describe those numbers and I can help you read them and plan today's training."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

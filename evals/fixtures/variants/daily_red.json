@@ -1,0 +1,119 @@
+{
+ "note": "D2 on daily_2026_03_18: slept 5.5 h after a 5.7 h night (sleep_debt, red); the threshold run moved to today next to the easy run, so the day is hard: recommendation short_zone2_or_rest.",
+ "responses": {
+  "get_sleep_data": {
+   "2026-03-18": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-18",
+      "sleepTimeSeconds": 19800,
+      "napTimeSeconds": 0,
+      "sleepWindowConfirmed": true,
+      "sleepWindowConfirmationType": "enhanced_confirmed_final",
+      "sleepStartTimestampGMT": 1773781860000,
+      "sleepEndTimestampGMT": 1773805920000,
+      "sleepStartTimestampLocal": 1773789060000,
+      "sleepEndTimestampLocal": 1773813120000,
+      "unmeasurableSleepSeconds": 0,
+      "deepSleepSeconds": 4200,
+      "lightSleepSeconds": 10800,
+      "remSleepSeconds": 4800,
+      "awakeSleepSeconds": 1560,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": true,
+      "averageRespirationValue": 13.6,
+      "lowestRespirationValue": 10.0,
+      "highestRespirationValue": 18.0,
+      "awakeCount": 1,
+      "avgSleepStress": 14.0,
+      "ageGroup": "ADULT",
+      "sleepScoreFeedback": "POSITIVE_RESTFUL_EVENING",
+      "sleepScoreInsight": "NONE",
+      "sleepScores": {
+       "totalDuration": {
+        "qualifierKey": "FAIR",
+        "optimalStart": 28800.0,
+        "optimalEnd": 28800.0
+       },
+       "remPercentage": {
+        "value": 21,
+        "qualifierKey": "GOOD",
+        "optimalStart": 21.0,
+        "optimalEnd": 31.0
+       },
+       "deepPercentage": {
+        "value": 19,
+        "qualifierKey": "GOOD",
+        "optimalStart": 16.0,
+        "optimalEnd": 33.0
+       },
+       "overall": {
+        "value": 74,
+        "qualifierKey": "FAIR"
+       }
+      }
+     },
+     "remSleepData": true,
+     "wellnessSpO2SleepSummaryDTO": {
+      "averageSpo2": 95.0,
+      "lowestSpo2": 88,
+      "averageHR": 48.0
+     },
+     "restlessMomentsCount": 31,
+     "avgOvernightHrv": 58.0,
+     "hrvStatus": "BALANCED",
+     "bodyBatteryChange": 49,
+     "restingHeartRate": 49
+    }
+   }
+  },
+  "query_garmin_graphql": {
+   "*": {
+    "$replace": {
+     "data": {
+      "workoutScheduleSummariesScalar": [
+       {
+        "scheduleDate": "2026-03-18",
+        "workoutName": "Threshold intervals 5x6",
+        "workoutType": "running",
+        "estimatedDurationInSecs": 4800,
+        "estimatedDistanceInMeters": 13200.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false,
+        "workoutId": 7770002
+       },
+       {
+        "scheduleDate": "2026-03-18",
+        "workoutName": "Easy aerobic run",
+        "workoutType": "running",
+        "estimatedDurationInSecs": 2880,
+        "estimatedDistanceInMeters": 6800.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false,
+        "workoutId": 7770001
+       },
+       {
+        "scheduleDate": "2026-03-19",
+        "workoutName": "Technique swim",
+        "workoutType": "swimming",
+        "estimatedDurationInSecs": null,
+        "estimatedDistanceInMeters": 2000.0,
+        "associatedActivityId": null,
+        "tpType": null,
+        "isRestDay": false,
+        "race": false,
+        "workoutId": 7770003
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ "faults": {}
+}

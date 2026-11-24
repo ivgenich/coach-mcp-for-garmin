@@ -1,0 +1,24 @@
+# Key mode (GARMIN_AUTH=key): the tools Garmin's Personal API can serve. Must
+# equal key_mode.KEY_MODE_TOOLS (test K17), and every name is also in
+# config/enabled-tools.txt. Read by the docs test, CI's smoke test and the live
+# checks; the server itself uses the list in ext/key_mode.py. Same format as
+# config/enabled-tools.txt: one name per line, '#' starts a comment.
+
+# Activities
+get_activities
+get_activities_by_date
+get_activity
+get_activity_fit_data
+
+# This repo's status tools
+get_daily_status
+get_weekly_status
+
+# Sleep, recovery and health
+get_stats
+get_sleep_summary
+get_sleep_summary_range
+get_hrv_trend
+get_body_battery
+get_heart_rate_zones
+get_vo2max_trend

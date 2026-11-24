@@ -1,0 +1,311 @@
+{
+  "run_id": "20261124T090917Z-claude-opus-5-5",
+  "model": "claude-opus-5-5",
+  "judge_model": "claude-haiku-5-5",
+  "effort": "medium",
+  "max_usd": 25.0,
+  "smoke": false,
+  "max_turns": 8,
+  "started": "2026-11-24T09:09:18Z",
+  "plan": [
+    {
+      "case_id": "P01",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "P02",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "P03",
+      "variants": [
+        "coach"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E01",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E02",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E03",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E04",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E05",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E06",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "E07",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F01",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F02",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F03",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F04",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F05",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F06",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "F07",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "K01",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "K02",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "K03",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "K04",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "K05",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "R01",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "R02",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "R03",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "R04",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "R05",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S01",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S02",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S03",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S04",
+      "variants": [
+        "bare"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S05",
+      "variants": [
+        "bare",
+        "coach"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "S06",
+      "variants": [
+        "coach"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T01",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T02",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T03",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T04",
+      "variants": [
+        "bare",
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T05",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T06",
+      "variants": [
+        "instr",
+        "coach"
+      ],
+      "trials": 3
+    },
+    {
+      "case_id": "T07",
+      "variants": [
+        "instr"
+      ],
+      "trials": 3
+    }
+  ],
+  "sdk": "2.12.0",
+  "commit": "",
+  "complete": true,
+  "spent_usd": 6.1272,
+  "api_calls": 490,
+  "finished": "2026-11-24T09:39:30Z"
+}

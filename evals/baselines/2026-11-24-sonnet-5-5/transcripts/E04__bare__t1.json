@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "case_id": "E04",
+  "variant": "bare",
+  "model": "claude-sonnet-5-5",
+  "trial": 1,
+  "started": "2026-11-24T08:50:42Z",
+  "duration_s": 2.633,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Get my daily status for 2026-02-30"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQS2gYKEAgUGAI4AUIIdGhpbmtpbmcSDLAN6pUu2N+H6I2P4xoMunuyUjd/M7Hae2UAIjC1SSC8IdoC6FU+fwweLtgrNHmb5a5M9N3tQUWix2mLDf0KGhJDglQTU4ztrTC7Iw4q9wW148MiWBHHFqyP9Jb7qy8w4tdMe+tBidle2GzDnf7KMxvUu3B21eGRebRhhpCCUzn8CAmQ3q0r0iBssLExzGoFQPt0aoiIomc7ha9GrBha6ruTm4IRWCUAjbgr9vpXWlBY0sLu66jY1J5ev66+D6l3GuMl6ouekhNRS6EKfQ/MXKtF/bFHIBFX92zEO5IW+glI+NMyFnoR2Elv5KpNDrAvncPSZmwtNRA/CiKBUwrOXQT0zuU0Xs7jO4STaEVV3o6qCMC+zL3AO4+Kgoks1BkSC1eJI9nS2QTVvoiRcVYTKfA7KOWKgY8KrmjfSqWpSBvxDhZumyvk3Nvd3Y6OiT0PB43KhI/cb+vBbWMvfcI1CXsuaHZVnmbmN812L03a9jWG3eWNOT4I0WtUx5d2RG5UuFaMhAAdAf+IFiSx3Hjn4ANb4MCPktrqJNJ+p9wdaa/lPyIfEbmLs9dXR+QEBlMiAigNSK6h1+mJU1KenBnIDn1JXZb/iTlnqz/qwaCvmBJ1RK13e3sKvuA0VBHzrEnKVWE5sTJkhHSkhykOHv0kh/N9KWmLvxpgqx3bakC26f29bzIIIqze+UWTAjDrChXu6+9Mkamvyhk+Fvj5PVs5c5j+plJp7gSU2x2z+MO43r0q5/Vj77K7OOEdZhSL+PKetAmPvX5Kc3Q6g2lPqs+Cgn8iibUCNH/sblEMC34bZcflIjBgTAOvIpyXZoED9liTPfns4IK5miQbyDc45MQicYgAVyGgEvP+XjzV9HoAT+fxhil4ySMNRC4iVChN83Ky7lhSrMt+sSgYxH17/ePLfai+VmY/MFQg4W/YBIdJd35twcC1ZliP5wN9+IkbP5sucaVcxU8gt/F7/f56XwKq1UWoTTeMBt5vB1NGs8Rmgpu/dOHUH6QKGEVU6ZgbO4IvyJSWRu9B54T+KcoymntAPRSpMGJ+hqDaXgACKAD77Fx3STEbwQe7qUosjt8DmKpLgvKTSWrGs5ukpnj+3bEnOk5vTIssxJUYAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "2026-02-30 isn't a real date, because February 2026 ends on the 28th. Which date do you want?\n\n- **2026-02-28**, the last day of February\n- **2026-03-18**, today\n- Another date you had in mind\n\nTell me which one and I'll pull the daily status.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [],
+  "final_text": "2026-02-30 isn't a real date, because February 2026 ends on the 28th. Which date do you want?\n\n- **2026-02-28**, the last day of February\n- **2026-03-18**, today\n- Another date you had in mind\n\nTell me which one and I'll pull the daily status.",
+  "garmin_calls": [],
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 177,
+    "cache_read_input_tokens": 11028,
+    "cache_creation_input_tokens": 86
+  },
+  "cost_usd": 0.003096,
+  "error": null,
+  "effort": "medium",
+  "turns": 1,
+  "answers": [
+    "2026-02-30 isn't a real date, because February 2026 ends on the 28th. Which date do you want?\n\n- **2026-02-28**, the last day of February\n- **2026-03-18**, today\n- Another date you had in mind\n\nTell me which one and I'll pull the daily status."
+  ],
+  "served_models": [
+    "claude-sonnet-5-5"
+  ]
+}

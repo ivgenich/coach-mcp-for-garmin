@@ -19,6 +19,18 @@ garmin_tokens.json
 .venv/
 venv/
 **/*.local.md
+# Docker Compose files, the tunnel token and the docs: none of them belongs
+# in the image (compose.yaml, docs/deploy-docker.md).
+compose.yaml
+tunnel.env
+**/*.env
+docs/
+SECURITY.md
+CHANGELOG.md
+# Garmin credentials in their newer forms: the base64 copy garmin-mcp-auth
+# writes (GARMINTOKENS_BASE64) and the key-mode token cache folder.
+**/*garmin_tokens.base64*
+**/garmin-key/
 # ext/ is copied whole (COPY ext/ /opt/garmin-ext/), minus its tests and docs.
 ext/test_*.py
 ext/fixtures/

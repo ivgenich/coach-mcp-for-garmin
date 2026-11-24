@@ -1,0 +1,191 @@
+# CI: unit tests (two legs), the sign-in end to end, the eval tests offline, lint,
+# secrets, known vulnerabilities and a container smoke test. Nothing here needs a secret or a
+# Garmin login. Every action is pinned to a full commit SHA; the tools are
+# pinned in scripts/ci-tools.sh and .github/ci-requirements.txt.
+# The same steps without Docker or GitHub: scripts/ci-local.sh
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Mondays: new advisories and base-image changes show up without a push.
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FULL_PYTHON: "3.12.15" # the image's Python (Dockerfile: FROM python:3.12.15-slim)
+  STDLIB_PYTHON: "3.10"
+  TOOLS_PYTHON: "3.12"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  tests-stdlib:
+    name: tests (stdlib)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.STDLIB_PYTHON }}
+      - name: Unit tests with the standard library only
+        run: python -B scripts/ci-unittest.py
+
+  tests-full:
+    name: tests (full)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            config/garmin-key-client.txt
+      - name: Caddy at the image's version, and gitleaks for the release-check tests
+        run: |
+          scripts/ci-tools.sh "$RUNNER_TEMP/bin" caddy gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: Install upstream and the image's pins, as the Dockerfile does
+        run: python -B scripts/ci-checks.py install-full
+      - name: The environment is exactly constraints.txt
+        run: python -B scripts/ci-checks.py verify-env
+      - name: Unit tests, no skip allowed for upstream, mcp 2.x or caddy
+        env:
+          REQUIRE_UPSTREAM: "1"
+        run: python -B scripts/ci-unittest.py
+      - name: Sign-in end to end on 127.0.0.1 (fake secrets, no Garmin login)
+        run: python -B scripts/e2e-local.py --work "$RUNNER_TEMP/e2e" --caddy "$RUNNER_TEMP/bin/caddy"
+
+  evals-offline:
+    name: evals (offline)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            evals/requirements.txt
+      - name: A venv of its own (tests-full checks its venv equals constraints.txt)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-evals"
+          "$RUNNER_TEMP/venv-evals/bin/python" -B scripts/ci-checks.py install-full
+          "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes -r evals/requirements.txt
+      - name: Eval tests and committed baselines, graded offline (no key, no network)
+        run: |
+          py="$RUNNER_TEMP/venv-evals/bin/python"
+          "$py" -B -m unittest discover -s evals/tests -t .
+          for d in evals/baselines/*/; do
+            [ -d "$d/transcripts" ] || continue
+            "$py" -B -m evals grade "$d" --out "$RUNNER_TEMP/baselines/$(basename "$d")"
+          done
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOLS_PYTHON }}
+          cache: pip
+          cache-dependency-path: .github/ci-requirements.txt
+      - name: Install ruff and pip-audit (hashed pins)
+        run: python -m pip install --require-hashes -r .github/ci-requirements.txt
+      - name: Install shellcheck, hadolint and actionlint (pinned, sha256 checked)
+        run: |
+          scripts/ci-tools.sh "$RUNNER_TEMP/bin" shellcheck hadolint actionlint
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: ruff
+        run: ruff check --no-cache --output-format github .
+      - name: shellcheck
+        run: git ls-files -z --cached --others --exclude-standard -- '*.sh' | xargs -0 shellcheck
+      - name: hadolint
+        run: hadolint --no-color Dockerfile
+      - name: actionlint
+        run: actionlint -no-color
+      - name: No hidden characters in the repository's text files
+        run: python -B scripts/ci-checks.py text-scan
+      - name: CI pins match the Dockerfile
+        run: python -B scripts/ci-checks.py pin-drift
+      - name: ext/version.py, and the tag on a release push
+        run: python -B scripts/ci-checks.py version
+      - name: compose.yaml resolves and keeps its rules (stub settings, no daemon)
+        run: python -B scripts/ci-checks.py compose
+
+  secrets-deps:
+    name: secrets and dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.TOOLS_PYTHON }}
+          cache: pip
+          cache-dependency-path: .github/ci-requirements.txt
+      - name: Install pip-audit (hashed pins)
+        run: python -m pip install --require-hashes -r .github/ci-requirements.txt
+      - name: Install gitleaks (pinned, sha256 checked)
+        run: |
+          scripts/ci-tools.sh "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: gitleaks over every commit (findings redacted)
+        run: gitleaks git --redact --no-banner --no-color --verbose .
+      - name: pip-audit on constraints.txt
+        run: python -B scripts/ci-checks.py audit
+
+  smoke:
+    name: container smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: constraints.txt
+      - name: The mcp client for scripts/test-protocol.py
+        run: python -m pip install -c constraints.txt mcp
+      - name: Build the image, run it with fake secrets and no Garmin login, check it
+        env:
+          SMOKE_PYTHON: python
+        run: scripts/ci-smoke.sh

@@ -1,0 +1,6 @@
+# Garmin's official Personal API client, pinned by hash because it receives the
+# Personal API key. The Dockerfile installs it after constraints.txt's packages:
+#   pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt
+# Its one dependency, requests, is pinned in constraints.txt, which also pins
+# this package's version. Change both files together.
+garmin-connect-personal-api-python==1.0.0 --hash=sha256:a709a7836651f173f7b82a22074cb96def9caf7c17ee41fdfaa6d40657c5711b

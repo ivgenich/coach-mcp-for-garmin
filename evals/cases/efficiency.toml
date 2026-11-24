@@ -1,0 +1,55 @@
+# Efficiency: calls per answer. Every case logs calls and tokens; these gate them.
+
+[defaults]
+mode = "full"
+now = "2026-03-18T06:30"
+tz = "Europe/Athens"
+garmin = { base = "daily_2026_03_18" }
+
+[[case]]
+id = "P01"
+title = "Week in review in one call"
+prompt = "How was my week?"
+variants = ["instr"]
+smoke = true
+now = "2026-03-08T06:30"
+garmin = { base = "weekly_2026_03_01" }
+why = """get_weekly_status replaces about ten single-source calls; one call answers the question."""
+[case.expect]
+tools_all = ["get_weekly_status"]
+max_tool_calls = 1
+no_invented_numbers = true
+tool_output_has = ["yellow"]
+
+[[case]]
+id = "P02"
+title = "Three weeks of sleep in one range call"
+prompt = "How has my sleep been over the last 3 weeks?"
+variants = ["instr"]
+garmin = { base = "daily_2026_03_18", overlays = ["sleep_range"] }
+why = """get_sleep_summary_range reads up to 90 nights in one call; 21 get_sleep_summary calls is the waste the
+range tool exists to avoid. No number check: the tool gives only per-night values, so a correct average is the
+model's own arithmetic."""
+[case.expect]
+tools_all = ["get_sleep_summary_range"]
+tools_none = ["get_sleep_summary"]
+args = { get_sleep_summary_range = { end_date = "2026-03-18" } }
+max_tool_calls = 2
+must_mention = [["average", "trend", "night", "nights", "consistent", "varied", "hours"]]
+tool_output_has = ["nights_returned"]
+
+[[case]]
+id = "P03"
+title = "Last five runs: list once, large tools only on demand"
+prompt = "Analyse my last 5 runs"
+variants = ["coach"]
+now = "2026-03-08T06:30"
+garmin = { base = "weekly_2026_03_01", overlays = ["weekly_activities", "activity_details"] }
+why = """The coach prompt: fetch the list once, then details only for the ids needed, about 6 calls; splits, zone
+and FIT tools are large and only for a deep analysis the user asks for."""
+[case.expect]
+tools_any = ["get_activities", "get_activities_by_date"]
+tools_none = ["get_activity_splits", "get_activity_fit_data", "get_activity_hr_in_timezones"]
+max_tool_calls = 6
+no_invented_numbers = true
+tool_output_has = ["Synthetic Long Run"]

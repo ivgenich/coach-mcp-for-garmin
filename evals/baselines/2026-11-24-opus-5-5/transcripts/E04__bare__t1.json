@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "case_id": "E04",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 1,
+  "started": "2026-11-24T09:13:45Z",
+  "duration_s": 3.28,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Get my daily status for 2026-02-30"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSlwYKEAgUGAI4AUIIdGhpbmtpbmcSDIF+oHY4a5rT3DxbUhoMSQOXCLBdzmd9lmaEIjDkQemAzXSwNtM6dpX2OZDqd25MZlMZOgybfp5ZsMSFDaJsMdB2/9NoUkrFMvffmd8qtAVVJxaldLBY0yOP1Pn+ZqPN7GeKL9SG1XZeCmDXu43fJ1vGca9hktYM+X8wj33vhV1abpuziIf6dDo0a2xFxOaXWZIT8/K+i9z1Au18zJlE9dsHRZVqFF5IVYf9+qrTOWIijARrdbwdTMr7lL2BuGzajBVWfRy2+sAFzNYwkLxO4bfWm0NantlENKf/OKDRtXkykJ5xEQexuW9Rpf77fgzqUb/hI57gFTMffwTMLRAG85gwTPSmP6AXUuA8iuVbW2MS2Hr4BpLxV+w1l0jp5OYK92IeFHnrnAnJyz4gLJInsXJF84dmPUO3rHN7h9uWWjipSlBOBY96iWWJVbOphJq6SRGItKqIwRqvbSDD8jfkaYRQMrUQJceL0rj/ae6Ks7M3GK0Gs+VO08dRnhaeQ/R+Vw7PFIH4n3MpLcKvrQUFSr/XKXK/fWP+QFdWD9FYDC8LzE+IAgUXPw5hy1WoECEM6cMppJCqNZPcWUtLC0tQ0VxfxdVzkn7DVeGmhL4HuEsNH7YJYRphnHQkZ6YBwl/omDBcCT0gGTeNenTWcyIRGsp27YqGECo9+IXM6Q2U4v9WJHL6DOJg7mNCUIZ86fd0SNxaFjiuYa1HuAcs1cbgNNSINoejMr72493J0lIL0Z+R9gjA5mPgDZ/oD+FQG2uYQfQw/NZcwtbXAqN2OEIKJWxLV2AphuQksOzuQxIaQNcM8u4H1RND9F28jWOZndFvNOIeK5MsaVMg5Sa9o8swZkdINJsckkj8mxQMKW88ccLERBClKCG94J8xyLO/XYE0ydUBQDNPYHP4SGuvY26NlMwtvxYTHupIcFKBHBzZUL4oNTev8WR3TTwBkZtHbPWAFbiIrkaVHW3R9Of++JG3cK/DBPM0RhB+TaKufkIw2BPVLHk53xa/C9TcQH9BpMkQ3ShCPBgB",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "There's no 30 February 2026. February only has 28 days this year because 2026 isn't a leap year, so I can't get a daily status for that date.\n\nWhich day did you mean?\n- **28 February 2026** (the last day of February)\n- **2 March 2026** (what \"Feb 30\" would be if you count on two days past the 28th)\n- **Today, 18 March 2026**\n- Another date\n\nOnce you tell me, I'll get the daily status for that day.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [],
+  "final_text": "There's no 30 February 2026. February only has 28 days this year because 2026 isn't a leap year, so I can't get a daily status for that date.\n\nWhich day did you mean?\n- **28 February 2026** (the last day of February)\n- **2 March 2026** (what \"Feb 30\" would be if you count on two days past the 28th)\n- **Today, 18 March 2026**\n- Another date\n\nOnce you tell me, I'll get the daily status for that day.",
+  "garmin_calls": [],
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 221,
+    "cache_read_input_tokens": 11028,
+    "cache_creation_input_tokens": 86
+  },
+  "cost_usd": 0.007072,
+  "error": null,
+  "effort": "medium",
+  "turns": 1,
+  "answers": [
+    "There's no 30 February 2026. February only has 28 days this year because 2026 isn't a leap year, so I can't get a daily status for that date.\n\nWhich day did you mean?\n- **28 February 2026** (the last day of February)\n- **2 March 2026** (what \"Feb 30\" would be if you count on two days past the 28th)\n- **Today, 18 March 2026**\n- Another date\n\nOnce you tell me, I'll get the daily status for that day."
+  ],
+  "served_models": [
+    "claude-opus-5-5"
+  ]
+}

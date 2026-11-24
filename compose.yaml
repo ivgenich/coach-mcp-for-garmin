@@ -1,0 +1,62 @@
+# compose.yaml: run coach-mcp-for-garmin on your own computer or server.
+# The internet reaches it only through a Cloudflare Tunnel: no port is
+# published, so the cloudflared container below is the only way in.
+# Setup, the Garmin login, updates and removal: docs/deploy-docker.md.
+# Two files you create next to this one (git ignores both):
+#   .env        the server's settings, copied from .env.example (chmod 600)
+#   tunnel.env  one line: TUNNEL_TOKEN=<the tunnel's token> (chmod 600)
+name: coach-mcp-for-garmin
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed for this setup: the same names in .env cannot change them.
+      # The tunnel's route (http://app:8080) and the health check use 8080.
+      PORT: "8080"
+      # Cloudflare names the caller in CF-Connecting-IP; the sign-in rate
+      # limits key on it (Caddyfile).
+      EDGE_CLIENT_IP_HEADER: CF-Connecting-IP
+    volumes:
+      # All the server keeps: the Garmin login (/data/tokens) or the key's
+      # token cache (/data/garmin-key), and the sign-ins (/data/auth.sqlite).
+      - coach-data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # /healthz, never /readyz: in full mode /readyz stays 503 until the
+      # Garmin login.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  tunnel:
+    # Cloudflare's connector, pinned by version and digest. It reads
+    # TUNNEL_TOKEN from tunnel.env; never run it with --loglevel debug,
+    # which logs every request header, Authorization included.
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+    command: ["tunnel", "--no-autoupdate", "run"]
+    restart: unless-stopped
+    env_file: tunnel.env
+    depends_on:
+      app:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  coach-data:

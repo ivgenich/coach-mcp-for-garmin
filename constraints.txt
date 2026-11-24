@@ -19,16 +19,23 @@
 # certifi, urllib3, charset-normalizer) keep the pins of upstream's uv.lock;
 # idna moved because httpx2 (mcp 2.x) needs >=3.18. Regenerate when bumping
 # GARMIN_MCP_REF or mcp.
+#
+# Re-checked 17 Nov 2026: garmin-connect-personal-api-python 1.0.0 adds no other
+# package (it needs requests>=2.31,<3); certifi raised to 2026.10.23 for
+# PYSEC-2026-4320 (fixed in 2026.10.18).
 annotated-types==0.8.0
 anyio==4.16.0
 attrs==25.4.0
-certifi==2025.1.31
+certifi==2026.10.23
 cffi==2.0.0
 charset-normalizer==3.4.1
 click==8.5.1
 cryptography==50.0.2
 curl-cffi==0.15.0
 fitparse==1.2.0
+# Garmin's official Personal API client (Apache-2.0). Installed in every image by
+# hash from config/garmin-key-client.txt, imported only with GARMIN_AUTH=key.
+garmin-connect-personal-api-python==1.0.0
 garminconnect==0.3.2
 h11==0.16.0
 httpcore2==2.16.0

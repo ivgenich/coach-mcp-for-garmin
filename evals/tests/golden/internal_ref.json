@@ -1,0 +1,125 @@
+{
+ "schema": 1,
+ "case_id": "G07",
+ "variant": "instr",
+ "model": "claude-opus-5-5",
+ "trial": 1,
+ "started": "2026-11-24T00:00:00Z",
+ "duration_s": 4.2,
+ "stop_reason": "end_turn",
+ "system": "Current date and time: Wednesday 2026-03-18 06:30, time zone Europe/Athens.",
+ "tools": [
+  "get_daily_status",
+  "get_weekly_status",
+  "get_sleep_summary",
+  "get_activities",
+  "get_activities_by_date",
+  "get_activity",
+  "get_activity_fit_data"
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "content": "Tell me about my long run on 7 March"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_golden_00",
+     "name": "get_activities_by_date",
+     "input": {
+      "start_date": "2026-03-07",
+      "end_date": "2026-03-07"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_golden_00",
+     "content": "[{\"activityId\": 90000000007, \"activityName\": \"Synthetic long run\", \"startTimeLocal\": \"2026-03-07 08:01:00\", \"distance\": 18040.0, \"duration\": 6320.0}]",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_golden_01",
+     "name": "get_activity",
+     "input": {
+      "activity_id": 90000000007
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_golden_01",
+     "content": "Error: Internal server error (ref 0badc0de). Retrying once later may help. If it fails again, tell the user; the server owner can find the details in the server log under this ref.",
+     "is_error": true
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "I found your Synthetic long run on 7 March (18.04 km), but the server hit an internal error when I asked for its details. Please pass this ref to the server owner: 0badc0de."
+    }
+   ]
+  }
+ ],
+ "tool_calls": [
+  {
+   "index": 0,
+   "name": "get_activities_by_date",
+   "input": {
+    "start_date": "2026-03-07",
+    "end_date": "2026-03-07"
+   },
+   "text": "[{\"activityId\": 90000000007, \"activityName\": \"Synthetic long run\", \"startTimeLocal\": \"2026-03-07 08:01:00\", \"distance\": 18040.0, \"duration\": 6320.0}]",
+   "is_error": false
+  },
+  {
+   "index": 1,
+   "name": "get_activity",
+   "input": {
+    "activity_id": 90000000007
+   },
+   "text": "Error: Internal server error (ref 0badc0de). Retrying once later may help. If it fails again, tell the user; the server owner can find the details in the server log under this ref.",
+   "is_error": true
+  }
+ ],
+ "final_text": "I found your Synthetic long run on 7 March (18.04 km), but the server hit an internal error when I asked for its details. Please pass this ref to the server owner: 0badc0de.",
+ "garmin_calls": [
+  {
+   "method": "golden",
+   "args": []
+  },
+  {
+   "method": "golden",
+   "args": []
+  }
+ ],
+ "usage": {
+  "input_tokens": 11000,
+  "output_tokens": 400,
+  "cache_read_input_tokens": 0,
+  "cache_creation_input_tokens": 0
+ },
+ "cost_usd": 0.05,
+ "error": null,
+ "_golden": "pass: the internal-error ref reaches the user"
+}

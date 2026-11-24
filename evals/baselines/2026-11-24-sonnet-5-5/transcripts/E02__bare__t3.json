@@ -1,0 +1,190 @@
+{
+  "schema": 1,
+  "case_id": "E02",
+  "variant": "bare",
+  "model": "claude-sonnet-5-5",
+  "trial": 3,
+  "started": "2026-11-24T08:50:18Z",
+  "duration_s": 8.699,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_012opAM6m9sYDfbcexnigRNg",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "text_format": "markdown"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_012opAM6m9sYDfbcexnigRNg",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "I can't pull your status right now. Garmin is rate-limiting requests from this server, and it asked for a 15-minute wait before any more calls. I've stopped trying so I don't make the block worse.\n\nTry me again after about 06:45 and I'll check your recovery, sleep, HRV and today's training recommendation.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Try again please"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQS1AkKEAgUGAI4AUIIdGhpbmtpbmcSDNuu968e809vyCEyDhoMBbNcvU+LmqKUq/JNIjC15IADk7mPg+2e0tLP4brzQqmC0E+jXIGFOjESan65Ty3P/z78w7dj6gTdCO6ttJEq8QhgwdTynTj4ERGTFLjcJiybfdv2zMhQU6XO1+qxezFHPv8q93k+LSABOUNMH/SaVU+2Gz2PP6xndsYGhiZLN0Jkl3fiS1qqHj42h+xG6qj4T7Jp+8Ix9gXD2ueA5k7XRHDVIx6CKsN4x7/d6ZIzf0UAskVoBGuDxQ3glTTR/NSZcJUXb0onudf+BGxfzuGfDVlnbtMYvgEpvlhCxz3dj39dLGsk57sCzFsiPNM8LuVo3K8n12kZwHGSSPPsyqqhxvtGTMXQ9IDFE6t0qdr77nz+IUn9PWRwQyRelxeWaiiGm6Qv5fTcwprZw9zzd0SJ6BiFMNB8Zk/nhh/QruF38LPGgmXObEA6k+lpGJKkLQrjfH6Hov2dI1jBSGchmtRzLCaSsr6Djw56RoaHxQnnL2EHESTU3tBL25o5O10miB6+UfylFixOMhqOosgmR6Y2H0ywUlVUeHYRM1hcDo5HpQjja2MebYg7HPOt9QHdjbUoUe8/4V4TzyRNt9vLCgi6I6M4XvFcjcU4hDYDQBdi2jJXIt+M8bQFQXw/b98Q+HyvrRStBml3VTqvT9e++qEfW7d6PkuHlVWuF7bxdg4uBoEHG3YI9DppDcZWyfu6/GTVS6jzPIynohKX/u1ZSh93VC7Yhz3prODoONXJUeJDgTf8u/mJeaHbSD3oIGFhHJosZdeUYGzBVmyk5fN069GNjGLUAlmXC3dMDTHa+6vUmCSK4HJofU7FHJQZvl1ckkXS4t8Ew4NZZd38Z3EuTrZJFrK3DoHG5n5AnNiO6Bpmy0gaF9PgajE3RtODWoDfCSuhzRc2RXbjINX3b+P49Im1sYF2062i3NNriG8ir9W8oCovZaeniHYmS1/9P0/FkD8G/FigxBI7COBtOewSbtNCP5GPRpJUFM/33OxZxX+yfCcvkqdwAazZZCgTWW1lIMG03Un/A1iIf1CtUACFC5MAIiZlPZFXONZXToGT7of8n5W3dB0/2fqtMgBKkEmM5SDWQBr5ldZZGZU/XnTp/fPiPJLPl+m2w4O3eb0uklyrjWpG1MKh+kmvsu/rMYGjzP89hGU1sqJx5IUGoA7wvVdwQPIGdtcKGqtTdmFSjf3yfVdKGHHkcLHppQQuNQCt+MS++EBsTjgAQqFgkj704DG1SgHH0Z8a+dwgiYI7/GHuWLXgOozQBo1HBUauXiWtfObA2PQuKk6RkTU7YLkQlFcYvcTlnuEujENlI8dvc4Uy0QiZuGC/hnbIeXp/CulCZOOTdZVsHKy4Raovc/JZt4tOEkF2BwLLmsgXOzSPLi3KvTyQd/6Mj6GuvK02SnII8HMxZCqyQsMlys6IHwyBcBpjurTB17QNl0pb/vPigvljA8BAFKyW+PmN7iAZCF+vOPrSNJwR9U6o+wQ4S1g3k7rAIcizAfvWL5Z2Ghqmb4n9qAdSKM1xpqUIleK1YtoQdxZk1jlyXYq1lKyKQiFvNAKjOWMuAqTDD5YySt6rWIfS51TLSPcJt3Qk2SPoB/BLPgIjPJ8YAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "id": "toolu_01DZeLYeP5nsqaWPfMCyMDVS",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "text_format": "markdown"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01DZeLYeP5nsqaWPfMCyMDVS",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "Garmin is still rate-limiting, so I got the same error. I tried once because you asked, and I won't keep retrying. Repeated requests could extend the block.\n\nWait until about 06:45 or later, then message me and I'll try again. Once it works, I'll give you your readiness, sleep, HRV and a training recommendation for today.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "text_format": "markdown"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    },
+    {
+      "index": 1,
+      "name": "get_daily_status",
+      "input": {
+        "text_format": "markdown"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    }
+  ],
+  "final_text": "Garmin is still rate-limiting, so I got the same error. I tried once because you asked, and I won't keep retrying. Repeated requests could extend the block.\n\nWait until about 06:45 or later, then message me and I'll try again. Once it works, I'll give you your readiness, sleep, HRV and a training recommendation for today.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    },
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 504,
+    "cache_read_input_tokens": 44886,
+    "cache_creation_input_tokens": 412
+  },
+  "cost_usd": 0.010583,
+  "error": null,
+  "effort": "medium",
+  "turns": 4,
+  "answers": [
+    "I can't pull your status right now. Garmin is rate-limiting requests from this server, and it asked for a 15-minute wait before any more calls. I've stopped trying so I don't make the block worse.\n\nTry me again after about 06:45 and I'll check your recovery, sleep, HRV and today's training recommendation.",
+    "Garmin is still rate-limiting, so I got the same error. I tried once because you asked, and I won't keep retrying. Repeated requests could extend the block.\n\nWait until about 06:45 or later, then message me and I'll try again. Once it works, I'll give you your readiness, sleep, HRV and a training recommendation for today."
+  ],
+  "served_models": [
+    "claude-sonnet-5-5",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5-5"
+  ]
+}

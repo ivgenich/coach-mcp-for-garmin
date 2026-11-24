@@ -3,19 +3,37 @@
 # Safe to re-run: it reuses the project link, the /data volume and every secret
 # already set.
 #
-#   REPORT_TZ=Europe/London ./scripts/deploy.sh   first deploy (use your own IANA zone)
-#   ./scripts/deploy.sh                           redeploy (keeps REPORT_TZ already set)
-#   ./scripts/deploy.sh --rotate-token            also replace MCP_BEARER_TOKEN and print the new one
-#                                                 (only to a terminal; otherwise it says how to read it)
+#   GARMIN_AUTH=full REPORT_TZ=Europe/London ./scripts/deploy.sh
+#                                   first deploy, full mode: you log in to Garmin once afterwards
+#   GARMIN_AUTH=key REPORT_TZ=Europe/London ./scripts/deploy.sh
+#                                   first deploy, key mode: asks for your Garmin Personal API key
+#                                   (use your own IANA zone in both)
+#   ./scripts/deploy.sh                           redeploy (keeps GARMIN_AUTH, REPORT_TZ, OWNER_SECRET
+#                                                 and the Garmin key already set)
+#   ./scripts/deploy.sh --rotate-secret           also replace OWNER_SECRET, which revokes every sign-in
+#                                                 (not MCP_BEARER_TOKEN)
+#   ./scripts/deploy.sh --rotate-token            also create or replace the optional MCP_BEARER_TOKEN
+#                                                 and print it (only to a terminal; otherwise it says
+#                                                 how to read it)
+#   ./scripts/deploy.sh --set-garmin-key          key mode: also replace GARMIN_PERSONAL_API_KEY (asks
+#                                                 for it; e.g. before Garmin's key expires)
 #
-# Environment: REPORT_TZ (required on the first deploy; when exported, it
-# replaces the value on Railway), DEPLOY_SERVICE (the Railway project and
-# service name for a first deploy; default coach-mcp-for-garmin).
+# Environment: GARMIN_AUTH (required on the first deploy: full or key; when
+# exported, it replaces the value on Railway), REPORT_TZ (required on the first
+# deploy; when exported, it replaces the value on Railway), DEPLOY_SERVICE (the
+# Railway project and service name for a first deploy; default
+# coach-mcp-for-garmin), DEPLOY_WORKSPACE (optional: the exact Railway workspace
+# ID or name for a first deploy; the CLI needs it when it runs outside a
+# terminal and you have more than one workspace).
 #
+# Sign-in: the first run generates OWNER_SECRET, the secret you type on the
+# server's sign-in page when Claude connects. It is never printed; read it with
+#   railway variable list --kv | grep ^OWNER_SECRET=
 # Secret values never go on a command line (the CLI reads them on stdin); a new
-# bearer token is printed once, and only to a terminal.
-# Garmin email/password are never handled here; you type them once inside
-# `railway ssh` (README step 2).
+# bearer token is printed once, and only to a terminal. The Garmin Personal API
+# key is read from the terminal without echo and never printed.
+# Garmin email/password are never handled here; in full mode you type them once
+# inside `railway ssh` (docs/garmin-login.md).
 # The tools the server exposes are not set here: config/enabled-tools.txt is
 # baked into the image and only read-only tools can be enabled (ext/launch.py).
 set -euo pipefail
@@ -24,16 +42,31 @@ SERVICE="${DEPLOY_SERVICE:-coach-mcp-for-garmin}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-ROTATE=false
+ROTATE_TOKEN=false
+ROTATE_SECRET=false
+SET_GARMIN_KEY=false
 for arg in "$@"; do
   case "$arg" in
-    --rotate-token) ROTATE=true ;;
-    *) echo "usage: [REPORT_TZ=Area/City] $0 [--rotate-token]" >&2; exit 2 ;;
+    --rotate-token) ROTATE_TOKEN=true ;;
+    --rotate-secret) ROTATE_SECRET=true ;;
+    --set-garmin-key) SET_GARMIN_KEY=true ;;
+    *) echo "usage: [GARMIN_AUTH=full|key] [REPORT_TZ=Area/City] $0 [--rotate-secret] [--rotate-token] [--set-garmin-key]" >&2; exit 2 ;;
   esac
 done
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!!  %s\033[0m\n' "$*"; }
+
+# GARMIN_AUTH has no default: full (the Garmin email/password login, every
+# tool, unofficial interface) or key (Garmin's official Personal API key:
+# read-only, fewer tools, less data). As in the server, spaces and case do
+# not matter, and a wrong value is never shown. Checked before anything changes.
+lower_trim() { printf '%s' "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'; }
+WANT_AUTH="$(lower_trim "${GARMIN_AUTH:-}")"
+if [[ -n $WANT_AUTH && $WANT_AUTH != full && $WANT_AUTH != key ]]; then
+  warn "GARMIN_AUTH must be full or key. Nothing was changed."
+  exit 1
+fi
 
 # A light shape check; the container validates REPORT_TZ fully at startup
 # (launch.py --check-config). Where this machine has a zoneinfo database, the
@@ -50,6 +83,47 @@ if [[ -n ${REPORT_TZ:-} ]] && ! valid_tz "$REPORT_TZ"; then
   exit 1
 fi
 
+# A new OWNER_SECRET: 30 characters from 23456789abcdefghjkmnpqrstuvwxyz (31
+# symbols, no 0, 1, i, l or o; about 148 bits), printed as 6 groups of 5 joined
+# by "-", so it can be typed on a phone. The pipe reads all 4096 bytes and
+# the first 30 are cut in bash: a pipe closed early (a head -c 30 at its end)
+# would make tr fail on the closed pipe, which pipefail turns into a failure.
+# A short result, or one with fewer than 12 different characters (the server
+# refuses that), is drawn again; after 5 tries it fails. It prints the secret
+# on stdout, so call it only as SECRET="$(new_owner_secret)".
+new_owner_secret() {
+  local alphabet='23456789abcdefghjkmnpqrstuvwxyz' raw distinct i
+  for _ in 1 2 3 4 5; do
+    raw="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc '23456789abcdefghjkmnpqrstuvwxyz')" || raw=""
+    raw="${raw:0:30}"
+    distinct=0
+    for ((i = 0; i < ${#alphabet}; i++)); do
+      case "$raw" in *"${alphabet:i:1}"*) distinct=$((distinct + 1)) ;; esac
+    done
+    if [[ ${#raw} -eq 30 && $distinct -ge 12 ]]; then
+      printf '%s-%s-%s-%s-%s-%s\n' "${raw:0:5}" "${raw:5:5}" "${raw:10:5}" "${raw:15:5}" "${raw:20:5}" "${raw:25:5}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# PUBLIC_URL the way the server reads it (ext/auth_config.py): surrounding
+# spaces dropped, lowercase, no trailing slash, no default :443. The server's
+# metadata names exactly this URL plus /mcp, and Claude needs the connector URL
+# to match it. Fails, printing nothing, unless the result is an https origin
+# (scheme, host, optional port): the server would refuse to start.
+public_origin() {
+  local url origin_re='^https://[^/?#@[:space:]]+$'
+  url="$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$1")"
+  url="${url#"${url%%[![:space:]]*}"}"
+  url="${url%"${url##*[![:space:]]}"}"
+  url="${url%/}"
+  url="${url%:443}"
+  [[ $url =~ $origin_re ]] || return 1
+  printf '%s\n' "$url"
+}
+
 say "Railway CLI"
 if ! command -v railway >/dev/null 2>&1; then
   warn "Install the Railway CLI first:  brew install railway   (or: npm i -g @railway/cli)"
@@ -65,20 +139,30 @@ say "Project and service"
 # Create a project only when none is linked, and a service only when none is.
 # Any other failure (network, expired login) stops here: taking it for "not
 # linked yet" would create a second project or service. The CLI's output is
-# not shown: a variable listing holds secret values.
+# not shown: a variable listing holds secret values. Text that can hold secret
+# values is matched through a pipe, never a here-string (<<<): bash 3.2, the
+# macOS bash, writes here-string text to a temporary file.
 cli_rc=0
 CLI_OUT="$(railway status 2>&1)" || cli_rc=$?
-if grep -q 'No linked project' <<<"$CLI_OUT"; then
-  railway init --name "$SERVICE"
+if grep -q 'No linked project' < <(printf '%s\n' "$CLI_OUT"); then
+  INIT_ARGS=(--name "$SERVICE")
+  if [[ -n ${DEPLOY_WORKSPACE:-} ]]; then
+    INIT_ARGS+=(--workspace "$DEPLOY_WORKSPACE")
+  fi
+  railway init "${INIT_ARGS[@]}"
 elif [[ $cli_rc -ne 0 ]]; then
   warn "Could not read the Railway project status (network, or an expired login)."
   warn "Nothing was changed. Check 'railway whoami' and 'railway status', then re-run."
   exit 1
+elif [[ -n ${DEPLOY_WORKSPACE:-} ]]; then
+  echo "This folder is already linked to a Railway project; DEPLOY_WORKSPACE is not used."
 fi
 # railway init links an empty project; volumes and variables need a linked service.
+# Railway CLI 5.70 says "Project has no services." for a new project; older
+# versions said "No service linked".
 cli_rc=0
 CLI_OUT="$(railway variable list 2>&1)" || cli_rc=$?
-if grep -q 'No service linked' <<<"$CLI_OUT"; then
+if grep -qE 'No service linked|has no services' < <(printf '%s\n' "$CLI_OUT"); then
   CLI_OUT=""
   railway add --service "$SERVICE"   # creates the service and links this directory to it
 elif [[ $cli_rc -ne 0 ]]; then
@@ -90,11 +174,11 @@ fi
 CLI_OUT=""
 # Read the service's variables once, before changing anything. If that fails
 # (network, expired login), stop: taking "could not read" for "nothing set"
-# would mint a new MCP_BEARER_TOKEN and cut off every client that holds the
-# current one. On a first deploy the service was linked just above, so the
-# list succeeds and is simply empty.
+# would mint a new OWNER_SECRET, which signs out every client. On a first
+# deploy the service was linked just above, so the list succeeds and is
+# simply empty.
 if ! EXISTING="$(railway variable list --kv 2>/dev/null)" ||
-  { [[ -n $EXISTING ]] && ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' <<<"$EXISTING"; }; then
+  { [[ -n $EXISTING ]] && ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' < <(printf '%s\n' "$EXISTING"); }; then
   warn "Could not read the service variables from Railway (network, or an expired login)."
   warn "Nothing was changed. Check 'railway whoami' and 'railway variable list', then re-run."
   exit 1
@@ -103,23 +187,180 @@ fi
 say "Settings the container checks at startup"
 # The container refuses to start (entrypoint.sh, launch.py --check-config) on
 # these, so stop here instead of deploying a server that cannot start.
-if [[ -z ${REPORT_TZ:-} ]] && ! grep -qE '^REPORT_TZ=.' <<<"$EXISTING"; then
-  warn "REPORT_TZ is required: the IANA time zone for the daily and weekly status, e.g. Europe/London."
-  warn "Nothing was deployed. Export it and re-run:  REPORT_TZ=Europe/London ./scripts/deploy.sh  (your own zone)"
+RAILWAY_AUTH="$(lower_trim "$(sed -n 's/^GARMIN_AUTH=//p' < <(printf '%s\n' "$EXISTING"))")"
+AUTH_MODE="${WANT_AUTH:-$RAILWAY_AUTH}"
+if [[ -z $AUTH_MODE ]]; then
+  warn "GARMIN_AUTH is required: full (log in to Garmin once with your email and password; every tool)"
+  warn "or key (a Garmin Personal API key; fewer tools and less data). See docs/garmin-login.md."
+  warn "Nothing was deployed. Export it and re-run:  GARMIN_AUTH=full REPORT_TZ=Europe/London ./scripts/deploy.sh"
   exit 1
 fi
-if grep -qE '^GARMIN_DISABLED_TOOLS=.' <<<"$EXISTING"; then
+if [[ $AUTH_MODE != full && $AUTH_MODE != key ]]; then
+  warn "GARMIN_AUTH on Railway is neither full nor key (the value is not shown)."
+  warn "Re-run with GARMIN_AUTH=full or GARMIN_AUTH=key exported. Nothing was deployed."
+  exit 1
+fi
+if [[ -z ${REPORT_TZ:-} ]] && ! grep -qE '^REPORT_TZ=.*[^[:space:]]' < <(printf '%s\n' "$EXISTING"); then
+  warn "REPORT_TZ is required: the IANA time zone for the daily and weekly status, e.g. Europe/London."
+  # AUTH_MODE is full or key here (checked above), so it is safe to show; on a
+  # first deploy it is not on Railway yet, so the re-run needs it again.
+  warn "Nothing was deployed. Export it and re-run:  GARMIN_AUTH=$AUTH_MODE REPORT_TZ=Europe/London ./scripts/deploy.sh  (your own zone)"
+  exit 1
+fi
+# Key mode serves only the tools of config/enabled-tools-key.txt, and the
+# server refuses to start when GARMIN_ENABLED_TOOLS names any other (launch.py
+# resolve_tools). Checked here, before the key prompt, as the server reads the
+# variable: split on commas, each entry trimmed and lower-cased, empty entries
+# skipped. An entry is shown only when it has the shape of a tool name (as in
+# the server): anything else may be a secret pasted into the wrong variable.
+# The comparisons stay in bash, so no entry reaches a command line.
+if [[ $AUTH_MODE == key ]]; then
+  ENABLED_TOOLS="$(sed -n 's/^GARMIN_ENABLED_TOOLS=//p' < <(printf '%s\n' "$EXISTING"))"
+  if [[ -n ${ENABLED_TOOLS//[[:space:]]/} ]]; then
+    if ! KEY_TOOLS="$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' config/enabled-tools-key.txt)" ||
+      [[ -z $KEY_TOOLS ]]; then
+      ENABLED_TOOLS=""
+      warn "Could not read config/enabled-tools-key.txt (run this script from a full copy of the repository). Nothing was deployed."
+      exit 1
+    fi
+    FULL_TOOLS="$(sed -e 's/#.*//' -e 's/[[:space:]]//g' -e '/^$/d' config/enabled-tools.txt 2>/dev/null || true)"
+    NOT_IN_KEY=""
+    HIDDEN_ENTRY=false
+    ENTRY_COUNT=0
+    REST="$ENABLED_TOOLS,"
+    while [[ -n $REST ]]; do
+      ENTRY="${REST%%,*}"
+      REST="${REST#*,}"
+      ENTRY="${ENTRY#"${ENTRY%%[![:space:]]*}"}"
+      ENTRY="${ENTRY%"${ENTRY##*[![:space:]]}"}"
+      [[ -n $ENTRY ]] || continue
+      ENTRY_COUNT=$((ENTRY_COUNT + 1))
+      # The shape test runs before lower-casing: an unknown entry with an
+      # upper-case letter is never shown (a mixed-case secret lower-cased looks
+      # like a name).
+      SHOWABLE=false
+      if [[ ${#ENTRY} -le 200 && $ENTRY =~ ^[a-z][a-z0-9]*(_[a-z][a-z0-9]*)+$ ]]; then
+        SHOWABLE=true
+      fi
+      ENTRY="$(printf '%s' "$ENTRY" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      [[ $'\n'"$KEY_TOOLS"$'\n' == *$'\n'"$ENTRY"$'\n'* ]] && continue
+      # A known tool name is shown however it was typed (as in the server).
+      [[ $'\n'"$FULL_TOOLS"$'\n' == *$'\n'"$ENTRY"$'\n'* ]] && SHOWABLE=true
+      if [[ $SHOWABLE == true ]]; then
+        [[ " $NOT_IN_KEY " == *" $ENTRY "* ]] || NOT_IN_KEY="${NOT_IN_KEY:+$NOT_IN_KEY }$ENTRY"
+      else
+        HIDDEN_ENTRY=true
+      fi
+    done
+    ENABLED_TOOLS=""
+    ENTRY=""
+    if [[ $ENTRY_COUNT -eq 0 ]]; then
+      warn "GARMIN_ENABLED_TOOLS on Railway names no tools (only commas or spaces): the server would refuse to start."
+      warn "Delete it (railway variable delete GARMIN_ENABLED_TOOLS) to keep every key-mode tool. Nothing was deployed."
+      exit 1
+    fi
+    if [[ -n $NOT_IN_KEY || $HIDDEN_ENTRY == true ]]; then
+      if [[ -n $NOT_IN_KEY ]]; then
+        warn "GARMIN_ENABLED_TOOLS on Railway names tools that GARMIN_AUTH=key does not have: ${NOT_IN_KEY// /, }."
+      fi
+      if [[ $HIDDEN_ENTRY == true ]]; then
+        warn "GARMIN_ENABLED_TOOLS on Railway has an entry that is not a tool name (it is not shown)."
+      fi
+      warn "The server would refuse to start. Remove them from GARMIN_ENABLED_TOOLS (key mode can only narrow"
+      warn "config/enabled-tools-key.txt; railway variable delete GARMIN_ENABLED_TOOLS keeps every key-mode tool),"
+      warn "or keep GARMIN_AUTH=full. Nothing was deployed."
+      exit 1
+    fi
+  fi
+fi
+# Key mode needs GARMIN_PERSONAL_API_KEY. It is asked for here, before
+# anything below changes, without echo, and only from a terminal. As in the
+# server, a value that is empty or only spaces counts as unset.
+HAD_GARMIN_KEY=false
+if grep -qE '^GARMIN_PERSONAL_API_KEY=.*[^[:space:]]' < <(printf '%s\n' "$EXISTING"); then
+  HAD_GARMIN_KEY=true
+fi
+if [[ $SET_GARMIN_KEY == true && $AUTH_MODE != key ]]; then
+  warn "--set-garmin-key is only for GARMIN_AUTH=key. Nothing was deployed."
+  exit 1
+fi
+if [[ $AUTH_MODE == full && $HAD_GARMIN_KEY == true ]]; then
+  # The server refuses an unused secret (launch.py --check-config).
+  warn "GARMIN_AUTH=full does not use GARMIN_PERSONAL_API_KEY, and the server does not start while it is set."
+  warn "Delete it, then re-run:  railway variable delete GARMIN_PERSONAL_API_KEY"
+  warn "Also delete the key on Garmin Connect if you no longer use it. Nothing was deployed."
+  exit 1
+fi
+NEW_GARMIN_KEY=false
+GARMIN_KEY=""
+if [[ $AUTH_MODE == key && ( $HAD_GARMIN_KEY == false || $SET_GARMIN_KEY == true ) ]]; then
+  if [[ ! -t 0 ]]; then
+    warn "GARMIN_AUTH=key needs GARMIN_PERSONAL_API_KEY. Run this script in a terminal (it asks for the key"
+    warn "and never shows it), or set the variable in the Railway dashboard. Nothing was deployed."
+    exit 1
+  fi
+  IFS= read -rsp 'Paste your Garmin Personal API key (not shown), then press Enter: ' GARMIN_KEY || GARMIN_KEY=""
+  printf '\n' >&2
+  # As in the server: surrounding spaces are dropped; the key itself has none.
+  GARMIN_KEY="${GARMIN_KEY#"${GARMIN_KEY%%[![:space:]]*}"}"
+  GARMIN_KEY="${GARMIN_KEY%"${GARMIN_KEY##*[![:space:]]}"}"
+  if [[ -z $GARMIN_KEY || $GARMIN_KEY =~ [[:space:]] || ${#GARMIN_KEY} -gt 512 ]]; then
+    GARMIN_KEY=""
+    warn "That key is empty, has spaces in it or is too long. Copy it again from Garmin Connect and re-run. Nothing was deployed."
+    exit 1
+  fi
+  # The server refuses a key under 20 characters too: that is a paste that did not land, not a key.
+  if [[ ${#GARMIN_KEY} -lt 20 ]]; then
+    KEY_LEN=${#GARMIN_KEY}
+    GARMIN_KEY=""
+    warn "That key is too short ($KEY_LEN characters; a Garmin key is much longer): the paste did not land. Copy it again from Garmin Connect and re-run. Nothing was deployed."
+    exit 1
+  fi
+  NEW_GARMIN_KEY=true
+fi
+if [[ -n $WANT_AUTH && -n $RAILWAY_AUTH && $WANT_AUTH != "$RAILWAY_AUTH" ]]; then
+  # The old value is shown only when it is a valid mode: a pasted key must
+  # never reach the log.
+  if [[ $RAILWAY_AUTH == full || $RAILWAY_AUTH == key ]]; then
+    echo "GARMIN_AUTH changes from $RAILWAY_AUTH to $WANT_AUTH."
+  else
+    echo "GARMIN_AUTH changes to $WANT_AUTH (the value on Railway was neither full nor key; it is not shown)."
+  fi
+  if [[ $RAILWAY_AUTH == full && $WANT_AUTH == key ]]; then
+    echo "The Garmin login tokens stay on the volume until you delete them:  railway ssh -- rm -rf /data/tokens"
+  fi
+fi
+if grep -qE '^GARMIN_DISABLED_TOOLS=.' < <(printf '%s\n' "$EXISTING"); then
   warn "GARMIN_DISABLED_TOOLS is set on Railway; it is no longer supported and the server would refuse to start."
   warn "Delete it:  railway variable delete GARMIN_DISABLED_TOOLS"
   warn "To hide tools, set GARMIN_ENABLED_TOOLS to the subset of config/enabled-tools.txt to keep. Nothing was deployed."
   exit 1
 fi
-if grep -qE '^GARMIN_ENABLED_TOOLS=.' <<<"$EXISTING"; then
-  echo "GARMIN_ENABLED_TOOLS is set on Railway: it narrows config/enabled-tools.txt (every name must be in that file)."
+if grep -qE '^GARMIN_ENABLED_TOOLS=.' < <(printf '%s\n' "$EXISTING"); then
+  if [[ $AUTH_MODE == key ]]; then
+    echo "GARMIN_ENABLED_TOOLS is set on Railway: it narrows config/enabled-tools-key.txt (key mode; every name must be in that file)."
+  else
+    echo "GARMIN_ENABLED_TOOLS is set on Railway: it narrows config/enabled-tools.txt (every name must be in that file)."
+  fi
+fi
+# PUBLIC_URL (optional) is the server's public https origin when that is not
+# the Railway domain, e.g. a custom domain. The sign-in sends Claude to it, so
+# it must be https and an origin only (no path). Unset or blank, the server
+# uses https://$RAILWAY_PUBLIC_DOMAIN.
+PUBLIC_URL="$(sed -n 's/^PUBLIC_URL=//p' < <(printf '%s\n' "$EXISTING"))"
+if [[ -n ${PUBLIC_URL//[[:space:]]/} ]]; then
+  if ! PUBLIC_URL="$(public_origin "$PUBLIC_URL")"; then
+    warn "PUBLIC_URL on Railway must be this server's https origin only, e.g. https://coach.example.com (no path)."
+    warn "Nothing was deployed. Fix it (railway variable set PUBLIC_URL=https://...) or delete it (railway variable delete PUBLIC_URL), then re-run."
+    exit 1
+  fi
+  echo "PUBLIC_URL is set on Railway: $PUBLIC_URL"
+else
+  PUBLIC_URL=""
 fi
 echo "OK."
 
-say "Volume at /data (the Garmin login lives here)"
+say "Volume at /data (the Garmin login and the sign-ins live here)"
 # Capture first: piped straight into `grep -q`, which exits at the first match,
 # the CLI aborts writing to the closed pipe and pipefail fails the test.
 VOLUMES="$(railway volume list 2>/dev/null || true)"
@@ -131,31 +372,145 @@ elif ! railway volume add --mount-path /data; then
   exit 1
 fi
 
+say "Public domain"
+# Before the build: the server refuses to start without its public URL (the
+# sign-in names it to Claude), which is PUBLIC_URL or else the Railway domain.
+DOMAIN=""
+if [[ -n $PUBLIC_URL ]]; then
+  echo "Using PUBLIC_URL; the Railway domain is not needed."
+else
+  # The domain the server will use is RAILWAY_PUBLIC_DOMAIN: take it from the
+  # variable list when it is there, else from `railway domain`, which creates
+  # a *.up.railway.app domain when the service has none.
+  DOMAIN="$(sed -n 's/^RAILWAY_PUBLIC_DOMAIN=//p' < <(printf '%s\n' "$EXISTING"))"
+  [[ $DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || DOMAIN=""
+  if [[ -z $DOMAIN ]]; then
+    DOMAIN_OUT="$(railway domain 2>&1 || true)"
+    DOMAIN="$(grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' <<<"$DOMAIN_OUT" | head -n1 || true)"
+    if [[ -z $DOMAIN ]]; then
+      DOMAIN="$(railway domain list 2>/dev/null | grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' | head -n1 || true)"
+    fi
+    if [[ -z $DOMAIN ]]; then
+      echo "$DOMAIN_OUT"
+      warn "No public domain: create one in the dashboard (Settings > Networking > Generate Domain) or set PUBLIC_URL, then re-run. Nothing was deployed."
+      warn "PUBLIC_URL is for a custom domain:  railway variable set PUBLIC_URL=https://coach.example.com"
+      exit 1
+    fi
+  fi
+  echo "$DOMAIN"
+fi
+
 say "Service variables"
 # --skip-deploys everywhere: `railway up` below deploys once with all of them.
-railway variable set --skip-deploys GARMIN_MCP_STATELESS_HTTP=true GARMINTOKENS=/data/tokens >/dev/null
+# The variables of docs/deploy-railway.md (Settings). GARMINTOKENS,
+# GARMINTOKENS_BASE64 and GARMIN_MCP_STATELESS_HTTP are baked into the image,
+# so this script never sets them.
+if [[ -n $WANT_AUTH ]]; then
+  railway variable set --skip-deploys "GARMIN_AUTH=$WANT_AUTH" >/dev/null
+  echo "GARMIN_AUTH set to $WANT_AUTH."
+else
+  echo "GARMIN_AUTH already set to $AUTH_MODE; keeping it (export GARMIN_AUTH to change it)."
+fi
 if [[ -n ${REPORT_TZ:-} ]]; then
   railway variable set --skip-deploys "REPORT_TZ=$REPORT_TZ" >/dev/null
   echo "REPORT_TZ set to $REPORT_TZ."
 else
   echo "REPORT_TZ already set; keeping it (export REPORT_TZ to change it)."
 fi
+
 TOKEN=""
 # Shown wherever the token is not printed: the CLI can always read it back.
 SHOW_TOKEN_CMD="railway variable list --kv | grep ^MCP_BEARER_TOKEN="
-token_not_shown() {
-  warn "Stopped early. The new MCP_BEARER_TOKEN is already on Railway; see it with: $SHOW_TOKEN_CMD" >&2
+# Set as an EXIT trap once a secret was replaced: if anything below stops the
+# script (a failed build, Ctrl-C) before "Done", say what already changed.
+stopped_early() {
+  if [[ $ROTATE_SECRET == true ]]; then
+    warn "Stopped early. The new OWNER_SECRET is already on Railway, but the old one works until a new deployment starts: fix the problem and run ./scripts/deploy.sh again." >&2
+  fi
+  if [[ -n $TOKEN ]]; then
+    warn "Stopped early. The new MCP_BEARER_TOKEN is already on Railway; see it with: $SHOW_TOKEN_CMD" >&2
+  fi
+  if [[ $NEW_GARMIN_KEY == true && $HAD_GARMIN_KEY == true ]]; then
+    warn "Stopped early. The new GARMIN_PERSONAL_API_KEY is already on Railway; the running server uses the old one until a new deployment starts: fix the problem and run ./scripts/deploy.sh again." >&2
+  fi
 }
-if [[ $ROTATE == false ]] && grep -q '^MCP_BEARER_TOKEN=' <<<"$EXISTING"; then
-  echo "MCP_BEARER_TOKEN already set; keeping it (use --rotate-token to replace it)."
+
+# GARMIN_PERSONAL_API_KEY (key mode): typed above, stored on Railway through
+# stdin, never printed and never on a command line.
+if [[ $NEW_GARMIN_KEY == true ]]; then
+  printf '%s' "$GARMIN_KEY" | railway variable set GARMIN_PERSONAL_API_KEY --stdin --skip-deploys >/dev/null
+  GARMIN_KEY=""
+  [[ $HAD_GARMIN_KEY == false ]] || trap stopped_early EXIT
+  echo "GARMIN_PERSONAL_API_KEY set (not shown)."
+elif [[ $AUTH_MODE == key ]]; then
+  echo "GARMIN_PERSONAL_API_KEY already set; keeping it (use --set-garmin-key to replace it, e.g. before Garmin's key expires)."
+fi
+
+# OWNER_SECRET: what you type on the sign-in page. Generated here, stored on
+# Railway through stdin, never printed and never on a command line.
+OWNER_SECRET_WAS_MISSING=false
+if ! grep -qE '^OWNER_SECRET=.' < <(printf '%s\n' "$EXISTING"); then
+  OWNER_SECRET_WAS_MISSING=true
+fi
+if [[ $OWNER_SECRET_WAS_MISSING == true || $ROTATE_SECRET == true ]]; then
+  if ! SECRET="$(new_owner_secret)"; then
+    warn "Could not generate OWNER_SECRET (reading /dev/urandom failed). Nothing was deployed."
+    exit 1
+  fi
+  printf '%s' "$SECRET" | railway variable set OWNER_SECRET --stdin --skip-deploys >/dev/null
+  SECRET=""
+  [[ $ROTATE_SECRET == false ]] || trap stopped_early EXIT
+  echo "OWNER_SECRET set (not shown). See it with: railway variable list --kv | grep ^OWNER_SECRET="
 else
+  echo "OWNER_SECRET already set; keeping it (use --rotate-secret to replace it, which revokes every sign-in)."
+fi
+
+# MCP_BEARER_TOKEN (optional): a static header token for Claude Code or CI.
+# Created or replaced only with --rotate-token.
+HAD_TOKEN=false
+if grep -qE '^MCP_BEARER_TOKEN=.' < <(printf '%s\n' "$EXISTING"); then
+  HAD_TOKEN=true
+fi
+if [[ $ROTATE_TOKEN == true ]]; then
   TOKEN="$(openssl rand -hex 32)"
   # stdin, not argv, so the token never shows up in `ps`.
   printf '%s' "$TOKEN" | railway variable set MCP_BEARER_TOKEN --stdin --skip-deploys >/dev/null
   # From here the new token is live: if anything below stops the script (a
   # failed build, Ctrl-C) before "Done" shows it, say where to find it.
-  trap token_not_shown EXIT
+  trap stopped_early EXIT
   echo "MCP_BEARER_TOKEN set."
+elif [[ $HAD_TOKEN == true ]]; then
+  echo "MCP_BEARER_TOKEN already set; keeping it (use --rotate-token to replace it)."
+else
+  echo "MCP_BEARER_TOKEN not set (optional; --rotate-token creates one for Claude Code or CI)."
+fi
+
+say "Healthcheck path"
+# Railway waits for /healthz before a new deployment goes live. Never /readyz: in full mode it stays 503 until the
+# Garmin login, so a first deployment would never go live. Best effort (the
+# dashboard can set it too), set before the build so the build's deployment
+# uses it. Captured first and never printed: the environment config also holds
+# variable values.
+healthcheck_is_set() {
+  local cfg
+  cfg="$(railway environment config --json 2>/dev/null || true)"
+  grep -qE '"healthcheckPath": *"/healthz"' < <(printf '%s\n' "$cfg")
+}
+if healthcheck_is_set; then
+  echo "Already /healthz."
+else
+  # Railway CLI 5.70 applies this edit only when it runs in a terminal: it
+  # asks "Apply changes now?" (Enter says yes). Without one it answers "No
+  # changes to apply" and still exits 0, so the setting is read back instead
+  # of trusting the exit code (live test R1, 17 Nov 2026). The --json reply
+  # holds no variable values, so it is shown.
+  railway environment edit --service-config "$SERVICE" deploy.healthcheckPath /healthz \
+    --message "coach-mcp-for-garmin: healthcheck /healthz" --json || true
+  if healthcheck_is_set; then
+    echo "Set to /healthz."
+  else
+    warn "Could not set it (optional). Dashboard: the $SERVICE service > Settings > Deploy > Healthcheck Path: /healthz"
+  fi
 fi
 
 say "Building (a few minutes; stops here if the build fails)"
@@ -164,47 +519,62 @@ say "Building (a few minutes; stops here if the build fails)"
 railway up --ci
 echo "Build done; Railway is starting the container (~30 s)."
 
-say "Public domain"
-DOMAIN_OUT="$(railway domain 2>&1 || true)"
-DOMAIN="$(grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' <<<"$DOMAIN_OUT" | head -n1 || true)"
-if [[ -z $DOMAIN ]]; then
-  DOMAIN="$(railway domain list 2>/dev/null | grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' | head -n1 || true)"
-fi
-if [[ -z $DOMAIN ]]; then
-  echo "$DOMAIN_OUT"
-  warn "Could not read the domain above; find it in the dashboard under the service's Settings > Networking."
-  DOMAIN="<your-app>.up.railway.app"
-fi
-
 trap - EXIT
 say "Done"
-echo "  Service URL    : https://$DOMAIN   (for test-connector.sh and /readyz)"
-echo "  Connector URL  : https://$DOMAIN/mcp"
+if [[ -n $PUBLIC_URL ]]; then
+  echo "  Service URL    : $PUBLIC_URL   (for test-connector.sh and /readyz)"
+  echo "  Connector URL  : $PUBLIC_URL/mcp"
+else
+  echo "  Service URL    : https://$DOMAIN   (for test-connector.sh and /readyz)"
+  echo "  Connector URL  : https://$DOMAIN/mcp"
+fi
+echo "                   (paste the connector URL into Claude exactly as shown, with no trailing slash)"
+echo "  Sign-in        : claude.ai: Sign in now + Register automatically, then type the owner"
+echo "                   secret on the page that opens. See the secret with:"
+echo "                   railway variable list --kv | grep ^OWNER_SECRET="
 if [[ -n $TOKEN && -t 1 ]]; then
   echo "  Header         : Authorization  =  Bearer $TOKEN"
-  echo "  URL, no header : https://$DOMAIN/$TOKEN/mcp"
-  echo "                   (use only if claude.ai shows no Request headers section)"
+  echo "                   (optional static bearer for Claude Code or CI; claude.ai does not need it)"
   echo
   warn "The token is shown once and saved nowhere. Put it in your password manager now."
 elif [[ -n $TOKEN ]]; then
   # Output going to a file or a pipe (CI, a log) must not carry the token.
   echo "  Token          : a new MCP_BEARER_TOKEN is set, not printed because output is not a terminal."
   echo "                   See it with: $SHOW_TOKEN_CMD"
-  echo "  URL, no header : https://$DOMAIN/<token>/mcp"
-else
-  echo "  Token unchanged: use the one you saved."
-  echo "                   Lost it, or an earlier run stopped before showing it? See it with:"
-  echo "                   $SHOW_TOKEN_CMD"
 fi
-cat <<'EOF'
+if [[ $HAD_TOKEN == true && $ROTATE_TOKEN == false && $OWNER_SECRET_WAS_MISSING == true ]]; then
+  # The first run after the update from the token-only version.
+  warn "The https://<domain>/<token>/mcp form is gone (410). If you ever used it, the token may be in Railway's HTTP logs: run ./scripts/deploy.sh --rotate-token, or delete it: railway variable delete MCP_BEARER_TOKEN"
+fi
+if [[ $AUTH_MODE == full ]]; then
+  cat <<'EOF'
 
-Next, first deploy only (README step 2):
+Next, first deploy only (docs/garmin-login.md):
     railway ssh
     garmin-mcp-auth --token-path /data/tokens    # Garmin email, password, MFA code
     exit
 Wait ~30 s while the server reloads the tokens, then add the connector on
-claude.ai in a browser (README step 3). It shows up in the mobile app by itself.
+claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
 EOF
-if [[ $ROTATE == true ]]; then
-  warn "Token rotated: remove the Garmin connector in claude.ai and add it again with the new token."
+else
+  cat <<'EOF'
+
+Next: key mode needs no Garmin login. Wait ~30 s, then add the connector on
+claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
+Before Garmin's key expires, create a new key and run:
+    ./scripts/deploy.sh --set-garmin-key
+EOF
+fi
+if [[ $ROTATE_SECRET == true ]]; then
+  warn "Owner secret rotated: every sign-in is revoked when the new deployment starts. Every client must sign in again:"
+  warn "claude.ai: Customize > Connectors > Garmin > Reconnect, then type the new secret. Claude Code: /mcp, sign in again."
+  if [[ $HAD_TOKEN == true && $ROTATE_TOKEN == false ]]; then
+    warn "MCP_BEARER_TOKEN still works: rotate it too (--rotate-token) or delete it (railway variable delete MCP_BEARER_TOKEN)."
+  fi
+fi
+if [[ $ROTATE_TOKEN == true ]]; then
+  warn "Token rotated: update the Authorization header wherever you use it (Claude Code: remove the server and add it again)."
+fi
+if [[ $NEW_GARMIN_KEY == true && $HAD_GARMIN_KEY == true ]]; then
+  warn "Garmin key replaced: once the new deployment is up, delete the old key on Garmin Connect (where you created it)."
 fi

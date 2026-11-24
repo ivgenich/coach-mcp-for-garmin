@@ -1,0 +1,4 @@
+# Tools the CI lint and audit steps install (none of this goes into the image).
+# Lock with hashes: .github/ci-requirements.txt (see its header to regenerate).
+ruff==0.17.3
+pip-audit==2.10.1

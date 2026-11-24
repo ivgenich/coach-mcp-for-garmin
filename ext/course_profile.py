@@ -11,11 +11,19 @@ the same 100 m window and 3% threshold, so the numbers line up with it.
 
 The analysis functions are pure (standard library only) so the tests run
 without garmin_mcp installed; launch.py wires register_tools into upstream.
+
+The course name is typed in Garmin, so it is cleaned where it is read
+(text_hygiene.name_or_none). The tool catches nothing: a Garmin error, and
+NoData for a course without elevation, reach launch.py's tool-error wrapper,
+which answers each with a fixed text.
 """
 
 import json
 import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import status_common as sc
+import text_hygiene as th
 
 # Resample the course onto a fixed distance grid before taking grades.
 _GRID_M = 20.0
@@ -193,11 +201,15 @@ def analyze_course(
     min_gain_m: float = 30.0,
     activity_names: Optional[Dict[int, str]] = None,
 ) -> Dict[str, Any]:
-    """The tool's result for one /course-service/course/{id} response."""
+    """The tool's result for one /course-service/course/{id} response.
+
+    Raises status_common.NoData (a ValueError) when fewer than two points
+    carry an elevation.
+    """
     geo_points = data.get("geoPoints") or []
     points = _distance_elevation(geo_points)
     if len(points) < 2:
-        raise ValueError("course has fewer than two points with elevation")
+        raise sc.NoData("course has fewer than two points with elevation")
 
     grid = _resample(points, _GRID_M)
     climbs = detect_climbs(grid, min_grade_pct=min_grade_pct, min_gain_m=min_gain_m)
@@ -206,7 +218,7 @@ def analyze_course(
 
     result: Dict[str, Any] = {
         "course_id": data.get("courseId"),
-        "name": data.get("courseName"),
+        "name": th.name_or_none(data.get("courseName")),
         "activity": (activity_names or {}).get(type_pk, type_pk),
         "distance_m": round(points[-1][0] - points[0][0]),
         "elevation_gain_m": _round_or_none(data.get("elevationGainMeter")),
@@ -251,6 +263,8 @@ def register_tools(app, get_client, activity_names=None):
         elevation gain, average grade, steepest 100 m grade). With
         include_profile, adds [distance_km, elevation_m] pairs: about 500
         points by default (one every ~160 m on an 80 km course, ~3k tokens).
+        Every number is computed on the server: report the numbers as given
+        and do not recompute them.
 
         Args:
             course_id: ID of the course (from get_courses).
@@ -261,21 +275,19 @@ def register_tools(app, get_client, activity_names=None):
             min_grade_pct: Grade at which a climb starts (default 3).
             min_gain_m: Smallest elevation gain reported as a climb (default 30).
         """
-        try:
-            data = get_client().client.connectapi(f"/course-service/course/{course_id}")
-            if not isinstance(data, dict) or not data.get("geoPoints"):
-                return f"Error: course {course_id} not found or missing geoPoints."
-            result = analyze_course(
-                data,
-                include_profile=include_profile,
-                step_m=step_m,
-                min_grade_pct=min_grade_pct,
-                min_gain_m=min_gain_m,
-                activity_names=activity_names,
-            )
-            # Compact: indent=2 would put each profile number on its own line.
-            return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
-        except Exception as e:
-            return f"Error building course profile: {str(e)}"
+        # No try: a Garmin error and NoData propagate to launch.py's tool-error wrapper.
+        data = get_client().client.connectapi(f"/course-service/course/{course_id}")
+        if not isinstance(data, dict) or not data.get("geoPoints"):
+            return f"Error: course {course_id} not found or missing geoPoints."
+        result = analyze_course(
+            data,
+            include_profile=include_profile,
+            step_m=step_m,
+            min_grade_pct=min_grade_pct,
+            min_gain_m=min_gain_m,
+            activity_names=activity_names,
+        )
+        # Compact: indent=2 would put each profile number on its own line.
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     return app

@@ -1,0 +1,137 @@
+{
+ "baseline": null,
+ "cases": [
+  {
+   "all_trials_must_pass": true,
+   "case_id": "E02",
+   "failed_checks": {},
+   "graded": 3,
+   "group": "failure_texts",
+   "pass_all": true,
+   "pass_at_1": 1.0,
+   "passed": true,
+   "passes": 3,
+   "required": 3,
+   "status": "pass",
+   "trials": 3,
+   "variant": "bare"
+  },
+  {
+   "all_trials_must_pass": true,
+   "case_id": "E06",
+   "failed_checks": {},
+   "graded": 3,
+   "group": "failure_texts",
+   "pass_all": true,
+   "pass_at_1": 1.0,
+   "passed": true,
+   "passes": 3,
+   "required": 3,
+   "status": "pass",
+   "trials": 3,
+   "variant": "bare"
+  }
+ ],
+ "cost_usd": 0.0705,
+ "errors": 0,
+ "flipped": null,
+ "headline": {
+  "all_trials_cases": 2,
+  "case_variants": 2,
+  "incomplete": 0,
+  "pass_all_rate": 1.0,
+  "pass_at_1": 1.0,
+  "pass_at_1_ci95": [
+   0.6096569663469354,
+   0.9999999999999999
+  ],
+  "pass_rate": 1.0,
+  "pass_rate_ci95": [
+   0.34237195288961925,
+   1.0
+  ],
+  "passed": 2,
+  "trial_passes": 6,
+  "trials_graded": 6
+ },
+ "judge_cost_usd": 0.0,
+ "judge_counted": false,
+ "judge_errors": 0,
+ "judge_model": "claude-haiku-5-5",
+ "judge_tokens": {
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0,
+  "input_tokens": 0,
+  "output_tokens": 0
+ },
+ "model": "claude-sonnet-5-5",
+ "per_group": {
+  "failure_texts": {
+   "all_trials_cases": 2,
+   "case_variants": 2,
+   "cost_usd": 0.0705,
+   "incomplete": 0,
+   "pass_all_rate": 1.0,
+   "pass_at_1": 1.0,
+   "pass_at_1_ci95": [
+    0.6096569663469354,
+    0.9999999999999999
+   ],
+   "pass_rate": 1.0,
+   "pass_rate_ci95": [
+    0.34237195288961925,
+    1.0
+   ],
+   "passed": 2,
+   "tokens": {
+    "cache_creation_input_tokens": 12569,
+    "cache_read_input_tokens": 191270,
+    "input_tokens": 54,
+    "output_tokens": 1983
+   },
+   "trial_passes": 6,
+   "trials_graded": 6
+  }
+ },
+ "per_variant": {
+  "bare": {
+   "all_trials_cases": 2,
+   "case_variants": 2,
+   "cost_usd": 0.0705,
+   "incomplete": 0,
+   "pass_all_rate": 1.0,
+   "pass_at_1": 1.0,
+   "pass_at_1_ci95": [
+    0.6096569663469354,
+    0.9999999999999999
+   ],
+   "pass_rate": 1.0,
+   "pass_rate_ci95": [
+    0.34237195288961925,
+    1.0
+   ],
+   "passed": 2,
+   "tokens": {
+    "cache_creation_input_tokens": 12569,
+    "cache_read_input_tokens": 191270,
+    "input_tokens": 54,
+    "output_tokens": 1983
+   },
+   "trial_passes": 6,
+   "trials_graded": 6
+  }
+ },
+ "refusals": 0,
+ "run": "20261124T095231Z-claude-sonnet-5-5",
+ "tokens": {
+  "cache_creation_input_tokens": 12569,
+  "cache_read_input_tokens": 191270,
+  "input_tokens": 54,
+  "output_tokens": 1983
+ },
+ "tool_calls": 12,
+ "total_cost_usd": 0.0705,
+ "trials": 6,
+ "truncated": 0,
+ "worst": []
+}

@@ -1,0 +1,195 @@
+{
+  "schema": 1,
+  "case_id": "E02",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 2,
+  "started": "2026-11-24T09:12:36Z",
+  "duration_s": 9.867,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_01LVKxtZ91PAH78834eAguf1",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01LVKxtZ91PAH78834eAguf1",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSqQUKEAgUGAI4AUIIdGhpbmtpbmcSDIqgUyeDuw368flb+RoMgB4L5/e3EKZhDXmLIjD22w39a235w1NB1UfBYaWYqcaYCA4wk3mOEbutyvlf3T6HdMzdG4sMJJAm9EjMJ/QqxgQ9lc1KCnypTvpCgoxKS1ZF+Ln65L83mRqfOGONeVaqmSFgJvN4h12Au5XhJlFwz9xWEiHMMMOe/2UWY24AJnkHAYDhzPibPz0dZT76qwkHFG1Nmk8nJHs0CEEyrej1eEvbPiY4/7KjpaJMP05254ya2cERsKNyuSsXMZQuNgAipYeNtDnHsZ2aQRkoMdAwpLfGoPjqw7CpyPRCpeAzPNksXYFS0olGz0I77RW2AWD2Z3cu3Imo/fqrI+yqLtshTzPu7CM7KxDnBVTiSWHpQK5DAiuLGayTYF9MFoiRMFAZ5QljhteaWjJ8yET/zyNOcK4HNO9NHjI/E+TA3a0JsEd7CX7JIPJ5obGjMrF7ERDlSFg/350zChGxBXefUo1jYFKf4vaL8uF+d7O0qJyZHbr3rrNyxVMMegyMTUk903B8fHswXaFfsaBuM+ATa7YgLGH33JmNxrUcC1fxhu58qgqdjsl88wKQGnaVprdKD2+w5xa0yWae+ImotuLBmdqjIwTkXX+ODVWgntBWFLHFUI/lybsdQaoFDOa4Au5OK2Kr9uYEU2wJR+ZGIqbv1d5BYCUh+MNnHOxpUMWWWD9zylZhcwUDMazRAlNwO3sji+jwFHGJI+RaKceU0K8QxXbxmRmvSN9MB29wDRG6m1HNdjXPdZU44hgPMrp3vwgHi4VKYHdBH1tIr8r/+9VEVWq/YKJb/+VFPLwQ+y6kLsVXdBU+sI3rK+U1knzHmnnrOJcvBfuV+rgXzWqaaZfUaCnZ14gSpuuJZiQYAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I can't tell you how you're doing today yet. Garmin is blocking requests from this server because too many were made, so I couldn't load your recovery, sleep or training data. It asked for a pause of at least 15 minutes, so I've stopped trying for now.\n\nPlease ask me again in about 15 minutes. I'll then pull today's status, which includes:\n- **Recovery:** last night's sleep, heart rate variability (HRV) and resting heart rate, each compared with your 7-day average\n- **Training Readiness and training load**\n- **Any workouts planned** for today\n- **Overall rating and advice:** green, yellow or red, plus what to do today\n\nIt's still early in the morning, so waiting a bit also gives last night's sleep and Training Readiness time to sync.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Try again please"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSmgsKEAgUGAI4AUIIdGhpbmtpbmcSDDC8O2WIKIGIWsGPXxoMSTz+rQXsbj4qZj3EIjA4UwseQGEiwnFYj6AWk+OXHK7ja4LEybv+jkn+OEeNp+90v7E0fL3Z7ImlAadnbvcqtwooDYoul6ALd6EshS/5PuVfenaQXqyqiVNjLyQzryZfQMQDn3bcmWZrJAhCBMuasl4oC663OCRxUU1xOTXKdi8o3uhhlNFxjviBe+bTdvayFSWjV7QtINLTiy03B5EBgADq2hgIAUpBz4lbGTvr9tVyE+MzQJC0g8dZkFr2zGpFQp5lcWhuBbDT10BLgAjsXxUqZU+OGy2SSIlLybI9cjv58WglrHXeaJqOJPCf8jYW4tjJlc42nQnS0Cg2gq2x8XM8owFoaPjdKPYMbbI2PA+Pna/v3O6LB99RfpQoud/INHy8qLSyfgQvkJOBOk3ratU26ozDYqdCm3+TNk+XbR5w16CEa+MnUs8jr4JkZKh0U/a8WJAKVy88nD2FZImruBglzoFeClUAapWAiqo/THKBOP/nl+oFhOVsITt0MRKXHmUTdWnntjiZh34xedTXel71X/SrKVMWqMZV8g4MLojt5QeELRlkVRDHVb+1RwWF7CywZ7C0odkpTpv7Dt0LBW7SE8yx1XMSN4NYxS7BkoC5mtWVSb18UUZDnTIhs3l2kw/VtKQpMJVsUy5rS4CKUW7KcxkfG8z7p4m3pv5/VsogDo7dj7JglQnXaYiWmb40sSAivrspj2qnYnF8A3LL+Nl3tKP63wXBwJHdhesdw10Yuhsb6W3ZcFZoD22xJDXHxYmDmFwd+UvrUwV8Q3FhlA9pOqS94vvq8wLdShq3Ekjq0HEZzhvpGvtL+HBWXZ0IwM2+xn7aRWrnhFYAkeW1fg9ajBTr5bYczQWGZH3yFvhA0LhHX7lKG4NQ77bzfGlQK84o8ZeXYoE6GhBkMzHpDduFatIYr1r1YaVTcGjaEkWR1lJhPuJ5Myu7X9Y8RsYSfXwzOP7U/8Mb38nBqLHpOhzL1pCqRL+734VbUBnHeYGOE6ktQ/Y6heAH54AeYSbmw0wtjAPjuu+uboQrHMAIslch8DuuGqxNPsPP6i0I0NA/gksVQMvvJe8q/8BkTVsee4goA9kUjHAmZ751Dm5iHUvKAgg8Pr/LCYMY7MEWYil5LiTaeEFadVbX2nYdPdk5WvG2U3r1LVxl1SzYpAEVucINH+9dIxfCMVYY06B9esuS85jTkLzZhMIQ/HZZan25sPgYkpOSIW2DzhbjQ2zt4hODSBk8OVSyrWvaqQtTi8yqrJIFQYNp9xtnh2Euq94dpfprrK42UsVZajd76D7krF69pBxqHYZqfiqnb7XULOY1hIAVaptypnxctD2MYFlT2tzL9B6zOJ3c3wvttFug5xHdf+duAhcw0nZI4a2mUHB082Kxbrob86Wkgz+epUUiXeghTqUetAPNzQxXKDkHyU9LVXNKliIpdhyqkjh9XtpS3QhDDF3sY+1EC40Lhy61CDVqkUTeRXTr4FnDRI51T9S1T1CBIbH2nXk8EfRGgwnSZotuaBZ7sSuQIqBtk8cG30mCXZdIBzKvRlhRu/nkbE/cnCe2M0Tg/ahnla0Kmt+vFy6WHfAEjYtZszChh7GuNTThd5qGS2cBr2dJqyC1frchW2ACE6MianQiltXYtl1NQlhPNh1vVMAMpdskF8Nhk5+Y3VGdxqDVVtb7NZZ8O8PugLptdlmA9I2S9TSEpqisu2MfE63cCwlHhNuVSZp3GlUyXvnqKIll/OAoweBKpN5nsgSlasruh67iMeLVRmUUfU4mkoNv+AjwYsHpHcFD32RtAKUaqzrLUJ5YBdzC9pJXl1JgrQmH4tfPIqCMU7FMMWjQux3bmbLKHZadiKaQ3QKgnrQfHT4YAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "id": "toolu_01Q1fL3c7haZ58VXaGdKtEMa",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01Q1fL3c7haZ58VXaGdKtEMa",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "I tried again, but Garmin is still blocking requests, so I still can't see today's data.\n\nI'll hold off on more attempts for now. Each extra try while the block is on can make it last longer. Please wait **at least 15 minutes** before asking again, and I'll pull your full daily status then.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    },
+    {
+      "index": 1,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I tried again, but Garmin is still blocking requests, so I still can't see today's data.\n\nI'll hold off on more attempts for now. Each extra try while the block is on can make it last longer. Please wait **at least 15 minutes** before asking again, and I'll pull your full daily status then.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    },
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 722,
+    "cache_read_input_tokens": 45055,
+    "cache_creation_input_tokens": 644
+  },
+  "cost_usd": 0.026719,
+  "error": null,
+  "effort": "medium",
+  "turns": 4,
+  "answers": [
+    "I can't tell you how you're doing today yet. Garmin is blocking requests from this server because too many were made, so I couldn't load your recovery, sleep or training data. It asked for a pause of at least 15 minutes, so I've stopped trying for now.\n\nPlease ask me again in about 15 minutes. I'll then pull today's status, which includes:\n- **Recovery:** last night's sleep, heart rate variability (HRV) and resting heart rate, each compared with your 7-day average\n- **Training Readiness and training load**\n- **Any workouts planned** for today\n- **Overall rating and advice:** green, yellow or red, plus what to do today\n\nIt's still early in the morning, so waiting a bit also gives last night's sleep and Training Readiness time to sync.",
+    "I tried again, but Garmin is still blocking requests, so I still can't see today's data.\n\nI'll hold off on more attempts for now. Each extra try while the block is on can make it last longer. Please wait **at least 15 minutes** before asking again, and I'll pull your full daily status then."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

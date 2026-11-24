@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "case_id": "E02",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 3,
+  "started": "2026-11-24T09:53:18Z",
+  "duration_s": 6.695,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_01GyQoMZvjkdaKPM4pTEzKkx",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01GyQoMZvjkdaKPM4pTEzKkx",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools for at least 15 minutes, even if the user asks you to try again: each call can extend the block. Tell the user to try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSpgUKEAgUGAI4AUIIdGhpbmtpbmcSDAuzHXeFQsBZmG1k5xoMWTiWe6wptk3yzPfsIjAaawjaLFFLfs6ksumJX3YjpnpL6dS2AQn1LSS2AgbNUVnevhwPy7uC5lLyyRb1HdcqwwTPO7hmCHVqC5RWEK30YEXjo5+XS+wkwFIoLWqUpNrsLRbYQFeKFm3SA+dgZXkaljWwQAiEfhCN46JvZWUF/d+n4wjxwrtj7M/Oj1maOeiptGWCJXmxjMP4iNQMwdf3jgn6D1t0+ygA8PH8SIVGkKE/XZ62hFUvQ1ErY5KwBr3R9r42bD5clxmUmII7LU3zaT6G1FKAuccsWA5WnlJyZp0UEKiU3cFJG2QAqs9S6zPyxpbSgvbZvkTmHozjVOUCwPO9DOskMxWcgnL/YxBjc4c/qtk2RJYiy8tR8S1cBeO4oB/hoZVPPzaiUGZFxT6ITUmKlu/50dNUVRP8R8AC4rxdd3g8Yh02IxCRl5KhqNTUJdtyXxZFaHPBeyt/37776FXpia0qwCGxXUrTuVCO4Jv0t4UEUr8vc6eY8OOGLRpQ5VX3B0IswjU2fakuB+XRb+6hKq14/7E2gZyik8QBiiAFkLpBAzEJzOdJFt5BECGbGU/DqF5ujHzj/OF3HBU8/WUyoR/Zn2JmEaoo/z68jYjni0ZcdieYqBf0NEzVivQZeFbnCRGxTx4agtLnoOXrl6YfpY6eNa8DiBzxKgMMTdxm8ZMHoSLQCzOttu4idjvahsL1R6m1FYxiEOMqmZ9gboAhe7aitAPsSoZgRQitgbf2qc6Br5bULGCUSZImOC23tJSMart7trvlkAbnIO21rK0R/osMsB3pvJSVsS17yjbKt17ObyRgBXMuvw+4c5oGCdki06K9AAUJdGwOyHT1doO2smAYAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I couldn't check today's status because Garmin is blocking requests from this server right now (rate limit). Each new request can make the block last longer, so I've stopped trying.\n\n**Please ask me again in 15 minutes or more.** I'll then pull your sleep, HRV, resting heart rate, Training Readiness, recent training load and today's planned workouts, and tell you how ready you are to train.\n\nUntil then, you can see your Training Readiness and last night's sleep directly on your watch or in the Garmin Connect app.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Try again please"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSrgYKEAgUGAI4AUIIdGhpbmtpbmcSDLkrVk0yIRUgd1M6YxoMJROCsYpaFMmj4PBtIjBEcTh9lTpil7SCraDllUdBHllBO8EJvAzEA0rlLyhR7b6R5OEU8b49tbg+zI3z5Q8qywVfEQB6RHGF8w67sfsYtSybc1G3WcIHqe1xc8TloxX5wzdfLWrgI9PZuMB/sVmxVrYYugIFoJiyorHohKruaumL2A+U51wa9lVjjf0/tUFPvF29HKarQQmSUFGwPxYfFYpEFlbnrmvty4Tmr84AgRcmz5jWeSbXUeTBPkltxDolw5hbVuBGn6OyQnq1vu/UtwgP4dZIGIGKt7va4A9VgsJ6IHv3G99wOYIn5BwvT3SbSdxvUHnJAYU9cAu1/VkpPvZRbeUYXG8pSvrPa3DBflvRh5ah0FwqUvuJZKwLGt/0mFmS0UjVaom1GB8E3dvPAe9IpdOuWgIr/f/fbuyR4sIq+EClORlrZdFLIKjVCWqiZsHepiJzNygIt9hYUd8tiEXEQJunnGSI/PKg89DeZlfWk3YeEQ8GKGNqbUkSFI/io2whQxvRMDX4A1IlUl2wDOTa0xqc4bwT8AIZopm1glqfRfXEqsAmeXwr/z3EJcRz8fXG+AXw6ubEc4QxCXfCzv/O87/7uz8imPP0Z8q/VqGhZyENQON8hZI/GaayLNfpUQVzDD/M8AvH94Pc7HiBIGIpL8OMpLpvdX6A4osZFoU8VveuG8ZqiXW6ba6yrva4LFh+To4nv3GaPiO7ylarBnvjxHUdcoTwXMB/THmkIcAL8ghfXrzSL4Q7HFl+Qs7gmYr1NmcfSCn/60+AFmorMdPY2sJg+ydz2xlkGOy84aqOUaqvs52jRAZomJRuU0Ogv+5zan1npGAPvxBH1JswIuExGNDZffF3cCPApQjOsyqtfd8P2PsCf5zHHPHShxpUD39ARxRd6BpslCI8vqapaNCUsZhK0j8juvbY+d3vW64ZOb9Rif3qWhleWanFATv0rRhMJ0FOSP8THRHj2rLv7e/MflbpYDMM9qO9pIrKjs5chesSFxUh2WkJv8j1qjyyYlkfLSpeUF+9L+c0GAE=",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I'd rather not try yet. Only a moment has passed, and Garmin asked for at least 15 minutes with no requests. Each new try can reset or extend the block, so trying now would probably delay your answer even more.\n\n**Please ask me again after about 06:45 (Athens time).** I'll then check your sleep, HRV, resting heart rate, Training Readiness and today's planned workouts.\n\nIf you need an answer right now, open Garmin Connect or your watch's Morning Report. Training Readiness and last night's sleep score there will give you a quick picture.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools for at least 15 minutes, even if the user asks you to try again: each call can extend the block. Tell the user to try again in 15 minutes or later.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I'd rather not try yet. Only a moment has passed, and Garmin asked for at least 15 minutes with no requests. Each new try can reset or extend the block, so trying now would probably delay your answer even more.\n\n**Please ask me again after about 06:45 (Athens time).** I'll then check your sleep, HRV, resting heart rate, Training Readiness and today's planned workouts.\n\nIf you need an answer right now, open Garmin Connect or your watch's Morning Report. Training Readiness and last night's sleep score there will give you a quick picture.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 459,
+    "cache_read_input_tokens": 33623,
+    "cache_creation_input_tokens": 192
+  },
+  "cost_usd": 0.016905,
+  "error": null,
+  "effort": "medium",
+  "turns": 3,
+  "answers": [
+    "I couldn't check today's status because Garmin is blocking requests from this server right now (rate limit). Each new request can make the block last longer, so I've stopped trying.\n\n**Please ask me again in 15 minutes or more.** I'll then pull your sleep, HRV, resting heart rate, Training Readiness, recent training load and today's planned workouts, and tell you how ready you are to train.\n\nUntil then, you can see your Training Readiness and last night's sleep directly on your watch or in the Garmin Connect app.",
+    "I'd rather not try yet. Only a moment has passed, and Garmin asked for at least 15 minutes with no requests. Each new try can reset or extend the block, so trying now would probably delay your answer even more.\n\n**Please ask me again after about 06:45 (Athens time).** I'll then check your sleep, HRV, resting heart rate, Training Readiness and today's planned workouts.\n\nIf you need an answer right now, open Garmin Connect or your watch's Morning Report. Training Readiness and last night's sleep score there will give you a quick picture."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

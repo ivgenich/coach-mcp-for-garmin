@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "case_id": "E01",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 1,
+  "started": "2026-11-24T09:12:01Z",
+  "duration_s": 3.679,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_01AwaypE1j7oM7GHUsHy3b5a",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01AwaypE1j7oM7GHUsHy3b5a",
+          "content": "Error: Garmin login missing or expired. This server cannot read Garmin data until its owner signs in to Garmin again: run garmin-mcp-auth on the server, then restart it. Retrying will not help until then.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSqAUKEAgUGAI4AUIIdGhpbmtpbmcSDO7xYjNHORVrfX9T8BoMGAWRbPxjL7F0CfJ9IjB5UXAsFndh6j7aE6VSSSrya1tD4Y+qv4YIEcmD744LPCtpMlWEoaqoN7u1xiaMihsqxQRcCbp3MZUlMyMLLIX8FUWTKza9DXZCw2NhO4K+/4vGbHJvaRt5I02PfNd77snU8kQWr4/DxbxglvhT4G0ms4vzmOXI5FkTdCpUldMQ0MAxxBbSi3BQiTHgCLmaRfcOCSN5M77Jm5aOTBRzgZh+zs+w0YDEUWDzhF3MR6FUoyKhAwVwxiVAy+TSz9xJrWYoJPrsBpdFUigTfdiM/x4xLfSbKhTRx2yMLfUdKsERV1IcfgeH4TmfdKvMLoAy7wZ5XTz9C6Q5xrGD3G6sWHMjN60JTtkjFaiKRRa3BvvD+P0gPRWEg/kwNbzXP3/52UEt8duS72QfC+YJfanlQnG87IN+zbqXZ00zXrCdswWzoRMXDs0BT+1c+EKDiXrOPdGFMvL0Exumq/8gszDsrXLFqplu0GAJJhUHzlpBSuwD0X7qd34dP9B+j8lKS2B+wXMrIxIIQSnqpNRG85xC5Qqg4UN89gecl+0dKl8BLb2jxRGvtxwgVKhzTyJNjZaRRzlLarPSrJVNf/184BCSg+5heCpSCW/QUeyX8V/wfYskZGWN5vvWWZ3sjb2jezACt2/RV1IH9AR6pLyOwPgUF1HbrNsM8mbFt0I0g+rnqqoN210eufg1Fo4DEun2pct/h4a9xDixjOJsyLJhZTTX8UyUsfMKujhPRK64imMx9vXpxqn3dcsCBcZdzyg5/PtHtMXlYbZ27XfOWhw9kPKDwPTgkMZ5dzKBs6HIIWnPA9VQ8T8ZOp0jpF9u5SQ/2miebD9As7YqagUKRhgB",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I can't tell you right now because I can't get into your Garmin data. The Garmin login on the server has expired or is missing, and trying again won't help until that's fixed.\n\n**To fix it:**\n1. On the machine running the Garmin server, run `garmin-mcp-auth` and sign in to Garmin again.\n2. Restart the server.\n\nOnce that's done, ask again and I'll check last night's sleep, HRV, resting heart rate, training readiness, recent training load and any workouts planned for today, then tell you how you're doing.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin login missing or expired. This server cannot read Garmin data until its owner signs in to Garmin again: run garmin-mcp-auth on the server, then restart it. Retrying will not help until then.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I can't tell you right now because I can't get into your Garmin data. The Garmin login on the server has expired or is missing, and trying again won't help until that's fixed.\n\n**To fix it:**\n1. On the machine running the Garmin server, run `garmin-mcp-auth` and sign in to Garmin again.\n2. Restart the server.\n\nOnce that's done, ask again and I'll check last night's sleep, HRV, resting heart rate, training readiness, recent training load and any workouts planned for today, then tell you how you're doing.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 6,
+    "output_tokens": 247,
+    "cache_read_input_tokens": 22090,
+    "cache_creation_input_tokens": 257
+  },
+  "cost_usd": 0.010667,
+  "error": null,
+  "effort": "medium",
+  "turns": 2,
+  "answers": [
+    "I can't tell you right now because I can't get into your Garmin data. The Garmin login on the server has expired or is missing, and trying again won't help until that's fixed.\n\n**To fix it:**\n1. On the machine running the Garmin server, run `garmin-mcp-auth` and sign in to Garmin again.\n2. Restart the server.\n\nOnce that's done, ask again and I'll check last night's sleep, HRV, resting heart rate, training readiness, recent training load and any workouts planned for today, then tell you how you're doing."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

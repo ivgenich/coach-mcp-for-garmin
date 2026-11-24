@@ -1,0 +1,119 @@
+{
+ "schema": 1,
+ "case_id": "G03",
+ "variant": "bare",
+ "model": "claude-opus-5-5",
+ "trial": 1,
+ "started": "2026-11-24T00:00:00Z",
+ "duration_s": 4.2,
+ "stop_reason": "end_turn",
+ "system": "Current date and time: Wednesday 2026-03-18 06:30, time zone Europe/Athens.",
+ "tools": [
+  "get_daily_status",
+  "get_weekly_status",
+  "get_sleep_summary",
+  "get_activities",
+  "get_activities_by_date",
+  "get_activity",
+  "get_activity_fit_data"
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "content": "How am I today?"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_golden_00",
+     "name": "get_daily_status",
+     "input": {}
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_golden_00",
+     "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+     "is_error": true
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_golden_01",
+     "name": "get_sleep_summary",
+     "input": {
+      "date": "2026-03-18"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_golden_01",
+     "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+     "is_error": true
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Garmin is rate-limiting this server. Please try again in 15 minutes."
+    }
+   ]
+  }
+ ],
+ "tool_calls": [
+  {
+   "index": 0,
+   "name": "get_daily_status",
+   "input": {},
+   "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+   "is_error": true
+  },
+  {
+   "index": 1,
+   "name": "get_sleep_summary",
+   "input": {
+    "date": "2026-03-18"
+   },
+   "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+   "is_error": true
+  }
+ ],
+ "final_text": "Garmin is rate-limiting this server. Please try again in 15 minutes.",
+ "garmin_calls": [
+  {
+   "method": "golden",
+   "args": []
+  },
+  {
+   "method": "golden",
+   "args": []
+  }
+ ],
+ "usage": {
+  "input_tokens": 11000,
+  "output_tokens": 400,
+  "cache_read_input_tokens": 0,
+  "cache_creation_input_tokens": 0
+ },
+ "cost_usd": 0.05,
+ "error": null,
+ "_golden": "fail: a Garmin tool was called after the rate-limit result"
+}

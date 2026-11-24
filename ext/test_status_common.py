@@ -5,7 +5,10 @@
 
 import asyncio
 import datetime as dt
+import logging
 import os
+import re
+import secrets
 import threading
 import time
 import unittest
@@ -13,8 +16,41 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 import status_common as sc
+import tool_errors
 
 TZ = ZoneInfo("Europe/Athens")  # tests set their own zone
+STATUS_LOG = logging.getLogger("garmin_ext.status")
+_saved_log = None
+
+
+def setUpModule():
+    # fetch_all logs every failed source (contract 5.8). Keep the test output clean; assertLogs still sees them.
+    global _saved_log
+    _saved_log = (STATUS_LOG.handlers[:], STATUS_LOG.propagate)
+    STATUS_LOG.handlers, STATUS_LOG.propagate = [logging.NullHandler()], False
+
+
+def tearDownModule():
+    STATUS_LOG.handlers, STATUS_LOG.propagate = _saved_log
+
+
+def garmin_error(name, message, module="garminconnect.exceptions"):
+    """An exception of a class from garminconnect's module: the error types the tool-error table reads (M2)."""
+    return type(name, (Exception,), {"__module__": module})(message)
+
+
+def raiser(exc):
+    def fail():
+        raise exc
+    return fail
+
+
+INTERNAL_RE = re.compile(r"^internal error \(ref [0-9a-f]{8}\)$")
+# The exact wording upstream's proxy gives garminconnect's errors.
+HINT = "Garmin Connect may be unreachable; check your network connection or try again later."
+PENDING_LOGIN = "Garmin login failed. Run 'garmin-mcp-auth' to authenticate, then restart the server."
+STALL = ("Garmin request 'get_stats' did not return within 90s and was abandoned; raise GARMIN_MCP_CALL_TIMEOUT "
+         "if Garmin is slow")
 
 
 class TimeHelpers(unittest.TestCase):
@@ -24,6 +60,43 @@ class TimeHelpers(unittest.TestCase):
         self.assertEqual(sc.parse_date(None, TZ), sc.today_local(TZ))
         with self.assertRaises(ValueError):
             sc.parse_date("10/11/2026", TZ)
+
+    def test_report_dates_stay_a_year_inside_the_calendar(self):
+        # EVD-1: the reports read days around their date, and date arithmetic past year 1 or 9999 raises
+        # OverflowError (an internal error); such a date is a bad argument with the date detail instead.
+        self.assertEqual(sc.parse_date("0002-01-01", TZ), dt.date(2, 1, 1))
+        self.assertEqual(sc.parse_date("9998-12-31", TZ), dt.date(9998, 12, 31))
+        for value in ("0001-01-01", "0001-12-31", "9999-01-01", "9999-12-31"):
+            with self.subTest(value=value), self.assertRaises(sc.BadArgument) as ctx:
+                sc.parse_date(value, TZ)
+            self.assertEqual(str(ctx.exception),
+                             f"date must be YYYY-MM-DD between 0002-01-01 and 9998-12-31, got '{value}'")
+            for group_detail in (tool_errors.classify_exception(ctx.exception)[:2],
+                                 tool_errors.classify_text(f"Error: {ctx.exception}")):
+                self.assertEqual(group_detail, (tool_errors.BAD_INPUT, tool_errors.DATE_DETAIL))
+        with self.assertRaises(sc.BadArgument) as ctx:
+            sc.report_date(dt.date.max, "end_date", "9999-12-31")
+        self.assertTrue(str(ctx.exception).startswith("end_date must be YYYY-MM-DD between "), str(ctx.exception))
+        self.assertEqual(tool_errors.classify_text(f"Error: {ctx.exception}"),
+                         (tool_errors.BAD_INPUT, tool_errors.DATE_DETAIL))
+        self.assertEqual(sc.report_date(dt.date(2026, 11, 10), "end_date", "2026-11-10"), dt.date(2026, 11, 10))
+
+    def test_argument_errors_are_bad_argument(self):
+        # M2: the tools answer only BadArgument (and SystemicFailure) as text; it stays a ValueError.
+        for cls in (sc.BadArgument, sc.NoData):
+            self.assertTrue(issubclass(cls, ValueError) and issubclass(cls, tool_errors.KnownFailure), cls)
+        self.assertFalse(issubclass(sc.SystemicFailure, ValueError))
+        self.assertTrue(issubclass(sc.SystemicFailure, tool_errors.KnownFailure))
+        with self.assertRaises(sc.BadArgument) as ctx:
+            sc.parse_date("10/11/2026", TZ)
+        self.assertEqual(tool_errors.classify_exception(ctx.exception)[:2],
+                         (tool_errors.BAD_INPUT, tool_errors.DATE_DETAIL))
+        with self.assertRaises(sc.BadArgument):
+            sc.zone("Mars/Base")
+        with mock.patch.dict(os.environ, {}, clear=True), self.assertRaises(sc.BadArgument) as ctx:
+            sc.zone()
+        # The REPORT_TZ texts group as internal: the server owner fixes them, not the caller.
+        self.assertEqual(tool_errors.classify_exception(ctx.exception)[0], tool_errors.INTERNAL)
 
     def test_english_forms(self):
         d = dt.date(2026, 11, 10)
@@ -39,6 +112,9 @@ class TimeHelpers(unittest.TestCase):
         self.assertEqual(sc.isolate("Easy run 5x1000"), "Easy run 5x1000")
         self.assertIsNone(sc.isolate(None))
         self.assertEqual(sc.isolate(""), "")
+        # U+FEFF (a byte order mark) is not right-to-left; Arabic presentation forms still are.
+        self.assertEqual(sc.isolate("\ufeffEasy"), "\ufeffEasy")
+        self.assertEqual(sc.isolate("\ufefbx"), "\u2068\ufefbx\u2069")
 
     def test_check_report_tz(self):
         # REPORT_TZ is required: no default zone, and launch.py --check-config gets the reason.
@@ -129,6 +205,10 @@ class Payloads(unittest.TestCase):
             ("virtual_ride", "bike"), ("road_biking", "bike"), ("indoor_cycling", "bike"),
             ("cycling", "bike"), ("lap_swimming", "swim"), ("open_water_swimming", "swim"),
             ("strength_training", "other"), (None, "other"),
+            ("mountain_biking", "bike"), ("e_bike_mountain", "bike"), ("e_bike_fitness", "bike"),
+            ("gravel_cycling", "bike"), ("virtual_run", "run"),
+            # R10b: motor sports are not rides.
+            ("motorcycling", "other"), ("motorcycling_v2", "other"), ("Motorcycling", "other"),
         ]:
             self.assertEqual(sc.sport_group(key), group, key)
 
@@ -192,23 +272,97 @@ class Fetching(unittest.TestCase):
         ok = sc.fetch_sync(lambda x: x * 2, 21)
         self.assertTrue(ok["ok"])
         self.assertEqual(ok["data"], 42)
+        self.assertNotIn("_failure", ok)
 
-        def boom():
-            raise RuntimeError("404 for url: https://connectapi.garmin.com/x/MyName?date=1")
-
-        bad = sc.fetch_sync(boom)
+        # A RuntimeError is not a Garmin error type (M2): an internal error with a ref, no exception text.
+        bad = sc.fetch_sync(raiser(RuntimeError("404 for url: https://connectapi.garmin.com/x/MyName?date=1")))
         self.assertFalse(bad["ok"])
+        self.assertRegex(bad["error"], INTERNAL_RE)
         self.assertNotIn("MyName", bad["error"])
-        self.assertIn("<url>", bad["error"])
+        self.assertNotIn("garmin.com", bad["error"])
         self.assertIn("ms", bad)
 
-        def echo_path():
-            raise RuntimeError('API client error (404): {"path": "/usersummary-service/usersummary/daily/MyName"}')
+        echoed = sc.fetch_sync(raiser(garmin_error(
+            "GarminConnectConnectionError",
+            'API client error (404): {"path": "/usersummary-service/usersummary/daily/MyName"}')))
+        self.assertEqual(echoed["error"], "no data from Garmin")  # the source phrase: no name, no path
+        self.assertFalse(echoed["systemic"])
 
-        echoed = sc.fetch_sync(echo_path)
-        self.assertNotIn("MyName", echoed["error"])
-        self.assertIn("<path>", echoed["error"])
-        self.assertIn("404", echoed["error"])
+    def test_fetch_sync_error_is_the_source_phrase(self):
+        # One sample per group (contract 6.2 test 5): the error is the 5.7 phrase, never the exception text.
+        samples = (
+            (RuntimeError(PENDING_LOGIN), "Garmin login missing or expired", True),
+            (RuntimeError("Garmin login did not finish within 90s. Run 'garmin-mcp-auth' to verify your credentials, "
+                          "then restart the server."), "Garmin login missing or expired", True),
+            (garmin_error("GarminConnectTooManyRequestsError", "Garmin rate limit hit: Too many requests (429)."),
+             "Garmin rate limit", True),
+            (garmin_error("GarminConnectConnectionError", "Garmin Connect request failed: API Error 400 - Bad Request"),
+             "invalid input", False),
+            (garmin_error("GarminConnectConnectionError",
+                          f"Garmin Connect request failed: No data received from server. {HINT}"),
+             "no data from Garmin", False),
+            (TimeoutError(STALL), "Garmin Connect did not answer", True),
+            (KeyError("dailySleepDTO"), INTERNAL_RE, False),
+        )
+        for exc, phrase, systemic in samples:
+            with self.subTest(exc=type(exc).__name__, phrase=str(phrase)):
+                res = sc.fetch_sync(raiser(exc))
+                if isinstance(phrase, str):
+                    self.assertEqual(res["error"], phrase)
+                else:
+                    self.assertRegex(res["error"], phrase)
+                self.assertIs(res["systemic"], systemic)
+                group, ref, full, original = res["_failure"]  # kept on the direct result, for fetch_all's log
+                self.assertIs(original, exc)
+                self.assertIn(str(exc.args[0]), full)
+                if group == tool_errors.INTERNAL:
+                    self.assertEqual(res["error"], f"internal error (ref {ref})")
+                else:
+                    self.assertIsNone(ref)
+
+    def test_systemic_follows_the_group(self):
+        # M1: only login, rate limit and a network-wide "unavailable" end a report; a 404 never does, even when
+        # its body holds "429" or "timeout", and a bug's text cannot make it systemic.
+        not_found_json = ("Garmin Connect request failed: API Error 404 - {'error': 'Not Found', "
+                          f"'traceId': '7c4291e0b5aa3f10'}}. {HINT}")
+        not_found_html = ("Garmin Connect request failed: API Error 404 - <html><body><h1>404</h1>request 4290 "
+                          f"timeout</body></html>. {HINT}")
+        dns = ("Garmin Connect request failed: Connection error: HTTPSConnectionPool(host='connectapi.garmin.com', "
+               "port=443): Max retries exceeded with url: /x (Caused by NameResolutionError('Failed to resolve')). "
+               f"{HINT}")
+        cases = (
+            (garmin_error("GarminConnectConnectionError", not_found_json), "no data from Garmin", False),
+            (garmin_error("GarminConnectConnectionError", not_found_html), "no data from Garmin", False),
+            (garmin_error("GarminConnectAuthenticationError", "Garmin authentication failed: API Error 401 - "
+                          "Unauthorized. Re-run 'garmin-mcp-auth' to refresh your tokens."),
+             "Garmin login missing or expired", True),
+            (garmin_error("GarminConnectTooManyRequestsError", "Garmin rate limit hit: API Error 429 - Too Many "
+                          "Requests. Wait a few minutes."), "Garmin rate limit", True),
+            (TimeoutError(STALL), "Garmin Connect did not answer", True),
+            (garmin_error("GarminConnectConnectionError", dns), "Garmin Connect did not answer", True),
+            (ConnectionRefusedError(61, "Connection refused"), "Garmin Connect did not answer", True),
+            (garmin_error("GarminConnectConnectionError",
+                          f"Garmin Connect request failed: API client error (403): Forbidden. {HINT}"),
+             "Garmin Connect did not answer", True),
+            # One endpoint answering 5xx is not a network-wide failure: the rest of the report still runs.
+            (garmin_error("GarminConnectConnectionError",
+                          f"Garmin Connect request failed: API Error 503 - Service Unavailable. {HINT}"),
+             "Garmin Connect did not answer", False),
+            (RuntimeError("timed out"), INTERNAL_RE, False),
+            (KeyError("rate limit"), INTERNAL_RE, False),
+        )
+        for exc, phrase, systemic in cases:
+            with self.subTest(exc=str(exc)[:60]):
+                res = sc.fetch_sync(raiser(exc))
+                if isinstance(phrase, str):
+                    self.assertEqual(res["error"], phrase)
+                else:
+                    self.assertRegex(res["error"], phrase)
+                self.assertIs(res["systemic"], systemic)
+                results = asyncio.run(sc.fetch_all({"first": sc.call(raiser(exc)), "b": sc.call(lambda: "b")},
+                                                   first="first"))
+                self.assertEqual(sc.data_of(results["b"]), None if systemic else "b")
+                self.assertEqual(sc.systemic_failure(results, "first"), phrase if systemic else None)
 
     def test_fetch_all_parallel_first_and_timeout(self):
         order = []
@@ -255,6 +409,49 @@ class Fetching(unittest.TestCase):
         self.assertTrue(results["a"]["error"].startswith("skipped:"))
         self.assertEqual(set(results), {"stats", "a", "b"})
 
+    def test_skip_never_calls_and_says_why(self):
+        # Key mode (KEY contract D10): skipped names get the fixed reason and are never called.
+        seen = []
+        calls = {"stats": sc.call(seen.append, "stats"), "a": sc.call(seen.append, "a"),
+                 "b": sc.call(seen.append, "b"), "c": sc.call(seen.append, "c")}
+        results = asyncio.run(sc.fetch_all(calls, first="stats", skip=frozenset({"b"})))
+        self.assertEqual(sorted(seen), ["a", "c", "stats"])
+        self.assertEqual(list(results), ["stats", "a", "b", "c"])
+        self.assertEqual(results["b"]["error"], "skipped: not available with a Garmin Personal API key")
+        self.assertEqual((results["b"]["ok"], results["b"]["ms"]), (False, 0))
+        self.assertEqual(set(sc.source_meta({"b": results["b"]})["b"]), {"ok", "fetched_at", "ms", "error"})
+        # Without `first` too, and a list works as well as a frozenset.
+        seen.clear()
+        results = asyncio.run(sc.fetch_all(calls, skip=["a", "stats"]))
+        self.assertEqual(sorted(seen), ["b", "c"])
+        self.assertEqual(results["stats"]["error"], "skipped: " + sc.NOT_WITH_KEY)
+
+    def test_systemic_first_failure_keeps_the_skip_reasons(self):
+        seen = []
+
+        def auth_fail():
+            raise RuntimeError("Garmin authentication failed: 401. Re-run 'garmin-mcp-auth'")
+
+        calls = {"stats": sc.call(auth_fail), "a": sc.call(seen.append, "a"), "b": sc.call(seen.append, "b")}
+        results = asyncio.run(sc.fetch_all(calls, first="stats", skip={"b"}))
+        self.assertEqual(seen, [])
+        self.assertEqual(results["b"]["error"], "skipped: " + sc.NOT_WITH_KEY)
+        self.assertTrue(results["a"]["error"].startswith("skipped: stats failed: "), results["a"])
+        self.assertEqual(sc.systemic_failure(results, "stats"), "Garmin login missing or expired")
+
+    def test_first_in_skip_is_a_programming_error(self):
+        seen = []
+        with self.assertRaises(ValueError):
+            asyncio.run(sc.fetch_all({"stats": sc.call(seen.append, 1)}, first="stats", skip={"stats"}))
+        self.assertEqual(seen, [])
+
+    def test_key_mode_texts(self):
+        self.assertEqual(sc.NOT_WITH_KEY, "not available with a Garmin Personal API key")
+        note = sc.KEY_MODE_NOTE
+        self.assertTrue(note.isascii() and note.isprintable())
+        self.assertEqual(len(note), 181)
+        self.assertTrue(note.startswith("This server reads Garmin through a Personal API key, so "))
+
     def test_non_systemic_first_failure_runs_the_rest(self):
         calls = {"stats": sc.call(lambda: {}["missing"]), "a": sc.call(lambda: "a")}
         results = asyncio.run(sc.fetch_all(calls, first="stats"))
@@ -277,6 +474,143 @@ class Fetching(unittest.TestCase):
         self.assertTrue(sc.is_systemic_error("Garmin rate limit hit: 429"))
         self.assertTrue(sc.is_systemic_error("TimeoutError: Garmin request 'get_stats' did not return within 90s"))
         self.assertFalse(sc.is_systemic_error("KeyError: 'dailySleepDTO'"))
+        for text in ("API Error 401 - Unauthorized", "API Error 403 - Forbidden", "Not authenticated",
+                     "API client error (401)", "API client error (403): Forbidden", "API Error 429",
+                     "Garmin returned 429", "API client error (429)"):
+            self.assertTrue(sc.is_systemic_error(text), text)
+        # A bare 429 inside an id or a trace id is not a rate limit (M1).
+        for text in ("API Error 404 - Not Found", "No data received from server", "activity id 4291 not found",
+                     "API Error 404 - {'error': 'Not Found', 'traceId': '7c4291e0b5aa3f10'}", "API Error 500"):
+            self.assertFalse(sc.is_systemic_error(text), text)
+
+    def test_systemic_failure_names_the_reason(self):
+        login = sc.fetch_sync(raiser(RuntimeError(PENDING_LOGIN)))
+        self.assertEqual(sc.systemic_failure({"stats": login}, "stats"), "Garmin login missing or expired")
+        own_timeout = {"ok": False, "error": "timeout after 30s", "systemic": True}
+        self.assertEqual(sc.systemic_failure({"stats": own_timeout}, "stats"), "timeout after 30s")
+        empty = sc.fetch_sync(raiser(garmin_error("GarminConnectConnectionError", "No data received from server")))
+        for results in ({"stats": sc.fetch_sync(lambda: 1)}, {"stats": empty}, {}, {"other": login}, None,
+                        # Only a login, rate-limit or unavailable phrase (or our timeout) ends a report.
+                        {"stats": {"ok": False, "error": "internal error (ref 0123abcd)", "systemic": True}},
+                        {"stats": {"ok": False, "error": "no data from Garmin", "systemic": True}},
+                        {"stats": {"ok": False, "error": "Garmin rate limit", "systemic": False}}):
+            with self.subTest(results=results):
+                self.assertIsNone(sc.systemic_failure(results, "stats"))
+
+    def test_systemic_failure_text_keeps_its_group(self):
+        # The tools answer "Error: <phrase>"; the tool-error wrapper must read each phrase back to its own group.
+        for phrase, group in (("Garmin login missing or expired", tool_errors.LOGIN),
+                              ("Garmin rate limit", tool_errors.RATE_LIMITED),
+                              ("Garmin Connect did not answer", tool_errors.UNAVAILABLE),
+                              ("timeout after 30s", tool_errors.UNAVAILABLE)):
+            with self.subTest(phrase=phrase):
+                exc = sc.SystemicFailure(phrase)
+                self.assertEqual(str(exc), phrase)
+                self.assertEqual(tool_errors.classify_exception(exc)[0], group)
+                self.assertEqual(tool_errors.classify_text(f"Error: {exc}")[0], group)
+
+    def test_fetch_all_logs_each_failed_source(self):
+        calls = {
+            "login": sc.call(raiser(RuntimeError(PENDING_LOGIN))),
+            "rate": sc.call(raiser(garmin_error("GarminConnectTooManyRequestsError", "Too many requests (429)"))),
+            "down": sc.call(raiser(garmin_error("GarminConnectConnectionError", "API Error 503 - unavailable"))),
+            "bad": sc.call(raiser(garmin_error("GarminConnectConnectionError", "API Error 400 - Bad Request"))),
+            "empty": sc.call(raiser(garmin_error("GarminConnectConnectionError", "No data received from server"))),
+            "bug": sc.call(raiser(KeyError("dailySleepDTO"))),
+            "slow": sc.call(time.sleep, 0.6),
+            "fine": sc.call(lambda: "ok"),
+        }
+        with self.assertLogs("garmin_ext.status", level="DEBUG") as logs:
+            results = asyncio.run(sc.fetch_all(calls, timeout_s=0.3, concurrency=8))
+        self.assertTrue(all("_failure" not in res for res in results.values()))
+        by_source = {}
+        for record in logs.records:
+            message = record.getMessage()
+            self.assertTrue(message.startswith("status source failed: "), message)
+            source = re.search(r"\bsource=(\w+)", message).group(1)
+            self.assertNotIn(source, by_source, "one line per failed call")
+            by_source[source] = record
+        self.assertEqual(set(by_source), set(calls) - {"fine"})
+        levels = {"login": logging.WARNING, "rate": logging.WARNING, "down": logging.WARNING, "slow": logging.WARNING,
+                  "bad": logging.INFO, "empty": logging.DEBUG, "bug": logging.ERROR}
+        self.assertEqual({source: record.levelno for source, record in by_source.items()}, levels)
+        self.assertEqual(by_source["rate"].getMessage(), "status source failed: source=rate group=rate_limited: "
+                         "GarminConnectTooManyRequestsError: Too many requests (429)")
+        # fetch_all's own timeout: group unavailable, the "timeout after Ns" text, no traceback.
+        self.assertEqual(by_source["slow"].getMessage(),
+                         "status source failed: source=slow group=unavailable: timeout after 0s")
+        self.assertEqual(results["slow"]["error"], "timeout after 0s")
+        # An internal error logs its ref (the one in the source's error) and its traceback.
+        bug = by_source["bug"]
+        ref = re.match(r"internal error \(ref ([0-9a-f]{8})\)$", results["bug"]["error"]).group(1)
+        self.assertEqual(bug.getMessage(),
+                         f"status source failed: ref={ref} source=bug group=internal: KeyError: 'dailySleepDTO'")
+        self.assertIsNotNone(bug.exc_info)
+        self.assertIsInstance(bug.exc_info[1], KeyError)
+        for source in set(levels) - {"bug"}:
+            self.assertFalse(by_source[source].exc_info, source)
+
+    def test_fetch_all_log_lines_are_redacted(self):
+        # EVD-2, contract 5.8: the last field of a "status source failed:" line is tool_errors.redact(original text):
+        # one line, no token, no email, never the literal "rate limit:". Secrets are built at run time.
+        token = "TEST-ONLY-" + secrets.token_urlsafe(32)
+        bearer = "TEST-ONLY-" + secrets.token_urlsafe(32)
+        email = "runner" + "@" + "example.invalid"
+        text = f"API Error 503 - access_token={token} for {email}, Authorization: Bearer {bearer}\nRate limit: x"
+        calls = {
+            "garmin": sc.call(raiser(garmin_error("GarminConnectConnectionError", text))),  # a Garmin error type
+            "bug": sc.call(raiser(KeyError(text))),  # internal; its str() is the repr of the text
+            "crash": sc.call(raiser(RuntimeError(text))),  # internal, with a real line break
+        }
+        with self.assertLogs("garmin_ext.status", level="DEBUG") as logs:
+            results = asyncio.run(sc.fetch_all(calls))
+        self.assertTrue(all(not res["ok"] for res in results.values()))
+        by_source = {re.search(r"\bsource=(\w+)", r.getMessage()).group(1): r for r in logs.records}
+        self.assertEqual(set(by_source), set(calls))
+        self.assertEqual(by_source["garmin"].levelno, logging.WARNING)  # the rate-limit row, from the Garmin type
+        for source in ("bug", "crash"):
+            self.assertEqual(by_source[source].levelno, logging.ERROR, source)
+            self.assertIn("group=internal: ", by_source[source].getMessage())
+        for source, record in by_source.items():
+            message = record.getMessage()  # the line itself; a traceback (internal only) is not redacted (risk R9)
+            with self.subTest(source=source):
+                for secret in (token, bearer, email, "\n", "\r", "Rate limit:", "rate limit:"):
+                    self.assertNotIn(secret, message)
+                self.assertIn("access_token=<redacted>", message)
+                self.assertIn("Bearer <redacted>", message)
+                self.assertIn("<email>", message)
+                self.assertIn("rate limit - x", message)
+
+    def test_unusable_answer_is_a_failed_source_with_one_log_line(self):
+        # EVD-3: an error inside a normal answer (GraphQL: HTTP 200 with "data": null) gets a 5.7 phrase and a log
+        # line like any failed call; the text logged is the caller's fixed text.
+        res = sc.fetch_sync(lambda: {"data": None, "errors": [{"message": "boom"}]})
+        with self.assertLogs("garmin_ext.status", level="DEBUG") as logs:
+            failed = sc.unusable_answer(res, "schedule", "GraphQL answer without data")
+        self.assertTrue(res["ok"])  # the fetch result itself is not changed
+        self.assertEqual(sc.source_meta({"schedule": failed})["schedule"],
+                         {"ok": False, "fetched_at": res["fetched_at"], "ms": res["ms"],
+                          "error": "Garmin Connect did not answer"})
+        self.assertIsNone(sc.data_of(failed))
+        self.assertIsNone(sc.systemic_failure({"schedule": failed}, "schedule"))  # never ends a report
+        self.assertEqual([(r.levelno, r.getMessage()) for r in logs.records],
+                         [(logging.WARNING,
+                           "status source failed: source=schedule group=unavailable: GraphQL answer without data")])
+
+    def test_skipped_calls_are_not_logged(self):
+        seen = []
+        calls = {"stats": sc.call(raiser(RuntimeError(PENDING_LOGIN))), "a": sc.call(seen.append, "a"),
+                 "b": sc.call(seen.append, "b")}
+        with self.assertLogs("garmin_ext.status", level="DEBUG") as logs:
+            results = asyncio.run(sc.fetch_all(calls, first="stats"))
+        self.assertEqual(seen, [])
+        self.assertEqual(results["a"]["error"], "skipped: stats failed: Garmin login missing or expired")
+        self.assertEqual([r.getMessage() for r in logs.records],
+                         ["status source failed: source=stats group=login: RuntimeError: " + PENDING_LOGIN])
+        # A call the report deadline never started is skipped, and not logged either.
+        with self.assertNoLogs("garmin_ext.status", level="DEBUG"):
+            results = asyncio.run(sc.fetch_all({"x": sc.call(lambda: 1)}, deadline_s=0))
+        self.assertEqual(results["x"]["error"], "skipped: report deadline reached")
 
     # The exact wording upstream's proxy gives garminconnect's errors.
     HINT = "Garmin Connect may be unreachable; check your network connection or try again later."
@@ -300,17 +634,12 @@ class Fetching(unittest.TestCase):
         ))
 
     def test_empty_first_call_does_not_skip_the_rest(self):
-        hint = self.HINT
-
-        class GarminConnectConnectionError(Exception):
-            pass
-
-        def empty_day():
-            raise GarminConnectConnectionError(f"Garmin Connect request failed: No data received from server. {hint}")
-
-        calls = {"stats": sc.call(empty_day), "a": sc.call(lambda: "a")}
+        empty_day = garmin_error("GarminConnectConnectionError",
+                                 f"Garmin Connect request failed: No data received from server. {self.HINT}")
+        calls = {"stats": sc.call(raiser(empty_day)), "a": sc.call(lambda: "a")}
         results = asyncio.run(sc.fetch_all(calls, first="stats"))
         self.assertFalse(results["stats"]["ok"])
+        self.assertEqual(results["stats"]["error"], "no data from Garmin")
         self.assertEqual(sc.data_of(results["a"]), "a")
 
     def test_systemic_judged_past_the_truncation(self):
@@ -318,9 +647,9 @@ class Fetching(unittest.TestCase):
             raise ConnectionError("x" * 300 + " Max retries exceeded with url")
 
         res = sc.fetch_sync(network_down)
-        self.assertLessEqual(len(res["error"]), 200)
+        self.assertEqual(res["error"], "Garmin Connect did not answer")
         self.assertTrue(res["systemic"])
-        self.assertNotIn("systemic", sc.source_meta({"s": res})["s"])
+        self.assertEqual(set(sc.source_meta({"s": res})["s"]), {"ok", "fetched_at", "ms", "error"})
 
 
 if __name__ == "__main__":

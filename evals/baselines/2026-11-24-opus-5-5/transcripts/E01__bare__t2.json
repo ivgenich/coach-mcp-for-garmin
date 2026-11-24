@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "case_id": "E01",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 2,
+  "started": "2026-11-24T09:12:04Z",
+  "duration_s": 4.194,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_01KWaghSyatViWGvbqYEdW4k",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01KWaghSyatViWGvbqYEdW4k",
+          "content": "Error: Garmin login missing or expired. This server cannot read Garmin data until its owner signs in to Garmin again: run garmin-mcp-auth on the server, then restart it. Retrying will not help until then.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSqQUKEAgUGAI4AUIIdGhpbmtpbmcSDI3/YvzYTChcUINF6xoMUbPYtker6XXBlglXIjDJ/YoM2RNFKyZ7YVesVHjGDv4Bp4mLM/oO/RUV+j88wZJE1slLgs+5Iawc+bcN7iUqxgS9S/ivKKR6gVvhIdH+8kseGTuh2LmEGpKGet+bLu0hoYhdL7lCc5SQB30aOKHact2dYEkWDlcaaOFf0zi7BoHvcB2irvCzkfZxpifrMCRAvZgr7QsFO+lzBg2FY6Ji21wRi0KfSluxkuuxtQAL0cSTuNnBDhTLRL1ZExErHq2V7PdTv8QIY0iUEf9q3mJoSqsf1zWb4066rgc+oee7ng+NYjYvO+Skk79pzzHDBOmpTv0bBpZan1Rnol3BbCBftilmQyfGPkDH35BrAB4UadSfOJ/fxOhUyJ827pVq5YGlWAx1p/DKGM5Kfn3gA200NvcYRogMdq8YlMy7jFv2id8XkJ53rhgkHQiH2yTZHruK/ux47Gdi/CIrOZqc+Y4ZL+BKtbSK4aGnlz6mN8H/22GNhq9dsaL97YCznM3k7Yh2neaZsIMJ2oIWtP8FVnSadmx6YR5nGObDJ7gqPrPvSeCDEE+lJquSuuYKD2oThu3HcAC80pEfeqwFZpCLR6zFu4mLHN+dQn6wosi1gWuCM48gHtnvtKW4ElFgwWR7T3YTFTTGWW8Vg1iyqzn8k/o9xhSUFcsSlxtjhj6fO/PXhKAZSqBCGcc0OP9bkRuwwJ2CotsVb17F/aauww3RsSI77Utz9pfRxBwtKRUd+IYj43e2Wyy2Ur0kIIpsMST8kuiXEf4jq+Me0n+hx1RdavevkP7nvMu/41bFvCC2mQCcllCYBKDNnI4BN1v5AgkB1A83q7diNULuYkum4sQBekM9z741mVUzvVsYAQ==",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I couldn't check how you're doing today because the Garmin connection isn't working. The login on the server has expired or is missing, so it can't read any of your data, including sleep, HRV, training readiness and body battery. Trying again won't help until that's fixed.\n\n**To fix it:** whoever runs the Garmin server needs to run `garmin-mcp-auth` on it to sign in to Garmin again, then restart the server.\n\nOnce that's done, ask again and I'll look at last night's sleep, your HRV and resting heart rate compared with your usual levels, training readiness, your recent training load and anything you have planned for today. Then I can tell you whether it's a good day to train hard or better to take it easy.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin login missing or expired. This server cannot read Garmin data until its owner signs in to Garmin again: run garmin-mcp-auth on the server, then restart it. Retrying will not help until then.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I couldn't check how you're doing today because the Garmin connection isn't working. The login on the server has expired or is missing, so it can't read any of your data, including sleep, HRV, training readiness and body battery. Trying again won't help until that's fixed.\n\n**To fix it:** whoever runs the Garmin server needs to run `garmin-mcp-auth` on it to sign in to Garmin again, then restart the server.\n\nOnce that's done, ask again and I'll look at last night's sleep, your HRV and resting heart rate compared with your usual levels, training readiness, your recent training load and anything you have planned for today. Then I can tell you whether it's a good day to train hard or better to take it easy.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 6,
+    "output_tokens": 297,
+    "cache_read_input_tokens": 22347,
+    "cache_creation_input_tokens": 0
+  },
+  "cost_usd": 0.010433,
+  "error": null,
+  "effort": "medium",
+  "turns": 2,
+  "answers": [
+    "I couldn't check how you're doing today because the Garmin connection isn't working. The login on the server has expired or is missing, so it can't read any of your data, including sleep, HRV, training readiness and body battery. Trying again won't help until that's fixed.\n\n**To fix it:** whoever runs the Garmin server needs to run `garmin-mcp-auth` on it to sign in to Garmin again, then restart the server.\n\nOnce that's done, ask again and I'll look at last night's sleep, your HRV and resting heart rate compared with your usual levels, training readiness, your recent training load and anything you have planned for today. Then I can tell you whether it's a good day to train hard or better to take it easy."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

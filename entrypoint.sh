@@ -1,13 +1,18 @@
 #!/bin/sh
 # Container entrypoint (POSIX sh; /bin/sh is dash in the image).
-#   1. Refuses to start without a usable MCP_BEARER_TOKEN, with Garmin
-#      credentials in the environment, or when launch.py --check-config
-#      rejects the tool settings or REPORT_TZ.
+#   1. Refuses to start with a PORT that is no port number or is 8000 (the
+#      internal garmin-mcp port), with Garmin credentials in the environment, or when
+#      launch.py --check-config rejects the tool settings, GARMIN_AUTH (full
+#      or key) and, for key, GARMIN_PERSONAL_API_KEY, REPORT_TZ,
+#      EDGE_CLIENT_IP_HEADER or the sign-in settings (OWNER_SECRET,
+#      PUBLIC_URL, the optional MCP_BEARER_TOKEN, AUTH_DB,
+#      ALLOWED_REDIRECT_URIS).
 #   2. Runs garmin-mcp on 127.0.0.1:8000 in the background and restarts it if
-#      it exits, and once more when first-time Garmin tokens appear.
+#      it exits, and (full mode) once more when first-time Garmin tokens appear.
 #   3. Replaces itself with Caddy (PID 1), which owns the public $PORT.
-# Only Caddy gets the bearer token; garmin-mcp gets no secret. Secret values
-# are never printed.
+# Python does the sign-in, so it gets OWNER_SECRET, the optional
+# MCP_BEARER_TOKEN and, in key mode, GARMIN_PERSONAL_API_KEY; Caddy is only the
+# edge and gets no secret. Secret values are never printed.
 set -eu
 
 log() { echo "entrypoint: $*" >&2; }
@@ -29,49 +34,75 @@ GARMINTOKENS="${GARMINTOKENS:-/data/tokens}"
 export PORT GARMIN_MCP_TRANSPORT GARMIN_MCP_HOST GARMIN_MCP_PORT \
 	GARMIN_MCP_STATELESS_HTTP GARMINTOKENS
 
-# --- Bearer token: fail closed ----------------------------------------------
-# Caddy pastes this value into the Caddyfile before parsing it, both into a
-# quoted header match and into a URL path. Keeping it to URL-safe characters
-# stops it from closing the quoted string, turning the exact header match into
-# a "*" wildcard match, or adding path segments.
-[ -n "${MCP_BEARER_TOKEN:-}" ] ||
-	die "MCP_BEARER_TOKEN is not set. Set it as a service variable: openssl rand -hex 32"
-case "$MCP_BEARER_TOKEN" in
-*[!A-Za-z0-9._~-]*)
-	die "MCP_BEARER_TOKEN may only contain A-Z a-z 0-9 . _ ~ - (use: openssl rand -hex 32)"
-	;;
+# --- PORT: the public port Caddy listens on ----------------------------------
+# A whole number from 1 to 65535 (no sign, no leading zero), and never
+# GARMIN_MCP_PORT: Caddy proxies to 127.0.0.1:$GARMIN_MCP_PORT, so the two
+# would want the same port and the server would never answer.
+case "$PORT" in
+[1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9]) port_ok=yes ;;
+*) port_ok=no ;;
 esac
-[ "${#MCP_BEARER_TOKEN}" -ge 32 ] ||
-	die "MCP_BEARER_TOKEN is shorter than 32 characters (use: openssl rand -hex 32)"
+{ [ "$port_ok" = yes ] && [ "$PORT" -le 65535 ]; } ||
+	die "PORT must be a whole number from 1 to 65535. Unset it (the default is 8080) or fix it (Railway: service variables; Docker: compose.yaml)."
+[ "$PORT" -ne "$GARMIN_MCP_PORT" ] ||
+	die "PORT must not be $GARMIN_MCP_PORT: that is garmin-mcp's internal port, which Caddy proxies to. Unset PORT (the default is 8080) or pick another port."
 
 # --- Garmin credentials never live in the environment ------------------------
 # With them set, upstream would attempt a password login on every start.
 [ -z "${GARMIN_EMAIL:-}${GARMIN_PASSWORD:-}${GARMIN_EMAIL_FILE:-}${GARMIN_PASSWORD_FILE:-}" ] ||
-	die "GARMIN_EMAIL/GARMIN_PASSWORD (or a *_FILE variant) is set. Delete it; log in once with garmin-mcp-auth over railway ssh instead."
+	die "GARMIN_EMAIL/GARMIN_PASSWORD (or a *_FILE variant) is set. Delete it; in full mode, log in once with garmin-mcp-auth inside the container instead (docs/garmin-login.md)."
 
 # --- Config checks: fail closed, before anything starts ----------------------
 # The read-only tool policy (config/enabled-tools.txt, narrowed only by
 # GARMIN_ENABLED_TOOLS; no write tool, no unknown name, no
-# GARMIN_DISABLED_TOOLS) and REPORT_TZ (required, a valid IANA zone).
-# launch.py prints one line per problem. This runs here, not only inside the
-# supervisor loop below: there a bad setting would make launch.py exit and be
-# restarted forever while Caddy keeps serving.
-env -u MCP_BEARER_TOKEN python /opt/garmin-ext/launch.py --check-config </dev/null ||
-	die "configuration check failed (see the launch: lines above). Fix the service variables and redeploy."
+# GARMIN_DISABLED_TOOLS; in key mode only the tools key mode has),
+# GARMIN_AUTH (required: full or key) and, for key, GARMIN_PERSONAL_API_KEY,
+# REPORT_TZ (required, a valid IANA zone), EDGE_CLIENT_IP_HEADER (unset,
+# X-Real-IP or CF-Connecting-IP) and the sign-in: OWNER_SECRET (required),
+# PUBLIC_URL (or Railway's public domain), the optional MCP_BEARER_TOKEN and
+# ALLOWED_REDIRECT_URIS, and AUTH_DB, which the check creates and opens as the
+# server would. launch.py prints one line per problem, never a secret value.
+# This runs here, not only inside the supervisor loop below: there a bad
+# setting would make launch.py exit and be restarted forever while Caddy keeps
+# serving.
+python /opt/garmin-ext/launch.py --check-config </dev/null ||
+	die "configuration check failed (see the launch: lines above). Fix the settings (Railway: service variables; Docker: .env) and redeploy or restart."
 
-# --- Garmin token directory on the /data volume ------------------------------
-case "$GARMINTOKENS" in
-/data | /data/*)
-	grep -qs ' /data ' /proc/mounts ||
-		log "WARNING: no volume is mounted at /data; Garmin tokens will be lost on the next deploy."
-	;;
+# GARMIN_AUTH is full or key here: the check above refuses anything else.
+case "$(printf '%s' "${GARMIN_AUTH:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+key) key_mode=yes ;;
+*) key_mode=no ;;
 esac
-mkdir -p "$GARMINTOKENS"
-chmod 700 "$GARMINTOKENS"
+
+# --- The /data volume: Garmin tokens and the sign-in database ----------------
+# Both live on the volume by default. Without it they are lost on the next
+# deploy: Garmin needs a new login (full mode) and every Claude app must sign
+# in again. Key mode keeps only a 24-hour access token there, which the server
+# simply fetches again.
+lost=""
+if [ "$key_mode" = no ]; then
+	case "$GARMINTOKENS" in
+	/data | /data/*) lost="Garmin tokens" ;;
+	esac
+fi
+case "${AUTH_DB:-/data/auth.sqlite}" in
+/data | /data/*) lost="${lost:+$lost and }sign-ins" ;;
+esac
+if [ -n "$lost" ] && ! grep -qs ' /data ' /proc/mounts; then
+	log "WARNING: no volume is mounted at /data; $lost will be lost on the next deploy."
+fi
 
 has_tokens() { [ -n "$(ls -A "$GARMINTOKENS" 2>/dev/null)" ]; }
-has_tokens ||
-	log "No Garmin tokens in $GARMINTOKENS yet. One-time login: railway ssh, then garmin-mcp-auth --token-path $GARMINTOKENS. garmin-mcp restarts by itself once the tokens are written."
+if [ "$key_mode" = yes ]; then
+	if has_tokens; then
+		log "GARMIN_AUTH=key: the Garmin account tokens in $GARMINTOKENS are not used. Delete them if you will not switch back to GARMIN_AUTH=full."
+	fi
+else
+	mkdir -p "$GARMINTOKENS"
+	chmod 700 "$GARMINTOKENS"
+	has_tokens ||
+		log "No Garmin tokens in $GARMINTOKENS yet. One-time login inside this container: garmin-mcp-auth --token-path $GARMINTOKENS (Railway: railway ssh first; Docker: docker compose exec app garmin-mcp-auth --token-path $GARMINTOKENS). garmin-mcp restarts by itself once the tokens are written."
+fi
 
 # --- garmin-mcp, supervised in the background --------------------------------
 # To reload tokens later (e.g. after garmin-mcp-auth --force-reauth), run
@@ -79,12 +110,13 @@ has_tokens ||
 pidfile="${TMPDIR:-/tmp}/garmin-mcp.pid"
 (
 	while :; do
+		# Key mode needs no Garmin tokens: never wait for them.
 		had_tokens=no
-		has_tokens && had_tokens=yes
+		if [ "$key_mode" = yes ] || has_tokens; then had_tokens=yes; fi
 		# launch.py runs upstream's garmin-mcp with this repo's extra tools
-		# (ext/README.md). It never gets the bearer token: that is Caddy's
-		# business.
-		env -u MCP_BEARER_TOKEN python /opt/garmin-ext/launch.py </dev/null &
+		# (ext/README.md) and the built-in sign-in, so it gets OWNER_SECRET,
+		# the optional MCP_BEARER_TOKEN and, in key mode, the key.
+		python /opt/garmin-ext/launch.py </dev/null &
 		pid=$!
 		echo "$pid" >"$pidfile"
 		if [ "$had_tokens" = no ]; then
@@ -106,5 +138,8 @@ pidfile="${TMPDIR:-/tmp}/garmin-mcp.pid"
 ) &
 
 # --- Caddy as PID 1 ----------------------------------------------------------
-# Receives Railway's SIGTERM and shuts down cleanly; the container stops with it.
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# Receives the platform's SIGTERM and shuts down cleanly; the container stops
+# with it. Caddy is only the edge (the sign-in is in Python), so it starts
+# without the secrets; env execs it in place, so it stays PID 1. It keeps
+# EDGE_CLIENT_IP_HEADER, which the Caddyfile reads.
+exec env -u OWNER_SECRET -u MCP_BEARER_TOKEN -u GARMIN_PERSONAL_API_KEY caddy run --config /etc/caddy/Caddyfile --adapter caddyfile

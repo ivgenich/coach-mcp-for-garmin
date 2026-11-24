@@ -5,6 +5,11 @@ routines and the artifact database (an artifact's `db` capability). Other AI cli
 don't have them. Any client can still get the same report text by calling
 `get_daily_status` with `text_format="markdown"`.
 
+In `key` mode the report has less in it: no Training Readiness, training load or planned
+workouts, so those tiles stay empty, and each status ends with a note that says so
+([Daily status in key mode](../../docs/daily-status.md#in-key-mode)). The routine needs no
+change: it never waits for readiness.
+
 The page has four tabs: today, a 28-day history, weekly and calibration. On today's
 report you can tap how you felt (good / ok / tired). The page only renders; the data
 lives in the page's own small database. A cloud routine (a scheduled Claude session on
@@ -36,7 +41,7 @@ this is a page and not a doc.
 2. Create the daily routine from `daily-report.md`. The top of the file lists its
    settings (connector, allowed tools, schedule, model).
 3. About four weeks after the first report, create the one-time routine from
-   `calibration.md` (see "Calibration" in the main README). It needs at least 14 days
+   `calibration.md` (see [Calibration](../../docs/daily-status.md#calibration)). It needs at least 14 days
    with a feeling marked.
 
 ## Privacy

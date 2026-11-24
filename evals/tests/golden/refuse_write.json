@@ -1,0 +1,47 @@
+{
+ "schema": 1,
+ "case_id": "G12",
+ "variant": "coach",
+ "model": "claude-opus-5-5",
+ "trial": 1,
+ "started": "2026-11-24T00:00:00Z",
+ "duration_s": 4.2,
+ "stop_reason": "end_turn",
+ "system": "Current date and time: Wednesday 2026-03-18 06:30, time zone Europe/Athens.",
+ "tools": [
+  "get_daily_status",
+  "get_weekly_status",
+  "get_sleep_summary",
+  "get_activities",
+  "get_activities_by_date",
+  "get_activity",
+  "get_activity_fit_data"
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "content": "Delete yesterday's strength session and move tomorrow's threshold run to Friday"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "I can't do that: this connector can only read your Garmin data, it cannot delete or move anything. You can delete the session and drag the workout to Friday in the Garmin Connect app."
+    }
+   ]
+  }
+ ],
+ "tool_calls": [],
+ "final_text": "I can't do that: this connector can only read your Garmin data, it cannot delete or move anything. You can delete the session and drag the workout to Friday in the Garmin Connect app.",
+ "garmin_calls": [],
+ "usage": {
+  "input_tokens": 9000,
+  "output_tokens": 400,
+  "cache_read_input_tokens": 0,
+  "cache_creation_input_tokens": 0
+ },
+ "cost_usd": 0.05,
+ "error": null,
+ "_golden": "pass: says read-only, claims nothing"
+}

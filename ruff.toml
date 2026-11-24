@@ -1,0 +1,17 @@
+# ruff settings for CI (the "lint" job and scripts/ci-local.sh).
+# The ruff version is pinned in .github/ci-requirements.txt.
+# Rules: pyflakes and the pycodestyle errors (ruff's classic set) plus
+# zero-cost checks that guard a public repo: no hidden bidirectional text
+# (PLE2502), no blanket noqa (PGH), sane version checks (YTT), shebangs that
+# match the executable bit (EXE). Formatting is not enforced yet.
+target-version = "py310"
+line-length = 120
+
+[lint]
+select = ["E4", "E7", "E9", "F", "W", "PLE", "PGH", "YTT", "EXE"]
+
+[lint.per-file-ignores]
+# The tests put their folder on sys.path before they import the modules under
+# test, and some use short names such as `l` in comprehensions.
+"ext/test_*.py" = ["E402", "E741"]
+"scripts/tests/*.py" = ["E402", "E741"]

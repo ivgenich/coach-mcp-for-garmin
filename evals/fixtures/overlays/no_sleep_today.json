@@ -1,0 +1,32 @@
+{
+ "note": "E03: the night filed under 2026-03-18 has not synced (Garmin's empty sleep shell); get_sleep_summary then answers the fixed no-sleep text.",
+ "responses": {
+  "get_sleep_data": {
+   "2026-03-18": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-18",
+      "sleepTimeSeconds": null,
+      "napTimeSeconds": null,
+      "sleepWindowConfirmed": false,
+      "sleepWindowConfirmationType": null,
+      "sleepStartTimestampGMT": null,
+      "sleepEndTimestampGMT": null,
+      "sleepStartTimestampLocal": null,
+      "sleepEndTimestampLocal": null,
+      "unmeasurableSleepSeconds": null,
+      "deepSleepSeconds": null,
+      "lightSleepSeconds": null,
+      "remSleepSeconds": null,
+      "awakeSleepSeconds": null,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": null
+     },
+     "remSleepData": false
+    }
+   }
+  }
+ },
+ "faults": {}
+}

@@ -1,0 +1,12 @@
+{
+ "calibrated": false,
+ "agreement": null,
+ "kappa": null,
+ "n_labels": 0,
+ "per_item": {},
+ "judge_model": null,
+ "rubric_hash": null,
+ "thresholds": {"agreement": 0.9, "kappa": 0.6, "min_labels": 40},
+ "updated": null,
+ "note": "Written by evals/judge/label.py (stats --write). Judge checks only report until calibrated is true for the current rubrics.toml hash."
+}

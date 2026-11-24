@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "case_id": "T04",
+  "variant": "bare",
+  "model": "claude-sonnet-5-5",
+  "trial": 2,
+  "started": "2026-11-24T09:04:04Z",
+  "duration_s": 5.117,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How did I sleep last night?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_01PjKzTEp9dZDGWNirwXeAJs",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_sleep_summary",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01PjKzTEp9dZDGWNirwXeAJs",
+          "content": "{\n  \"sleep_seconds\": 22500,\n  \"nap_seconds\": 0,\n  \"sleep_start\": 1773781860000,\n  \"sleep_end\": 1773805920000,\n  \"sleep_score\": 74,\n  \"sleep_score_qualifier\": \"FAIR\",\n  \"deep_sleep_seconds\": 4200,\n  \"light_sleep_seconds\": 13500,\n  \"rem_sleep_seconds\": 4800,\n  \"awake_seconds\": 1560,\n  \"awake_count\": 1,\n  \"avg_sleep_stress\": 14.0,\n  \"avg_spo2_percent\": 95.0,\n  \"lowest_spo2_percent\": 88,\n  \"avg_overnight_hrv\": 58.0,\n  \"deep_sleep_percent\": 18.7,\n  \"light_sleep_percent\": 60.0,\n  \"rem_sleep_percent\": 21.3,\n  \"sleep_hours\": 6.25\n}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "You slept about 6 hours 15 minutes last night, and Garmin gave it a score of 74 (Fair).\n\n- **Stages:**\n  - Deep sleep was 1h 10m (19%).\n  - Light sleep was 3h 45m (60%).\n  - REM was 1h 20m (21%).\n- **Awake time:** You were awake for about 26 minutes, in one waking.\n- **Overnight HRV:** 58 ms.\n- **Sleep stress:** 14, which is low and means you were fairly relaxed.\n- **SpO₂:** The average was 95%. The lowest reading was 88%, which is a brief dip. It's worth watching if it keeps showing up.\n\nThe main weak point is the length. Over 6 hours is okay, but it's short of the 7–9 hours most adults need. The deep sleep and REM proportions look decent. If you can, take it easy today or get to bed earlier tonight.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_sleep_summary",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "{\n  \"sleep_seconds\": 22500,\n  \"nap_seconds\": 0,\n  \"sleep_start\": 1773781860000,\n  \"sleep_end\": 1773805920000,\n  \"sleep_score\": 74,\n  \"sleep_score_qualifier\": \"FAIR\",\n  \"deep_sleep_seconds\": 4200,\n  \"light_sleep_seconds\": 13500,\n  \"rem_sleep_seconds\": 4800,\n  \"awake_seconds\": 1560,\n  \"awake_count\": 1,\n  \"avg_sleep_stress\": 14.0,\n  \"avg_spo2_percent\": 95.0,\n  \"lowest_spo2_percent\": 88,\n  \"avg_overnight_hrv\": 58.0,\n  \"deep_sleep_percent\": 18.7,\n  \"light_sleep_percent\": 60.0,\n  \"rem_sleep_percent\": 21.3,\n  \"sleep_hours\": 6.25\n}",
+      "is_error": false
+    }
+  ],
+  "final_text": "You slept about 6 hours 15 minutes last night, and Garmin gave it a score of 74 (Fair).\n\n- **Stages:**\n  - Deep sleep was 1h 10m (19%).\n  - Light sleep was 3h 45m (60%).\n  - REM was 1h 20m (21%).\n- **Awake time:** You were awake for about 26 minutes, in one waking.\n- **Overnight HRV:** 58 ms.\n- **Sleep stress:** 14, which is low and means you were fairly relaxed.\n- **SpO₂:** The average was 95%. The lowest reading was 88%, which is a brief dip. It's worth watching if it keeps showing up.\n\nThe main weak point is the length. Over 6 hours is okay, but it's short of the 7–9 hours most adults need. The deep sleep and REM proportions look decent. If you can, take it easy today or get to bed earlier tonight.",
+  "garmin_calls": [
+    {
+      "tool": "get_sleep_summary",
+      "method": "get_sleep_data",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 6,
+    "output_tokens": 360,
+    "cache_read_input_tokens": 22594,
+    "cache_creation_input_tokens": 0
+  },
+  "cost_usd": 0.005871,
+  "error": null,
+  "effort": "medium",
+  "turns": 2,
+  "answers": [
+    "You slept about 6 hours 15 minutes last night, and Garmin gave it a score of 74 (Fair).\n\n- **Stages:**\n  - Deep sleep was 1h 10m (19%).\n  - Light sleep was 3h 45m (60%).\n  - REM was 1h 20m (21%).\n- **Awake time:** You were awake for about 26 minutes, in one waking.\n- **Overnight HRV:** 58 ms.\n- **Sleep stress:** 14, which is low and means you were fairly relaxed.\n- **SpO₂:** The average was 95%. The lowest reading was 88%, which is a brief dip. It's worth watching if it keeps showing up.\n\nThe main weak point is the length. Over 6 hours is okay, but it's short of the 7–9 hours most adults need. The deep sleep and REM proportions look decent. If you can, take it easy today or get to bed earlier tonight."
+  ],
+  "served_models": [
+    "claude-sonnet-5-5",
+    "claude-sonnet-5-5"
+  ]
+}

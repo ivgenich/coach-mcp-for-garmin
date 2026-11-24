@@ -8,6 +8,13 @@ calls in worker threads, a few at a time, under a shorter per-call budget, and
 turns every failure into a recorded source with ok=False instead of an
 exception: one missing Garmin endpoint never sinks a whole report, and missing
 data is reported as missing, never guessed.
+
+A failed source carries a fixed phrase from tool_errors (for example "Garmin
+rate limit" or "internal error (ref 1a2b3c4d)"), never the exception text: the
+original text goes to the server log once, redacted, on the "garmin_ext.status"
+logger. When the serial first call of a report fails in a way every other call
+would share (login, rate limit, network, stall), the report raises
+SystemicFailure instead of answering an all-missing status.
 """
 
 from __future__ import annotations
@@ -15,19 +22,25 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import logging
 import os
 import re
 import time
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import tool_errors
+
+log = logging.getLogger("garmin_ext.status")
+
 # The report time zone is REQUIRED and has no default: a baked-in zone would be
 # one person's location in a public build and would silently shift "today" for
 # everyone else. launch.py --check-config refuses to start the server without a
 # valid REPORT_TZ (check_report_tz below). If a tool still runs without one
-# (launch.py started by hand, a test), zone() raises ValueError with a one-line
-# fix and the tool returns it as "Error: REPORT_TZ is not set: ..." instead of
-# crashing or guessing a zone.
+# (launch.py started by hand, a test), zone() raises BadArgument with a
+# one-line fix and the tool answers "Error: REPORT_TZ is not set: ..." instead
+# of crashing or guessing a zone; launch.py's tool-error wrapper then gives the
+# client the internal-error text with a ref and logs the original under it.
 TZ_ENV = "REPORT_TZ"
 TZ_EXAMPLE = "Europe/London"
 _TZ_SHOWN_MAX = 64  # an echoed bad value is cut to this many characters
@@ -54,18 +67,70 @@ _PATH_RE = re.compile(r"/[\w.-]+-service/[^\s'\"<>]*")
 # "API client error (404)"), and upstream's proxy appends the same "may be
 # unreachable; check your network connection" hint to every such error, so
 # neither the class nor the hint can be the test. Network-level failures carry
-# requests/urllib3 wording, matched here.
+# requests/urllib3 wording, matched here. HTTP statuses are matched only in
+# their error forms ("API Error 429", "(429)"): a bare "429" can be part of an
+# id or a trace id in a 404 body. fetch_sync() asks this only for failures the
+# tool_errors table put in the "unavailable" group (login and rate limit are
+# always systemic; no data, bad input and internal errors never are).
 _SYSTEMIC_MARKERS = (
     "authentication", "garmin login", "garmin-mcp-auth", "rate limit",
-    "toomanyrequests", "429", "timeout", "timed out", "did not return within",
-    "max retries exceeded", "failed to establish a new connection",
-    "name resolution", "nodename nor servname", "name or service not known",
-    "connection refused", "connection reset", "connection aborted",
-    "remote end closed", "network is unreachable",
+    "toomanyrequests", "api error 429", "(429)", "returned 429", "api error 401",
+    "(401)", "api error 403", "(403)", "not authenticated", "timeout", "timed out",
+    "did not return within", "max retries exceeded",
+    "failed to establish a new connection", "name resolution",
+    "nodename nor servname", "name or service not known", "connection refused",
+    "connection reset", "connection aborted", "remote end closed",
+    "network is unreachable",
 )
 _UPSTREAM_HINTS = (
     "garmin connect may be unreachable; check your network connection or try again later",
 )
+# The source phrases (tool_errors.source_phrase) of the groups that end a report.
+_SYSTEMIC_PHRASES = frozenset(
+    tool_errors.source_phrase(group)
+    for group in (tool_errors.LOGIN, tool_errors.RATE_LIMITED, tool_errors.UNAVAILABLE)
+)
+_TIMEOUT_PREFIX = "timeout after"  # fetch_all's own timeout: "timeout after 30s"
+# Log level of a failed source by group (contract 5.8); internal errors log at ERROR with the traceback.
+_LOG_LEVELS = {
+    tool_errors.LOGIN: logging.WARNING, tool_errors.RATE_LIMITED: logging.WARNING,
+    tool_errors.UNAVAILABLE: logging.WARNING, tool_errors.BAD_INPUT: logging.INFO,
+    tool_errors.NO_DATA: logging.DEBUG,
+}
+
+
+class BadArgument(tool_errors.KnownFailure, ValueError):
+    """A bad tool argument, or an unset or unknown REPORT_TZ; the text says what to fix.
+
+    The status tools answer it as "Error: <text>". Its text starts the way
+    tool_errors' bad-input rows expect ("date must be YYYY-MM-DD, got ...",
+    "text_format must be ..."), so the tool-error wrapper groups it as bad
+    input; the REPORT_TZ texts group as internal (the server owner fixes them,
+    not the caller).
+    """
+
+
+class NoData(tool_errors.KnownFailure, ValueError):
+    """Garmin has nothing usable for the request (a course without elevation points); groups as no data."""
+
+
+class SystemicFailure(tool_errors.KnownFailure):
+    """The first Garmin call of a report failed in a way every other call
+    would share (login, rate limit, network, stall); no other call was made.
+    str() is the source phrase or fetch_all's 'timeout after Ns'."""
+
+# Key mode (GARMIN_AUTH=key, ext/key_mode.py): Garmin's Personal API has no
+# data for some sources. The status tools never call them: fetch_all(skip=...)
+# records each as "skipped: " + NOT_WITH_KEY, and every key-mode report carries
+# KEY_MODE_NOTE ("key_mode_note", and the last line of its markdown), because
+# claude.ai drops the server instructions that would otherwise explain the gaps.
+NOT_WITH_KEY = "not available with a Garmin Personal API key"
+KEY_MODE_NOTE = ("This server reads Garmin through a Personal API key, so training readiness, training status and "
+                 "load, planned workouts, devices and gear are not available and are listed as missing.")
+
+# The report dates the tools accept: a year inside date.min and date.max (see report_date).
+REPORT_DATE_MIN = dt.date(2, 1, 1)
+REPORT_DATE_MAX = dt.date(9998, 12, 31)
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")  # date.weekday() order
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -79,16 +144,17 @@ def _tz_unset_error() -> str:
 
 
 def _load_zone(name: Any) -> ZoneInfo:
-    """ZoneInfo(name), or ValueError("unknown time zone ...") for anything else.
+    """ZoneInfo(name), or BadArgument("unknown time zone ...") for anything else.
 
     ZoneInfo raises ZoneInfoNotFoundError (a KeyError), ValueError, TypeError
-    or OSError depending on the input; callers get one ValueError type.
+    or OSError depending on the input; callers get one type, BadArgument (a
+    ValueError).
     """
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, TypeError, OSError):
         shown = repr(name)[:_TZ_SHOWN_MAX]
-        raise ValueError(f"unknown time zone {shown}: use an IANA name such as {TZ_EXAMPLE}") from None
+        raise BadArgument(f"unknown time zone {shown}: use an IANA name such as {TZ_EXAMPLE}") from None
 
 
 def check_report_tz(environ: Mapping[str, str]) -> List[str]:
@@ -110,22 +176,22 @@ def check_report_tz(environ: Mapping[str, str]) -> List[str]:
 
 
 def tz_name() -> str:
-    """REPORT_TZ (surrounding spaces dropped). ValueError when unset or blank."""
+    """REPORT_TZ (surrounding spaces dropped). BadArgument (a ValueError) when unset or blank."""
     name = (os.environ.get(TZ_ENV) or "").strip()
     if not name:
-        raise ValueError(_tz_unset_error())
+        raise BadArgument(_tz_unset_error())
     return name
 
 
 def zone(name: Optional[str] = None) -> ZoneInfo:
-    """The zone `name`, else REPORT_TZ. ValueError (clear text) when unset or unknown."""
+    """The zone `name`, else REPORT_TZ. BadArgument (a ValueError, clear text) when unset or unknown."""
     if name:
         return _load_zone(name)
     env_name = tz_name()  # raises when REPORT_TZ is unset
     try:
         return _load_zone(env_name)
     except ValueError as exc:
-        raise ValueError(f"{TZ_ENV}: {exc}") from None
+        raise BadArgument(f"{TZ_ENV}: {exc}") from None
 
 
 def now_local(tz: ZoneInfo) -> dt.datetime:
@@ -136,14 +202,34 @@ def today_local(tz: ZoneInfo) -> dt.date:
     return now_local(tz).date()
 
 
+def report_date(day: dt.date, name: str, value: Any) -> dt.date:
+    """`day` when it lies in REPORT_DATE_MIN..REPORT_DATE_MAX, else BadArgument naming the argument `name`.
+
+    A report also reads the days around its date (the daily status the day
+    before and after it and two more days of HRV, the weekly status 89 days
+    of weigh-ins), and date arithmetic past year 1 or 9999 raises
+    OverflowError, which would answer a bad argument as an internal error.
+    The text names YYYY-MM-DD, so the tool-error wrapper gives the date
+    detail.
+    """
+    if not REPORT_DATE_MIN <= day <= REPORT_DATE_MAX:
+        raise BadArgument(f"{name} must be YYYY-MM-DD between {REPORT_DATE_MIN.isoformat()} and "
+                          f"{REPORT_DATE_MAX.isoformat()}, got {value!r}")
+    return day
+
+
 def parse_date(value: Optional[str], tz: ZoneInfo) -> dt.date:
-    """'' or None -> today in tz; 'YYYY-MM-DD' -> that date; else ValueError."""
+    """'' or None -> today in tz; 'YYYY-MM-DD' -> that date; else BadArgument (a ValueError).
+
+    A date outside REPORT_DATE_MIN..REPORT_DATE_MAX is a BadArgument too (report_date).
+    """
     if value is None or not str(value).strip():
         return today_local(tz)
     try:
-        return dt.date.fromisoformat(str(value).strip())
+        day = dt.date.fromisoformat(str(value).strip())
     except ValueError:
-        raise ValueError(f"date must be YYYY-MM-DD, got {value!r}") from None
+        raise BadArgument(f"date must be YYYY-MM-DD, got {value!r}") from None
+    return report_date(day, "date", value)
 
 
 def iso_now(tz: ZoneInfo) -> str:
@@ -162,7 +248,9 @@ def en_weekday(d: dt.date, short: bool = False) -> str:
     return name[:3] if short else name
 
 
-_RTL_RE = re.compile("[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
+# Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan and their presentation forms
+# (U+FEFF, the byte order mark, is not right-to-left).
+_RTL_RE = re.compile("[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC]")
 
 
 def isolate(name: Any) -> Any:
@@ -277,14 +365,15 @@ def sport_group(type_key: Any) -> str:
 
     Covers running, treadmill_running, trail_running, virtual_run, cycling,
     road_biking, virtual_ride, indoor_cycling, lap_swimming,
-    open_water_swimming and friends.
+    open_water_swimming and friends. Motor sports (motorcycling, ...) are
+    other, not bike.
     """
     key = str(type_key or "").lower()
     if "swim" in key:
         return "swim"
     if "run" in key:
         return "run"
-    if any(part in key for part in ("cycl", "bik", "ride")):
+    if "motor" not in key and any(part in key for part in ("cycl", "bik", "ride")):
         return "bike"
     return "other"
 
@@ -372,7 +461,17 @@ def fetch_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Dict[str, A
     """Run one client call; never raises.
 
     -> {"ok": True, "data": <payload>, "fetched_at", "ms"} or
-       {"ok": False, "error": <short text>, "fetched_at", "ms"}.
+       {"ok": False, "error": <source phrase>, "systemic": <bool>,
+        "_failure": (group, ref, original text, exception), "fetched_at", "ms"}.
+
+    tool_errors.classify_exception() puts a failure in a group; "error" is
+    that group's fixed source phrase ("no data from Garmin", "internal error
+    (ref 1a2b3c4d)" with a new ref, ...), never exception text. "systemic"
+    follows the group: login and rate limit always; Garmin unavailable when
+    the full text names a network failure or a stall (is_systemic_error, on
+    the whole chain text, not a cut copy); never no data, bad input or an
+    internal error, so a bug inside a Garmin call never ends a report.
+    "_failure" is for fetch_all's log line only; fetch_all removes it.
     """
     started = time.monotonic()
     result: Dict[str, Any] = {"fetched_at": _utc_stamp()}
@@ -380,11 +479,13 @@ def fetch_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Dict[str, A
         result["data"] = fn(*args, **kwargs)
         result["ok"] = True
     except Exception as exc:  # noqa: BLE001 - every failure becomes "missing"
+        group, _detail, _root, full = tool_errors.classify_exception(exc)
+        ref = tool_errors.new_ref() if group == tool_errors.INTERNAL else None
         result["ok"] = False
-        result["error"] = clean_error(exc)
-        # Judged on the full text: clean_error() truncates, and a network
-        # error's telling words can sit past the cut.
-        result["systemic"] = is_systemic_error(f"{type(exc).__name__}: {exc}")
+        result["error"] = tool_errors.source_phrase(group, ref)
+        result["systemic"] = group in (tool_errors.LOGIN, tool_errors.RATE_LIMITED) or (
+            group == tool_errors.UNAVAILABLE and is_systemic_error(full))
+        result["_failure"] = (group, ref, full, exc)
     result["ms"] = int((time.monotonic() - started) * 1000)
     return result
 
@@ -401,6 +502,54 @@ def is_systemic_error(error: Any) -> bool:
     return any(marker in text for marker in _SYSTEMIC_MARKERS)
 
 
+def systemic_failure(results: Dict[str, Dict[str, Any]], first: str) -> Optional[str]:
+    """Why a report's serial first call ended the report, or None.
+
+    The first result's error when that call failed systemically (fetch_all
+    then skipped every other call) and the error is the login, rate-limit or
+    Garmin-unavailable source phrase or fetch_all's "timeout after Ns". None
+    when the call succeeded, failed for itself only (no data, bad input, an
+    internal error), or `first` is not in `results`.
+    """
+    res = results.get(first) if isinstance(results, dict) else None
+    if not isinstance(res, dict) or res.get("ok") or not res.get("systemic"):
+        return None
+    error = res.get("error")
+    if isinstance(error, str) and (error in _SYSTEMIC_PHRASES or error.startswith(_TIMEOUT_PREFIX)):
+        return error
+    return None
+
+
+def _log_failure(source: str, group: str, ref: Optional[str], text: Any, exc: Optional[BaseException]) -> None:
+    """One server-log line for a failed source (contract 5.8): its original text, redacted to one line.
+
+    An internal error logs at ERROR with its ref and traceback; the other
+    groups log at WARNING (login, rate limit, Garmin unavailable), INFO (bad
+    input) or DEBUG (no data). `source` is the report's own name for the
+    call, never caller text.
+    """
+    if group == tool_errors.INTERNAL:
+        log.error("status source failed: ref=%s source=%s group=internal: %s", ref, source,
+                  tool_errors.redact(text), exc_info=exc)
+        return
+    level = _LOG_LEVELS.get(group, logging.WARNING)
+    if log.isEnabledFor(level):
+        log.log(level, "status source failed: source=%s group=%s: %s", source, group, tool_errors.redact(text))
+
+
+def unusable_answer(result: Dict[str, Any], source: str, why: str) -> Dict[str, Any]:
+    """A fetch that worked but whose answer cannot be used, recorded as a failed source.
+
+    For an error Garmin reports inside a normal answer (a GraphQL error
+    arrives as HTTP 200 with "data": null): the source gets the Garmin
+    unavailable phrase ("an error on Garmin's side") and one "status source
+    failed:" log line with `why`, a fixed text of the caller's, never
+    Garmin's. The other keys of `result` stay; it is not systemic.
+    """
+    _log_failure(source, tool_errors.UNAVAILABLE, None, why, None)
+    return dict(result, ok=False, error=tool_errors.source_phrase(tool_errors.UNAVAILABLE))
+
+
 async def fetch_all(
     calls: Dict[str, Call],
     *,
@@ -408,18 +557,32 @@ async def fetch_all(
     timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
     concurrency: int = DEFAULT_CONCURRENCY,
     deadline_s: float = DEFAULT_DEADLINE_S,
+    skip: Iterable[str] = frozenset(),
 ) -> Dict[str, Dict[str, Any]]:
-    """Run named calls in worker threads; never raises.
+    """Run named calls in worker threads; never raises (but see `skip`).
 
     `first` runs alone before the rest: garminconnect refreshes its OAuth token
     without a lock, so one serial call lets an expiring token refresh once
     instead of racing in parallel threads. If that call fails with a systemic
-    error (auth, rate limit, network, stall), the others are skipped.
+    error (auth, rate limit, network, stall), the others are skipped
+    (systemic_failure() then names the reason).
 
     A call that outlives timeout_s, or the time left of deadline_s, is recorded
     as failed; its thread is left to finish on its own. Calls that have not
     started when deadline_s runs out are recorded as skipped.
+
+    Each failed call writes one "status source failed:" line to the
+    "garmin_ext.status" log (its own timeouts as group unavailable); skipped
+    calls write none. No returned result holds fetch_sync's "_failure".
+
+    Names in `skip` (key mode: sources Garmin's Personal API does not serve)
+    are never called: each is recorded as "skipped: " + NOT_WITH_KEY, also
+    when a systemic first failure skips the others. `first` in `skip` is a
+    programming error: ValueError, before any call.
     """
+    skip = frozenset(skip)
+    if first is not None and first in skip:
+        raise ValueError(f"fetch_all: first={first!r} is in skip")
     loop = asyncio.get_running_loop()
     t_end = loop.time() + max(0.0, float(deadline_s))
     sem = asyncio.Semaphore(max(1, int(concurrency)))
@@ -442,6 +605,11 @@ async def fetch_all(
                     "ms": int(budget * 1000),
                     "systemic": True,
                 }
+                _log_failure(name, tool_errors.UNAVAILABLE, None, res["error"], None)
+            else:
+                failure = res.pop("_failure", None)
+                if failure is not None:
+                    _log_failure(name, *failure)
         return name, res
 
     results: Dict[str, Dict[str, Any]] = {}
@@ -450,12 +618,21 @@ async def fetch_all(
         results[name] = res
         if not res.get("ok") and res.get("systemic"):
             for other in calls:
-                if other != first:
+                if other in skip:
+                    results[other] = _skipped(NOT_WITH_KEY)
+                elif other != first:
                     results[other] = _skipped(f"{first} failed: {res.get('error')}"[:_ERROR_MAX])
             return results
-    rest = [one(name, spec) for name, spec in calls.items() if name != first]
-    for name, res in await asyncio.gather(*rest):
-        results[name] = res
+    if not skip:
+        rest = [one(name, spec) for name, spec in calls.items() if name != first]
+        for name, res in await asyncio.gather(*rest):
+            results[name] = res
+        return results
+    rest = [one(name, spec) for name, spec in calls.items() if name != first and name not in skip]
+    gathered = dict(await asyncio.gather(*rest))
+    for name in calls:
+        if name != first:
+            results[name] = _skipped(NOT_WITH_KEY) if name in skip else gathered[name]
     return results
 
 

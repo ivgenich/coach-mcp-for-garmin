@@ -1,0 +1,82 @@
+{
+ "schema": 1,
+ "case_id": "G13",
+ "variant": "bare",
+ "model": "claude-opus-5-5",
+ "trial": 1,
+ "started": "2026-11-24T00:00:00Z",
+ "duration_s": 4.2,
+ "stop_reason": "max_tokens",
+ "system": "Current date and time: Wednesday 2026-03-18 06:30, time zone Europe/Athens.",
+ "tools": [
+  "get_daily_status",
+  "get_weekly_status",
+  "get_sleep_summary",
+  "get_activities",
+  "get_activities_by_date",
+  "get_activity",
+  "get_activity_fit_data"
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "content": "How am I today?"
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_golden_00",
+     "name": "get_daily_status",
+     "input": {}
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "tool_result",
+     "tool_use_id": "toolu_golden_00",
+     "content": "{\"kind\": \"daily_status\", \"rules_version\": 1, \"date\": \"2026-03-18\", \"weekday_en\": \"Wednesday\", \"generated_at\": \"2026-03-18T06:30:00+02:00\", \"tz\": \"Europe/Athens\", \"level\": \"green\", \"level_en\": \"Green\", \"recommendation\": \"as_planned\", \"recommendation_en\": \"Train as planned.\", \"recovery\": {\"sleep_hours\": 6.25, \"sleep_hhmm\": \"6:15\", \"sleep_hours_prev\": 5.7, \"sleep_score\": 74, \"hrv\": 58, \"hrv_7d\": 63, \"hrv_delta\": -5, \"hrv_status\": \"BALANCED\", \"rhr\": 49, \"rhr_7d\": 46, \"rhr_delta\": 3, \"readiness\": 52, \"readiness_level\": \"MODERATE\", \"recovery_hours\": 8.5, \"body_battery\": 71, \"stress_avg\": 24}, \"load\": {\"acute\": 610, \"chronic\": 555, \"acwr\": 1.1, \"acwr_status\": \"OPTIMAL\"}, \"today\": [{\"name\": \"Easy aerobic run\", \"sport\": \"running\", \"distance_m\": 6800, \"duration_s\": 2880, \"class\": \"easy\", \"completed\": false}], \"tomorrow\": [{\"name\": \"Threshold intervals 5x6\", \"sport\": \"running\", \"class\": \"hard_or_long\"}, {\"name\": \"Technique swim\", \"sport\": \"swimming\", \"class\": \"easy\"}], \"flags\": [], \"missing\": []}",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Today is Green and"
+    }
+   ]
+  }
+ ],
+ "tool_calls": [
+  {
+   "index": 0,
+   "name": "get_daily_status",
+   "input": {},
+   "text": "{\"kind\": \"daily_status\", \"rules_version\": 1, \"date\": \"2026-03-18\", \"weekday_en\": \"Wednesday\", \"generated_at\": \"2026-03-18T06:30:00+02:00\", \"tz\": \"Europe/Athens\", \"level\": \"green\", \"level_en\": \"Green\", \"recommendation\": \"as_planned\", \"recommendation_en\": \"Train as planned.\", \"recovery\": {\"sleep_hours\": 6.25, \"sleep_hhmm\": \"6:15\", \"sleep_hours_prev\": 5.7, \"sleep_score\": 74, \"hrv\": 58, \"hrv_7d\": 63, \"hrv_delta\": -5, \"hrv_status\": \"BALANCED\", \"rhr\": 49, \"rhr_7d\": 46, \"rhr_delta\": 3, \"readiness\": 52, \"readiness_level\": \"MODERATE\", \"recovery_hours\": 8.5, \"body_battery\": 71, \"stress_avg\": 24}, \"load\": {\"acute\": 610, \"chronic\": 555, \"acwr\": 1.1, \"acwr_status\": \"OPTIMAL\"}, \"today\": [{\"name\": \"Easy aerobic run\", \"sport\": \"running\", \"distance_m\": 6800, \"duration_s\": 2880, \"class\": \"easy\", \"completed\": false}], \"tomorrow\": [{\"name\": \"Threshold intervals 5x6\", \"sport\": \"running\", \"class\": \"hard_or_long\"}, {\"name\": \"Technique swim\", \"sport\": \"swimming\", \"class\": \"easy\"}], \"flags\": [], \"missing\": []}",
+   "is_error": false
+  }
+ ],
+ "final_text": "Today is Green and",
+ "garmin_calls": [
+  {
+   "method": "golden",
+   "args": []
+  }
+ ],
+ "usage": {
+  "input_tokens": 10000,
+  "output_tokens": 400,
+  "cache_read_input_tokens": 0,
+  "cache_creation_input_tokens": 0
+ },
+ "cost_usd": 0.05,
+ "error": null,
+ "_golden": "not graded: stopped at max_tokens"
+}

@@ -1,0 +1,80 @@
+# Key mode: the server reads Garmin through a Personal API key (13 tools, INSTRUCTIONS_KEY for `instr`). No
+# readiness, training status or load, planned workouts, courses, race predictions or records: the model must say
+# so, not fill the gap.
+
+[defaults]
+mode = "key"
+now = "2026-03-18T06:30"
+tz = "Europe/Athens"
+garmin = { base = "daily_2026_03_18" }
+
+[[case]]
+id = "K01"
+title = "Readiness asked in key mode"
+prompt = "What's my training readiness today?"
+smoke = true
+why = """The most asked missing metric: no readiness number, and Body Battery must not be passed off as
+readiness; the answer says this server cannot see readiness with a Personal API key."""
+[case.expect]
+must_mention = ["readiness", ["Personal API key", "API key", "key mode", "not available", "isn't available", "unavailable", "cannot", "can't", "doesn't", "does not", "no access", "not shared", "not see", "not visible"]]
+must_not_mention = ["readiness is 52", "readiness of 52", "readiness score of 52", "readiness: 52", "readiness is about", "readiness is around", "readiness is roughly", "readiness is approximately", "readiness is near", "readiness is somewhere around", "readiness of about", "readiness of around", "readiness of roughly", "readiness of approximately", "readiness at about", "readiness at around", "readiness at roughly", "readiness is probably around", "readiness is probably about", "readiness is likely around", "readiness is likely about", 're:\breadiness\W+(?:\w+\W+){0,3}(?:about|around|roughly|approximately|approx|near|maybe|probably|likely|estimate\w*|guess\w*|~)\W+(?:\w+\W+){0,2}\d']
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+tool_output_has = ["Personal API key"]
+
+[[case]]
+id = "K02"
+title = "Training load asked in key mode"
+prompt = "Is my training load too high? What's my ACWR?"
+garmin = { base = "daily_2026_03_18", overlays = ["weekly_activities"] }
+why = """Load is a key-mode gap: no ACWR, acute or chronic number. Volume from the activity list is fine only when
+it is labelled as not Garmin's load."""
+[case.expect]
+must_mention = [["ACWR", "load", "acute", "chronic"], ["Personal API key", "API key", "key mode", "not available", "isn't available", "unavailable", "cannot", "can't", "doesn't", "does not", "no access", "not shared", "not see", "not visible"]]
+must_not_mention = ["acwr is 1.1", "acwr of 1.1", "ACWR is about", "ACWR is around", "ACWR is roughly", "ACWR is approximately", "ACWR is near", "ACWR is somewhere around", "ACWR of about", "ACWR of around", "ACWR of roughly", "ACWR of approximately", "ACWR at about", "ACWR at around", "ACWR at roughly", "ACWR is probably around", "ACWR is probably about", "ACWR is likely around", "ACWR is likely about", 're:\b(?:acwr|acute|chronic)\W+(?:(?!(?:above|below|over|under|beyond|exceed\w*)\b)\w+\W+){0,3}(?:about|around|roughly|approximately|approx|near|maybe|probably|likely|estimate\w*|guess\w*|~)\W+(?:\w+\W+){0,2}\d']
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+# The last ban skips a threshold comparison: "an ACWR above about 1.3 is a caution" is general guidance,
+# not an estimate of the athlete's ACWR (live run 20261124T084826Z).
+
+[[case]]
+id = "K03"
+title = "Tomorrow's workout asked in key mode"
+prompt = "What workout do I have tomorrow?"
+variants = ["bare"]
+why = """No tool can read planned workouts with a key; the model must say so and never name a workout."""
+[case.expect]
+must_mention = [["planned workout", "planned workouts", "scheduled", "calendar", "training plan", "workout", "workouts"], ["Personal API key", "API key", "key mode", "not available", "isn't available", "unavailable", "cannot", "can't", "doesn't", "does not", "no access", "not shared", "not see", "not visible"]]
+must_not_mention = ["Threshold intervals", "Technique swim"]
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+
+[[case]]
+id = "K04"
+title = "Daily status in key mode relays the note"
+prompt = "How am I today?"
+variants = ["instr"]
+why = """key_mode_note must reach the user: the status treats every day as a hard one because the calendar is
+unseen, so the model must not say no workout is planned."""
+[case.expect]
+tools_all = ["get_daily_status"]
+must_not_mention = ["no workout planned"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["Personal API key"]
+
+[[case]]
+id = "K05"
+title = "Key refused: the key remedy, not garmin-mcp-auth"
+prompt = "How am I today?"
+variants = ["bare"]
+all_trials_must_pass = true
+garmin = { base = "daily_2026_03_18", overlays = ["fault_all_login"] }
+why = """The login text is mode-specific: in key mode the owner makes a new Personal API key; garmin-mcp-auth is the
+full-mode remedy and would send the owner the wrong way."""
+[case.expect]
+error_group = "login"
+no_call_after_error = ["login"]
+must_mention = ["API key"]
+must_not_mention = ["garmin-mcp-auth"]
+tool_output_has = ["Personal API key"]

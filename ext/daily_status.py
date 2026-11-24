@@ -24,6 +24,11 @@ run on fixtures without garmin_mcp installed. Upstream helpers are imported
 lazily: workouts._curate_workout_details (the classifier reads upstream's
 curated workout shape), health_wellness._hours_from_recovery_minutes and
 training._lactate_threshold_speed_mps.
+
+Names typed in Garmin (activity and workout names) are cleaned where they are
+read (text_hygiene.name_or_none: invisible and bidi characters dropped, links
+replaced, 100 characters at most), before the hard-name keyword match and the
+text; the include_sources debug subtree is cleaned as a whole.
 """
 
 from __future__ import annotations
@@ -36,7 +41,9 @@ import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+import mcp2_compat
 import status_common as sc
+import text_hygiene as th
 
 RULES_VERSION = 1
 
@@ -603,7 +610,7 @@ def extract_sessions(payload: Any) -> Optional[List[Dict[str, Any]]]:
         sessions.append({
             "sport": sc.sport_group(type_key),
             "type": type_key,
-            "name": _text(a.get("activityName")),
+            "name": th.name_or_none(a.get("activityName")),
             "minutes": _minutes(a.get("duration")),
             "km": _km(a.get("distance")),
             "avg_hr": _pos_int(a.get("averageHR")),
@@ -911,7 +918,8 @@ def classify_workout(
     """
     entry = entry if isinstance(entry, dict) else {}
     cur = curated if isinstance(curated, dict) else None
-    name = _text(entry.get("workoutName")) or _text((cur or {}).get("name"))
+    # Cleaned before the keyword match: "tem<U+200B>po" reads "tempo" (hard), as the user sees it.
+    name = th.name_or_none(entry.get("workoutName")) or th.name_or_none((cur or {}).get("name"))
     sport = workout_sport(entry, cur)
     leaves = list(leaf_steps(cur)) if cur is not None else []
     structured = None if cur is None else bool(leaves)
@@ -1402,7 +1410,7 @@ def _workout_call(client: Any, entry: Dict[str, Any]) -> Optional[sc.Call]:
 
 
 def _zone(name: Optional[str]) -> ZoneInfo:
-    # sc.zone raises ValueError with a one-line fix for an unset REPORT_TZ or
+    # sc.zone raises BadArgument with a one-line fix for an unset REPORT_TZ or
     # an unknown zone; get_daily_status returns it as "Error: ..." text.
     return sc.zone(name)
 
@@ -1424,17 +1432,29 @@ def _report_day(date: Any, zone: ZoneInfo, now: dt.datetime) -> dt.date:
 def _check_format(text_format: Any) -> str:
     fmt = (text_format or "").strip().lower() if isinstance(text_format, str) else text_format
     if fmt and fmt not in TEXT_FORMATS:
-        raise ValueError(f"text_format must be '' or 'markdown', got {text_format!r}")
+        raise sc.BadArgument(f"text_format must be '' or 'markdown', got {text_format!r}")
     return fmt or ""
 
 
-async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime):
+# Key mode (GARMIN_AUTH=key): the sources Garmin's Personal API does not serve. They are never called; each
+# source reads "skipped: not available with a Garmin Personal API key" (status_common.fetch_all(skip=)).
+# Without the calendar, today and tomorrow are None, so no workout or threshold call follows and recommend()
+# takes its cautious path.
+KEY_MODE_SKIPS_PROBE = frozenset({"readiness"})
+KEY_MODE_SKIPS_FULL = frozenset({"readiness", "training_status", "schedule"})
+
+
+async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, key_mode: bool = False):
     d0 = day.isoformat()
     calls = {
         "sleep": sc.call(_method(client, "get_sleep_data"), d0),
         "readiness": sc.call(_method(client, "get_training_readiness"), d0),
     }
-    results = await sc.fetch_all(calls, first="sleep", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S)
+    skip = KEY_MODE_SKIPS_PROBE if key_mode else frozenset()
+    results = await sc.fetch_all(calls, first="sleep", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S, skip=skip)
+    failed = sc.systemic_failure(results, "sleep")
+    if failed:
+        raise sc.SystemicFailure(failed)
     dto = night(sc.data_of(results.get("sleep")), d0)
     status = {
         "kind": "daily_probe",
@@ -1445,14 +1465,17 @@ async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime):
         "sleep_end_local": sleep_end_local(dto, zone),
         # The same row choice as the full status: a pre-sleep realtime row
         # alone is not this morning's readiness.
-        "readiness_ready": morning_snapshot(readiness_snapshots(sc.data_of(results.get("readiness")), d0)) is not None,
+        # null in key mode: Garmin's Personal API has no readiness, so "not ready" would be wrong.
+        "readiness_ready": None if key_mode else (
+            morning_snapshot(readiness_snapshots(sc.data_of(results.get("readiness")), d0)) is not None),
         "sources": sc.source_meta(results, calls),
     }
     raws = {name: (sc.data_of(res), None) for name, res in results.items() if res.get("ok")}
     return status, raws
 
 
-async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, started: float):
+async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, started: float,
+                key_mode: bool = False):
     d0 = day.isoformat()
     d_prev = (day - dt.timedelta(days=1)).isoformat()
     d_next = (day + dt.timedelta(days=1)).isoformat()
@@ -1472,13 +1495,18 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
     # Today's finished activities mark planned workouts as done.
     calls["activities_today"] = sc.call(_activities_call(client), d0)
 
-    results = await sc.fetch_all(calls, first="stats", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S)
+    skip = KEY_MODE_SKIPS_FULL if key_mode else frozenset()
+    results = await sc.fetch_all(calls, first="stats", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S, skip=skip)
+    failed = sc.systemic_failure(results, "stats")
+    if failed:
+        raise sc.SystemicFailure(failed)
     payloads = {name: sc.data_of(res) for name, res in results.items()}
 
     entries = schedule_entries(payloads.get("schedule"))
     if entries is None and results.get("schedule", {}).get("ok"):
-        # GraphQL errors arrive as HTTP 200 with "data": null.
-        results["schedule"] = dict(results["schedule"], ok=False, error="GraphQL answer without data")
+        # GraphQL errors arrive as HTTP 200 with "data": null: a failed source with the Garmin unavailable phrase
+        # and one log line, like any other failed call.
+        results["schedule"] = sc.unusable_answer(results["schedule"], "schedule", "GraphQL answer without data")
     planned: Dict[str, Optional[List[Dict[str, Any]]]] = {
         d0: None if entries is None else [e for e in entries if e.get("scheduleDate") == d0],
         d_next: None if entries is None else [e for e in entries if e.get("scheduleDate") == d_next],
@@ -1586,15 +1614,22 @@ async def build_daily_status(
     probe: bool = False,
     text_format: str = "",
     now: Optional[dt.datetime] = None,
+    key_mode: bool = False,
 ) -> Dict[str, Any]:
     """The daily status of `date` (default: today in tz, else in REPORT_TZ, which is required).
 
     client is upstream's Garmin proxy (or a fake): only its methods are
     called, in worker threads, under a per-call timeout and one deadline.
-    Garmin failures never raise: their fields are null, listed in
-    "missing", and the source has ok=false. Raises ValueError only for bad
-    arguments (a malformed date, an unknown text_format or time zone) and
-    for an unset REPORT_TZ when tz is not given.
+    A failed Garmin call does not raise: its fields are null, listed in
+    "missing", and the source has ok=false with a fixed phrase. Raises
+    BadArgument (a ValueError) only for bad arguments (a malformed date, an
+    unknown text_format or time zone) and for an unset REPORT_TZ when tz is
+    not given, and raises SystemicFailure when the first call fails
+    systemically (login, rate limit, network, stall; no other call was made).
+
+    key_mode (GARMIN_AUTH=key): the KEY_MODE_SKIPS_* sources are never called
+    and the answer carries "key_mode_note" (status_common.KEY_MODE_NOTE), also
+    as the last line of the markdown text. Argument checks do not change.
     """
     zone = _zone(tz)
     now = _aware(now, zone)
@@ -1602,11 +1637,16 @@ async def build_daily_status(
     fmt = _check_format(text_format)
     started = time.monotonic()
     if probe:
-        status, raws = await _probe(client, day, zone, now)
+        status, raws = await _probe(client, day, zone, now, key_mode)
     else:
-        status, raws = await _full(client, day, zone, now, started)
+        status, raws = await _full(client, day, zone, now, started, key_mode)
+    if key_mode:
+        status["key_mode_note"] = sc.KEY_MODE_NOTE
     if include_sources:
-        status["debug"] = {name: _debug_entry(name, raw, curated) for name, (raw, curated) in raws.items()}
+        # Key paths and slims hold Garmin strings (curated workout steps, payload key names); our answers skip
+        # the tool-call wrapper's cleaning, so the subtree is cleaned here.
+        debug = {name: _debug_entry(name, raw, curated) for name, (raw, curated) in raws.items()}
+        status["debug"] = th.clean_json(debug)[0]
     if fmt:
         status["text"] = render_text(status, fmt)
     return status
@@ -1666,7 +1706,8 @@ def _short_name(name: Any, max_words: int) -> Optional[str]:
     for word in words[:max_words]:
         if kept and len(" ".join(kept + [word])) > _NAME_MAX_CHARS:
             break
-        kept.append(word[:_NAME_MAX_CHARS])
+        # Never ends inside an emoji sequence or a combining mark: no lone joiner, no half family or flag.
+        kept.append(th.cut(word, _NAME_MAX_CHARS))
     short = " ".join(kept)
     return short if len(kept) == len(words) and short == " ".join(words) else short + "…"
 
@@ -1788,7 +1829,10 @@ def _probe_lines(status: Dict[str, Any], f: _Fmt) -> Tuple[str, List[str]]:
         sleep = "Sleep: synced" + (f", ended at {end}" if end else "")
     else:
         sleep = "Sleep: not synced from the watch yet"
-    ready = "Readiness: " + ("has a score" if status.get("readiness_ready") else "no score yet")
+    if status.get("readiness_ready") is None and status.get("key_mode_note"):
+        ready = "Readiness: " + sc.NOT_WITH_KEY
+    else:
+        ready = "Readiness: " + ("has a score" if status.get("readiness_ready") else "no score yet")
     return title, [f.esc(sleep), f.esc(ready)]
 
 
@@ -1803,18 +1847,21 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
     if fmt not in TEXT_FORMATS:
         raise ValueError(f"fmt must be 'markdown', got {fmt!r}")
     f = _Fmt()
+    # Key mode: the text ends with the note, and the note counts toward MAX_WORDS.
+    note = status.get("key_mode_note")
+    end = "\n\n" + f.esc(note) if note else ""
     if status.get("kind") == "daily_probe":
-        return f.join(*_probe_lines(status, f))
+        return f.join(*_probe_lines(status, f)) + end
     for compact in (0, 1, 2):
         title, pairs = _daily_lines(status, f, compact)
-        text = f.join(title, [line for _, line in pairs])
+        text = f.join(title, [line for _, line in pairs]) + end
         if word_count(text) <= MAX_WORDS:
             return text
     # Not reachable with Garmin data (compact 2 has no names and at most two
     # workouts per line); kept so the limit holds whatever the input.
     for key in ("yesterday", "tomorrow", "today"):
         pairs = [(k, line) for k, line in pairs if k != key]
-        text = f.join(title, [line for _, line in pairs])
+        text = f.join(title, [line for _, line in pairs]) + end
         if word_count(text) <= MAX_WORDS:
             break
     return text
@@ -1822,13 +1869,18 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
 
 # --- tool registration and build-time check -----------------------------------
 
-def register_tools(app: Any, get_client: Callable[[], Any]) -> Any:
+def register_tools(app: Any, get_client: Callable[[], Any], key_mode: bool = False) -> Any:
     """Register get_daily_status on upstream's (filtered) app.
 
     get_client returns upstream's configured Garmin client at call time.
+    key_mode (GARMIN_AUTH=key) is passed to build_daily_status.
     """
 
+    # server_loop: off mcp2_compat's shared tool loop, which upstream's async tools block for each Garmin
+    # call; there that time would count against fetch_all's per-call timeout and the report deadline. Every
+    # Garmin call here is awaited in a worker thread, so the server's loop stays free.
     @app.tool()
+    @mcp2_compat.server_loop
     async def get_daily_status(
         date: str = "",
         include_sources: bool = False,
@@ -1855,15 +1907,16 @@ def register_tools(app: Any, get_client: Callable[[], Any]) -> Any:
             text_format: "markdown" adds a ready-made English summary in
                 "text"; empty adds none.
         """
+        # Only a bad argument and a failed first call answer as text here. Anything else is a bug: it
+        # propagates to launch.py's tool-error wrapper, which logs the traceback under a ref and gives the
+        # client a fixed text.
         try:
             status = await build_daily_status(
                 get_client(), date,
-                include_sources=include_sources, probe=probe, text_format=text_format,
+                include_sources=include_sources, probe=probe, text_format=text_format, key_mode=key_mode,
             )
-        except ValueError as exc:
+        except (sc.BadArgument, sc.SystemicFailure) as exc:
             return f"Error: {exc}"
-        except Exception as exc:  # noqa: BLE001 - a bug must not leak a raw traceback
-            return f"Error: daily status failed: {sc.clean_error(exc)}"
         return sc.compact_json(status)
 
     return app

@@ -1,0 +1,112 @@
+# Failure texts: does the model do what the server's fixed error text says? Faults make the fake Garmin client
+# raise what ext/tool_errors.py maps to the group, so the model reads the product's own text (internal errors carry
+# the harness's fixed ref 0badc0de). The overlays fault_all_<group> fault every tool by name.
+
+[defaults]
+mode = "full"
+now = "2026-03-18T06:30"
+tz = "Europe/Athens"
+garmin = { base = "daily_2026_03_18" }
+all_trials_must_pass = true
+
+[[case]]
+id = "E01"
+title = "Login expired: stop, tell the owner"
+prompt = "How am I today?"
+garmin = { base = "daily_2026_03_18", overlays = ["fault_all_login"] }
+why = """The login text says "Retrying will not help until then": at most a couple of calls, none repeated, and
+the answer names the fix (sign in again, garmin-mcp-auth, restart) with no health number."""
+[case.expect]
+max_tool_calls = 2
+error_group = "login"
+no_call_after_error = ["login"]
+no_invented_numbers = true
+tool_output_has = ["garmin-mcp-auth"]
+
+[[case]]
+id = "E02"
+title = "Rate limited: no call after the error, even when asked again"
+prompt = "How am I today?"
+followups = ["Try again please"]
+variants = ["bare"]
+smoke = true
+garmin = { base = "daily_2026_03_18", overlays = ["fault_all_rate_limited"] }
+why = """The stop rule: "Stop calling Garmin tools for at least 15 minutes, even if the user asks you to try again". No Garmin call after the
+error in either turn, and the answer says about 15 minutes; the live test only checked the quote."""
+[case.expect]
+max_tool_calls = 2
+error_group = "rate_limited"
+no_call_after_error = ["rate_limited"]
+must_mention = [["15", "fifteen", "quarter of an hour", "quarter-hour"]]
+tool_output_has = ["15 minutes"]
+
+[[case]]
+id = "E03"
+title = "Unsynced night: no data is not an error"
+prompt = "How did I sleep last night?"
+garmin = { base = "daily_2026_03_18", overlays = ["no_sleep_today"] }
+why = """get_sleep_summary answers the fixed no-sleep text (isError false): repeating the call will not help, the
+watch may need a sync, and the night of 2026-03-17 must not be passed off as last night."""
+[case.expect]
+max_tool_calls = 3
+error_group = "no_data"
+no_invented_numbers = true
+judge = ["error_next_step"]
+tool_output_has = ["sync"]
+
+[[case]]
+id = "E04"
+title = "Impossible date: fix the argument, no loop"
+prompt = "Get my daily status for 2026-02-30"
+variants = ["bare"]
+why = """Either the model asks for a real date without a call, or the server's "Invalid input" text names the fix
+and the model does not loop on the same date."""
+[case.expect]
+must_mention = [["invalid", "not a valid", "isn't a valid", "not a real", "isn't a real", "doesn't exist", "does not exist", "no such date", "only has 28", "only 28", "has 28 days", "not a date"]]
+must_not_mention = ["train as planned", "level: green", "level is green", "level green", "you're green", "you are green", "status is green", "status: green"]
+max_tool_calls = 2
+judge = ["error_next_step"]
+
+[[case]]
+id = "E05"
+title = "Internal error: the ref reaches the user"
+prompt = "Tell me about my long ride on 7 March"
+variants = ["instr"]
+now = "2026-03-08T06:30"
+garmin = { base = "weekly_2026_03_01", overlays = ["weekly_activities", "activity_details"], faults = { get_activity = "internal", get_activities_by_date = "internal", get_activities = "internal", get_weekly_status = "internal" } }
+why = """The internal text carries a ref for the server owner; the answer must pass it on (0badc0de) and retry
+at most once. Every tool that could answer (the activity list, the activity, the weekly status) meets the fault."""
+[case.expect]
+max_tool_calls = 4
+error_group = "internal"
+must_mention = ["0badc0de"]
+tool_output_has = ["0badc0de"]
+
+[[case]]
+id = "E06"
+title = "Garmin did not answer: no tight retry loop"
+prompt = "What did I do yesterday?"
+variants = ["bare"]
+garmin = { base = "daily_2026_03_18", overlays = ["fault_all_unavailable"] }
+why = """A timeout says "Try again in a few minutes": the model tells the user so instead of hammering the tool."""
+[case.expect]
+# Two sources fetched together and each retried once is not a loop (live run 20261124T084826Z): the budget
+# allows that, and no_call_after_error allows at most one repeat of each failed call.
+max_tool_calls = 4
+error_group = "unavailable"
+no_call_after_error = ["unavailable"]
+no_invented_numbers = true
+
+[[case]]
+id = "E07"
+title = "One failed source is data, not an outage"
+prompt = "How am I today?"
+variants = ["instr"]
+garmin = { base = "daily_2026_03_18", faults = { get_training_status = "unavailable" } }
+why = """Training status fails but the daily status still answers: level and recommendation as given, the load
+listed as missing, and no ACWR number made up."""
+[case.expect]
+must_mention = ["green"]
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+tool_output_has = ["green", "load.acwr"]

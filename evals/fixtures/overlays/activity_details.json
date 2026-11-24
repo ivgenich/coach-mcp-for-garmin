@@ -1,0 +1,563 @@
+{
+ "note": "get_activity details for every A0 activity (ids 73000001-73000017), built from the list rows.",
+ "responses": {
+  "get_activity": {
+   "73000008": {
+    "$replace": {
+     "activityId": 73000008,
+     "activityName": "Synthetic Strength",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "strength_training",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-07T11:00:00.0",
+      "startTimeGMT": "2026-03-07T09:00:00.0",
+      "duration": 1800.0,
+      "movingDuration": 1780.0,
+      "elapsedDuration": 1830.0,
+      "distance": 0.0,
+      "averageHR": 104,
+      "maxHR": 125,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 36.0
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000007": {
+    "$replace": {
+     "activityId": 73000007,
+     "activityName": "Synthetic Long Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "road_biking",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-07T07:30:00.0",
+      "startTimeGMT": "2026-03-07T05:30:00.0",
+      "duration": 11100.0,
+      "movingDuration": 11080.0,
+      "elapsedDuration": 11130.0,
+      "distance": 92400.0,
+      "averageHR": 132,
+      "maxHR": 153,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 222.0,
+      "averageSpeed": 8.324,
+      "averagePower": 196
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000006": {
+    "$replace": {
+     "activityId": 73000006,
+     "activityName": "Synthetic Long Run",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-06T06:05:00.0",
+      "startTimeGMT": "2026-03-06T04:05:00.0",
+      "duration": 4800.0,
+      "movingDuration": 4780.0,
+      "elapsedDuration": 4830.0,
+      "distance": 15200.0,
+      "averageHR": 141,
+      "maxHR": 162,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 96.0,
+      "averageSpeed": 3.167,
+      "averagePower": 251
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000005": {
+    "$replace": {
+     "activityId": 73000005,
+     "activityName": "Synthetic Trainer Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-05T06:30:00.0",
+      "startTimeGMT": "2026-03-05T04:30:00.0",
+      "duration": 3600.0,
+      "movingDuration": 3580.0,
+      "elapsedDuration": 3630.0,
+      "distance": 30000.0,
+      "averageHR": 128,
+      "maxHR": 149,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 72.0,
+      "averageSpeed": 8.333,
+      "averagePower": 188
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000004": {
+    "$replace": {
+     "activityId": 73000004,
+     "activityName": "Synthetic Pool Swim",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-04T06:00:00.0",
+      "startTimeGMT": "2026-03-04T04:00:00.0",
+      "duration": 2700.0,
+      "movingDuration": 2680.0,
+      "elapsedDuration": 2730.0,
+      "distance": 2200.0,
+      "averageHR": 112,
+      "maxHR": 133,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 54.0,
+      "averageSpeed": 0.815
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000003": {
+    "$replace": {
+     "activityId": 73000003,
+     "activityName": "Synthetic Easy Run",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-03T18:00:00.0",
+      "startTimeGMT": "2026-03-03T16:00:00.0",
+      "duration": 3300.0,
+      "movingDuration": 3280.0,
+      "elapsedDuration": 3330.0,
+      "distance": 10500.0,
+      "averageHR": 133,
+      "maxHR": 154,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 66.0,
+      "averageSpeed": 3.182,
+      "averagePower": 238
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000002": {
+    "$replace": {
+     "activityId": 73000002,
+     "activityName": "Synthetic Pool Swim",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-02T06:10:00.0",
+      "startTimeGMT": "2026-03-02T04:10:00.0",
+      "duration": 3000.0,
+      "movingDuration": 2980.0,
+      "elapsedDuration": 3030.0,
+      "distance": 2500.0,
+      "averageHR": 115,
+      "maxHR": 136,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 60.0,
+      "averageSpeed": 0.833
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000001": {
+    "$replace": {
+     "activityId": 73000001,
+     "activityName": "Synthetic Endurance Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-03-01T07:00:00.0",
+      "startTimeGMT": "2026-03-01T05:00:00.0",
+      "duration": 5400.0,
+      "movingDuration": 5380.0,
+      "elapsedDuration": 5430.0,
+      "distance": 45000.0,
+      "averageHR": 125,
+      "maxHR": 146,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 108.0,
+      "averageSpeed": 8.333,
+      "averagePower": 182
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000016": {
+    "$replace": {
+     "activityId": 73000016,
+     "activityName": "Synthetic Late Treadmill",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "treadmill_running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-28T23:59:30.0",
+      "startTimeGMT": "2026-02-28T21:59:30.0",
+      "duration": 1200.0,
+      "movingDuration": 1180.0,
+      "elapsedDuration": 1230.0,
+      "distance": 4000.0,
+      "averageHR": 130,
+      "maxHR": 151,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 24.0,
+      "averageSpeed": 3.333,
+      "averagePower": 230
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000015": {
+    "$replace": {
+     "activityId": 73000015,
+     "activityName": "Synthetic Trainer Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-28T07:00:00.0",
+      "startTimeGMT": "2026-02-28T05:00:00.0",
+      "duration": 3600.0,
+      "movingDuration": 3580.0,
+      "elapsedDuration": 3630.0,
+      "distance": 29000.0,
+      "averageHR": 127,
+      "maxHR": 148,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 72.0,
+      "averageSpeed": 8.056,
+      "averagePower": 185
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000014": {
+    "$replace": {
+     "activityId": 73000014,
+     "activityName": "Synthetic Long Run",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-27T06:05:00.0",
+      "startTimeGMT": "2026-02-27T04:05:00.0",
+      "duration": 4200.0,
+      "movingDuration": 4180.0,
+      "elapsedDuration": 4230.0,
+      "distance": 13400.0,
+      "averageHR": 140,
+      "maxHR": 161,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 84.0,
+      "averageSpeed": 3.19,
+      "averagePower": 249
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000013": {
+    "$replace": {
+     "activityId": 73000013,
+     "activityName": "Synthetic Trainer Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "virtual_ride",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-26T06:30:00.0",
+      "startTimeGMT": "2026-02-26T04:30:00.0",
+      "duration": 4500.0,
+      "movingDuration": 4480.0,
+      "elapsedDuration": 4530.0,
+      "distance": 36000.0,
+      "averageHR": 129,
+      "maxHR": 150,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 90.0,
+      "averageSpeed": 8.0,
+      "averagePower": 190
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000012": {
+    "$replace": {
+     "activityId": 73000012,
+     "activityName": "Synthetic Pool Swim",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-25T06:00:00.0",
+      "startTimeGMT": "2026-02-25T04:00:00.0",
+      "duration": 3000.0,
+      "movingDuration": 2980.0,
+      "elapsedDuration": 3030.0,
+      "distance": 2600.0,
+      "averageHR": 113,
+      "maxHR": 134,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 60.0,
+      "averageSpeed": 0.867
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000011": {
+    "$replace": {
+     "activityId": 73000011,
+     "activityName": "Synthetic Easy Run",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-24T18:00:00.0",
+      "startTimeGMT": "2026-02-24T16:00:00.0",
+      "duration": 3000.0,
+      "movingDuration": 2980.0,
+      "elapsedDuration": 3030.0,
+      "distance": 9800.0,
+      "averageHR": 131,
+      "maxHR": 152,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 60.0,
+      "averageSpeed": 3.267,
+      "averagePower": 236
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000010": {
+    "$replace": {
+     "activityId": 73000010,
+     "activityName": "Synthetic Pool Swim",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "lap_swimming",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-23T06:10:00.0",
+      "startTimeGMT": "2026-02-23T04:10:00.0",
+      "duration": 2700.0,
+      "movingDuration": 2680.0,
+      "elapsedDuration": 2730.0,
+      "distance": 2300.0,
+      "averageHR": 114,
+      "maxHR": 135,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 54.0,
+      "averageSpeed": 0.852
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000009": {
+    "$replace": {
+     "activityId": 73000009,
+     "activityName": "Synthetic Long Ride",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "road_biking",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-22T07:00:00.0",
+      "startTimeGMT": "2026-02-22T05:00:00.0",
+      "duration": 9000.0,
+      "movingDuration": 8980.0,
+      "elapsedDuration": 9030.0,
+      "distance": 75000.0,
+      "averageHR": 130,
+      "maxHR": 151,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 180.0,
+      "averageSpeed": 8.333,
+      "averagePower": 192
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   },
+   "73000017": {
+    "$replace": {
+     "activityId": 73000017,
+     "activityName": "Synthetic Old Run",
+     "description": null,
+     "activityTypeDTO": {
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "eventTypeDTO": {
+      "typeKey": "uncategorized"
+     },
+     "summaryDTO": {
+      "startTimeLocal": "2026-02-21T20:00:00.0",
+      "startTimeGMT": "2026-02-21T18:00:00.0",
+      "duration": 2400.0,
+      "movingDuration": 2380.0,
+      "elapsedDuration": 2430.0,
+      "distance": 8000.0,
+      "averageHR": 135,
+      "maxHR": 156,
+      "trainingEffect": 3.1,
+      "anaerobicTrainingEffect": 0.6,
+      "activityTrainingLoad": 48.0,
+      "averageSpeed": 3.333,
+      "averagePower": 240
+     },
+     "metadataDTO": {
+      "lapCount": 1,
+      "hasSplits": false
+     }
+    }
+   }
+  }
+ },
+ "faults": {}
+}

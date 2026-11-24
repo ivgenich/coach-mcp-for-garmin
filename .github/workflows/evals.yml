@@ -1,0 +1,94 @@
+# Evals: a LIVE run of the model-behaviour evals (docs/evals.md) against the Claude API.
+# Started by hand only (workflow_dispatch): it costs money and needs the secret
+# ANTHROPIC_API_KEY (best in the GitHub Environment "evals", with a key from its own
+# Console workspace that has a spend limit). Never on pull_request or
+# pull_request_target: fork code never sees the key. Every PR grades the committed
+# transcripts offline instead (ci.yml, job "evals (offline)").
+# Every action is pinned to a full commit SHA, as in ci.yml.
+name: Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "smoke (the smoke cases) or full (every case); 1 trial each"
+        type: choice
+        options: [smoke, full]
+        default: smoke
+      model:
+        description: "Model under test (an id evals/cost.py has a price for)"
+        type: string
+        default: claude-sonnet-5-5
+      max_usd:
+        description: "Stop the run before it costs more than this (US dollars)"
+        type: string
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FULL_PYTHON: "3.12.15" # the image's Python, as in ci.yml
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  evals:
+    name: evals (live)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: evals
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            evals/requirements.txt
+      - name: A venv with upstream, the image's pins and the hashed eval pins
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-evals"
+          "$RUNNER_TEMP/venv-evals/bin/python" -B scripts/ci-checks.py install-full
+          "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes -r evals/requirements.txt
+      - name: Offline tests first (no key needed)
+        run: '"$RUNNER_TEMP/venv-evals/bin/python" -B -m unittest discover -s evals/tests -t .'
+      - name: Live run
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVALS_PYTHON: ${{ runner.temp }}/venv-evals/bin/python
+          SUITE: ${{ inputs.suite }}
+          MODEL: ${{ inputs.model }}
+          MAX_USD: ${{ inputs.max_usd }}
+          RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          args=(run --model "$MODEL" --max-usd "$MAX_USD" --run-id "$RUN_ID")
+          if [ "$SUITE" = smoke ]; then args+=(--smoke); fi
+          scripts/evals.sh "${args[@]}"
+      - name: Summary to the job page
+        if: always()
+        env:
+          RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          summary="evals/runs/$RUN_ID/summary.md"
+          if [ -f "$summary" ]; then cat "$summary" >>"$GITHUB_STEP_SUMMARY"; else echo "no summary.md" >>"$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload the run folder
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evals-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evals/runs/
+          retention-days: 30
+          if-no-files-found: warn

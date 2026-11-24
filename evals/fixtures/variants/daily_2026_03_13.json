@@ -1,0 +1,340 @@
+{
+ "note": "D0 re-dated by -5 days to Friday 2026-03-13 for get_daily_status(date='2026-03-13'); the calendar keeps the base answer (nothing planned on the 13th).",
+ "responses": {
+  "get_stats": {
+   "2026-03-13": {
+    "$replace": {
+     "calendarDate": "2026-03-13",
+     "totalKilocalories": 1776.0,
+     "activeKilocalories": 64.0,
+     "bmrKilocalories": 1712.0,
+     "totalSteps": 812,
+     "totalDistanceMeters": 655,
+     "minHeartRate": 46,
+     "maxHeartRate": 98,
+     "restingHeartRate": 49,
+     "lastSevenDaysAvgRestingHeartRate": 46,
+     "averageStressLevel": 24,
+     "maxStressLevel": 61,
+     "stressQualifier": "CALM",
+     "bodyBatteryChargedValue": 52,
+     "bodyBatteryDrainedValue": 9,
+     "bodyBatteryHighestValue": 77,
+     "bodyBatteryLowestValue": 27,
+     "bodyBatteryMostRecentValue": 71,
+     "averageSpo2": 95.0,
+     "lowestSpo2": 88,
+     "latestSpo2": 96,
+     "avgWakingRespirationValue": 14.0,
+     "privacyProtected": false
+    }
+   }
+  },
+  "get_sleep_data": {
+   "2026-03-13": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-13",
+      "sleepTimeSeconds": 22500,
+      "napTimeSeconds": 0,
+      "sleepWindowConfirmed": true,
+      "sleepWindowConfirmationType": "enhanced_confirmed_final",
+      "sleepStartTimestampGMT": 1773349860000,
+      "sleepEndTimestampGMT": 1773373920000,
+      "sleepStartTimestampLocal": 1773357060000,
+      "sleepEndTimestampLocal": 1773381120000,
+      "unmeasurableSleepSeconds": 0,
+      "deepSleepSeconds": 4200,
+      "lightSleepSeconds": 13500,
+      "remSleepSeconds": 4800,
+      "awakeSleepSeconds": 1560,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": true,
+      "averageRespirationValue": 13.6,
+      "lowestRespirationValue": 10.0,
+      "highestRespirationValue": 18.0,
+      "awakeCount": 1,
+      "avgSleepStress": 14.0,
+      "ageGroup": "ADULT",
+      "sleepScoreFeedback": "POSITIVE_RESTFUL_EVENING",
+      "sleepScoreInsight": "NONE",
+      "sleepScores": {
+       "totalDuration": {
+        "qualifierKey": "FAIR",
+        "optimalStart": 28800.0,
+        "optimalEnd": 28800.0
+       },
+       "remPercentage": {
+        "value": 21,
+        "qualifierKey": "GOOD",
+        "optimalStart": 21.0,
+        "optimalEnd": 31.0
+       },
+       "deepPercentage": {
+        "value": 19,
+        "qualifierKey": "GOOD",
+        "optimalStart": 16.0,
+        "optimalEnd": 33.0
+       },
+       "overall": {
+        "value": 74,
+        "qualifierKey": "FAIR"
+       }
+      }
+     },
+     "remSleepData": true,
+     "wellnessSpO2SleepSummaryDTO": {
+      "averageSpo2": 95.0,
+      "lowestSpo2": 88,
+      "averageHR": 48.0
+     },
+     "restlessMomentsCount": 31,
+     "avgOvernightHrv": 58.0,
+     "hrvStatus": "BALANCED",
+     "bodyBatteryChange": 49,
+     "restingHeartRate": 49
+    }
+   },
+   "2026-03-12": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-12",
+      "sleepTimeSeconds": 20520,
+      "napTimeSeconds": 0,
+      "sleepWindowConfirmed": true,
+      "sleepWindowConfirmationType": "enhanced_confirmed_final",
+      "sleepStartTimestampGMT": 1773265500000,
+      "sleepEndTimestampGMT": 1773286800000,
+      "sleepStartTimestampLocal": 1773272700000,
+      "sleepEndTimestampLocal": 1773294000000,
+      "unmeasurableSleepSeconds": 0,
+      "deepSleepSeconds": 3600,
+      "lightSleepSeconds": 12720,
+      "remSleepSeconds": 4200,
+      "awakeSleepSeconds": 780,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": true,
+      "averageRespirationValue": 14.1,
+      "lowestRespirationValue": 11.0,
+      "highestRespirationValue": 19.0,
+      "awakeCount": 2,
+      "avgSleepStress": 19.0,
+      "ageGroup": "ADULT",
+      "sleepScores": {
+       "totalDuration": {
+        "qualifierKey": "POOR",
+        "optimalStart": 28800.0,
+        "optimalEnd": 28800.0
+       },
+       "overall": {
+        "value": 63,
+        "qualifierKey": "FAIR"
+       }
+      }
+     },
+     "remSleepData": true,
+     "wellnessSpO2SleepSummaryDTO": {
+      "averageSpo2": 94.0,
+      "lowestSpo2": 87,
+      "averageHR": 50.0
+     },
+     "avgOvernightHrv": 61.0,
+     "hrvStatus": "BALANCED",
+     "restingHeartRate": 48
+    }
+   }
+  },
+  "get_training_readiness": {
+   "2026-03-13": [
+    {
+     "calendarDate": "2026-03-13",
+     "timestamp": "2026-03-13T03:58:41.0",
+     "timestampLocal": "2026-03-13T05:58:41.0",
+     "level": "MODERATE",
+     "feedbackLong": "MOD_RT_MOD_SS_GOOD",
+     "feedbackShort": "READY_FOR_MODERATE",
+     "score": 52,
+     "sleepScore": 74,
+     "sleepScoreFactorPercent": 70,
+     "sleepScoreFactorFeedback": "GOOD",
+     "recoveryTime": 540,
+     "recoveryTimeFactorPercent": 66,
+     "recoveryTimeFactorFeedback": "MODERATE",
+     "acwrFactorPercent": 88,
+     "acwrFactorFeedback": "GOOD",
+     "acuteLoad": 610,
+     "stressHistoryFactorPercent": 80,
+     "stressHistoryFactorFeedback": "GOOD",
+     "hrvFactorPercent": 75,
+     "hrvFactorFeedback": "GOOD",
+     "hrvWeeklyAverage": 63,
+     "sleepHistoryFactorPercent": 57,
+     "sleepHistoryFactorFeedback": "MODERATE",
+     "validSleep": true,
+     "inputContext": "AFTER_WAKEUP_RESET",
+     "recoveryTimeChangePhrase": null
+    }
+   ]
+  },
+  "get_hrv_data": {
+   "2026-03-13": {
+    "$replace": {
+     "hrvSummary": {
+      "calendarDate": "2026-03-13",
+      "weeklyAvg": 63,
+      "lastNightAvg": 58,
+      "lastNight5MinHigh": 81,
+      "baseline": {
+       "lowUpper": 49,
+       "balancedLow": 55,
+       "balancedUpper": 72,
+       "markerValue": 0.41
+      },
+      "status": "BALANCED",
+      "feedbackPhrase": "HRV_BALANCED_2",
+      "createTimeStamp": "2026-03-13T04:02:10.0"
+     },
+     "hrvReadings": [
+      {
+       "hrvValue": 55,
+       "readingTimeGMT": "2026-03-12T21:20:00.0",
+       "readingTimeLocal": "2026-03-12T23:20:00.0"
+      },
+      {
+       "hrvValue": 61,
+       "readingTimeGMT": "2026-03-12T21:25:00.0",
+       "readingTimeLocal": "2026-03-12T23:25:00.0"
+      }
+     ],
+     "startTimestampGMT": "2026-03-12T21:12:00.0",
+     "endTimestampGMT": "2026-03-13T03:52:00.0",
+     "startTimestampLocal": "2026-03-12T23:12:00.0",
+     "endTimestampLocal": "2026-03-13T05:52:00.0",
+     "sleepStartTimestampGMT": "2026-03-12T21:12:00.0",
+     "sleepEndTimestampGMT": "2026-03-13T03:52:00.0",
+     "sleepStartTimestampLocal": "2026-03-12T23:12:00.0",
+     "sleepEndTimestampLocal": "2026-03-13T05:52:00.0"
+    }
+   },
+   "2026-03-12": {
+    "$replace": {
+     "hrvSummary": {
+      "calendarDate": "2026-03-12",
+      "weeklyAvg": 64,
+      "lastNightAvg": 61,
+      "lastNight5MinHigh": 84,
+      "baseline": {
+       "lowUpper": 49,
+       "balancedLow": 55,
+       "balancedUpper": 72,
+       "markerValue": 0.47
+      },
+      "status": "BALANCED",
+      "feedbackPhrase": "HRV_BALANCED_5",
+      "createTimeStamp": "2026-03-12T03:45:02.0"
+     },
+     "hrvReadings": [],
+     "startTimestampGMT": "2026-03-11T21:45:00.0",
+     "endTimestampGMT": "2026-03-12T03:40:00.0",
+     "startTimestampLocal": "2026-03-11T23:45:00.0",
+     "endTimestampLocal": "2026-03-12T05:40:00.0"
+    }
+   },
+   "2026-03-11": {
+    "$replace": {
+     "hrvSummary": {
+      "calendarDate": "2026-03-11",
+      "weeklyAvg": 65,
+      "lastNightAvg": 66,
+      "lastNight5MinHigh": 90,
+      "baseline": {
+       "lowUpper": 49,
+       "balancedLow": 55,
+       "balancedUpper": 72,
+       "markerValue": 0.52
+      },
+      "status": "BALANCED",
+      "feedbackPhrase": "HRV_BALANCED_1",
+      "createTimeStamp": "2026-03-11T04:11:37.0"
+     },
+     "hrvReadings": [],
+     "startTimestampGMT": "2026-03-10T21:30:00.0",
+     "endTimestampGMT": "2026-03-11T04:05:00.0",
+     "startTimestampLocal": "2026-03-10T23:30:00.0",
+     "endTimestampLocal": "2026-03-11T06:05:00.0"
+    }
+   }
+  },
+  "get_training_status": {
+   "2026-03-13": {
+    "$replace": {
+     "mostRecentVO2Max": {
+      "generic": {
+       "calendarDate": "2026-03-12",
+       "vo2MaxPreciseValue": 55.4,
+       "vo2MaxValue": 55.0,
+       "fitnessAge": null
+      },
+      "cycling": {
+       "calendarDate": "2026-03-10",
+       "vo2MaxPreciseValue": 53.1,
+       "vo2MaxValue": 53.0
+      },
+      "heatAltitudeAcclimation": null
+     },
+     "mostRecentTrainingLoadBalance": {
+      "metricsTrainingLoadBalanceDTOMap": {
+       "device-a": {
+        "calendarDate": "2026-03-13",
+        "monthlyLoadAerobicLow": 1800.5,
+        "monthlyLoadAerobicHigh": 640.2,
+        "monthlyLoadAnaerobic": 210.7,
+        "trainingBalanceFeedbackPhrase": "BALANCED",
+        "primaryTrainingDevice": true
+       }
+      },
+      "recordedDevices": []
+     },
+     "mostRecentTrainingStatus": {
+      "latestTrainingStatusData": {
+       "device-a": {
+        "calendarDate": "2026-03-13",
+        "sinceDate": "2026-03-07",
+        "weeklyTrainingLoad": null,
+        "trainingStatus": 4,
+        "timestamp": 1773374400000,
+        "loadTunnelMin": null,
+        "loadTunnelMax": null,
+        "loadLevelTrend": null,
+        "sport": "RUNNING",
+        "subSport": "GENERIC",
+        "fitnessTrendSport": "RUNNING",
+        "fitnessTrend": 2,
+        "trainingStatusFeedbackPhrase": "PRODUCTIVE_2",
+        "trainingPaused": false,
+        "acuteTrainingLoadDTO": {
+         "acwrPercent": 44,
+         "acwrStatus": "OPTIMAL",
+         "acwrStatusFeedback": "FEEDBACK_2",
+         "dailyTrainingLoadAcute": 640,
+         "maxTrainingLoadChronic": 873.0,
+         "minTrainingLoadChronic": 465.6,
+         "dailyTrainingLoadChronic": 582,
+         "dailyAcuteChronicWorkloadRatio": 1.1
+        },
+        "primaryTrainingDevice": true
+       }
+      },
+      "recordedDevices": [],
+      "showSelector": false,
+      "lastPrimarySyncDate": "2026-03-13"
+     },
+     "heatAltitudeAcclimationDTO": null
+    }
+   }
+  }
+ },
+ "faults": {}
+}

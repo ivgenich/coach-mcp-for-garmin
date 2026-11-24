@@ -1,0 +1,106 @@
+{
+ "note": "D4 on daily_2026_03_18: no Body Battery anywhere (stats fields null, sleep change null, get_body_battery empty): the status lists recovery.body_battery as missing.",
+ "responses": {
+  "get_stats": {
+   "2026-03-18": {
+    "$replace": {
+     "calendarDate": "2026-03-18",
+     "totalKilocalories": 1776.0,
+     "activeKilocalories": 64.0,
+     "bmrKilocalories": 1712.0,
+     "totalSteps": 812,
+     "totalDistanceMeters": 655,
+     "minHeartRate": 46,
+     "maxHeartRate": 98,
+     "restingHeartRate": 49,
+     "lastSevenDaysAvgRestingHeartRate": 46,
+     "averageStressLevel": 24,
+     "maxStressLevel": 61,
+     "stressQualifier": "CALM",
+     "bodyBatteryChargedValue": null,
+     "bodyBatteryDrainedValue": null,
+     "bodyBatteryHighestValue": null,
+     "bodyBatteryLowestValue": null,
+     "bodyBatteryMostRecentValue": null,
+     "averageSpo2": 95.0,
+     "lowestSpo2": 88,
+     "latestSpo2": 96,
+     "avgWakingRespirationValue": 14.0,
+     "privacyProtected": false
+    }
+   }
+  },
+  "get_sleep_data": {
+   "2026-03-18": {
+    "$replace": {
+     "dailySleepDTO": {
+      "calendarDate": "2026-03-18",
+      "sleepTimeSeconds": 22500,
+      "napTimeSeconds": 0,
+      "sleepWindowConfirmed": true,
+      "sleepWindowConfirmationType": "enhanced_confirmed_final",
+      "sleepStartTimestampGMT": 1773781860000,
+      "sleepEndTimestampGMT": 1773805920000,
+      "sleepStartTimestampLocal": 1773789060000,
+      "sleepEndTimestampLocal": 1773813120000,
+      "unmeasurableSleepSeconds": 0,
+      "deepSleepSeconds": 4200,
+      "lightSleepSeconds": 13500,
+      "remSleepSeconds": 4800,
+      "awakeSleepSeconds": 1560,
+      "deviceRemCapable": true,
+      "retro": false,
+      "sleepFromDevice": true,
+      "averageRespirationValue": 13.6,
+      "lowestRespirationValue": 10.0,
+      "highestRespirationValue": 18.0,
+      "awakeCount": 1,
+      "avgSleepStress": 14.0,
+      "ageGroup": "ADULT",
+      "sleepScoreFeedback": "POSITIVE_RESTFUL_EVENING",
+      "sleepScoreInsight": "NONE",
+      "sleepScores": {
+       "totalDuration": {
+        "qualifierKey": "FAIR",
+        "optimalStart": 28800.0,
+        "optimalEnd": 28800.0
+       },
+       "remPercentage": {
+        "value": 21,
+        "qualifierKey": "GOOD",
+        "optimalStart": 21.0,
+        "optimalEnd": 31.0
+       },
+       "deepPercentage": {
+        "value": 19,
+        "qualifierKey": "GOOD",
+        "optimalStart": 16.0,
+        "optimalEnd": 33.0
+       },
+       "overall": {
+        "value": 74,
+        "qualifierKey": "FAIR"
+       }
+      }
+     },
+     "remSleepData": true,
+     "wellnessSpO2SleepSummaryDTO": {
+      "averageSpo2": 95.0,
+      "lowestSpo2": 88,
+      "averageHR": 48.0
+     },
+     "restlessMomentsCount": 31,
+     "avgOvernightHrv": 58.0,
+     "hrvStatus": "BALANCED",
+     "bodyBatteryChange": null,
+     "restingHeartRate": 49
+    }
+   }
+  },
+  "get_body_battery": {
+   "2026-03-18": [],
+   "*": []
+  }
+ },
+ "faults": {}
+}

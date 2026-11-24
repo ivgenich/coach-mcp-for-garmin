@@ -1,32 +1,59 @@
-# Public edge of the container. Caddy listens on Railway's $PORT and gates
-# garmin-mcp (127.0.0.1:8000) behind MCP_BEARER_TOKEN, accepted two ways:
-#     Authorization: Bearer <token>      on https://<domain>/mcp   (preferred)
-#     https://<domain>/<token>/mcp       for claude.ai accounts without the
-#                                        beta "Request headers" option
-# /healthz and /readyz pass without auth so Railway's healthcheck can reach them.
+# Public edge of the container. Caddy listens on $PORT (Railway injects it;
+# compose.yaml fixes 8080) and proxies every request to the Python server on
+# 127.0.0.1:$GARMIN_MCP_PORT, which does the sign-in itself (OAuth 2.1 for
+# Claude, or the optional static bearer header MCP_BEARER_TOKEN for Claude
+# Code / CI) and answers 401 with WWW-Authenticate. Caddy holds no secret:
+# entrypoint.sh starts it without OWNER_SECRET and MCP_BEARER_TOKEN in its
+# environment.
 #
-# PORT and MCP_BEARER_TOKEN are substituted from the environment once, when
-# Caddy reads this file at startup. entrypoint.sh refuses to start unless
-# MCP_BEARER_TOKEN is 32+ characters of [A-Za-z0-9._~-], so the matchers below
-# can never become "Bearer " (empty), a "*" wildcard match, a path with extra
-# segments, or break out of their quotes.
+# PORT, GARMIN_MCP_PORT and EDGE_CLIENT_IP_HEADER are substituted from the
+# environment once, when Caddy reads this file at startup. entrypoint.sh fixes
+# GARMIN_MCP_PORT=8000, and its config check (launch.py --check-config) accepts
+# only the two EDGE_CLIENT_IP_HEADER values below; unset, it is X-Real-IP.
 {
-	# No admin API: nothing local can read the token back out of the config.
+	# No admin API and no saved config.
 	admin off
 	auto_https off
 	persist_config off
+	servers {
+		# Every public request reaches Caddy through an edge that names the
+		# caller in one header:
+		# - Railway (the default): its edge sets X-Real-IP
+		#   (https://docs.railway.com/networking/public-networking/specs-and-limits).
+		# - Docker Compose behind a Cloudflare Tunnel: compose.yaml sets
+		#   EDGE_CLIENT_IP_HEADER=CF-Connecting-IP, the header in which
+		#   Cloudflare names the caller
+		#   (https://developers.cloudflare.com/fundamentals/reference/http-headers/).
+		#   X-Real-IP is never read there: Cloudflare does not set it.
+		# Neither edge documents its own address range, so every peer is
+		# trusted for that one header; only the edge can reach this port
+		# (on Compose, no port is published). Only the sign-in rate limits use
+		# the result ({client_ip}, sent on as X-Client-IP below).
+		# Trusting every peer also passes a caller's own X-Forwarded-Proto and
+		# X-Forwarded-Host through to Python (X-Forwarded-For is dropped
+		# below, and launch.py stops uvicorn from applying any of them), so
+		# nothing there may build a URL or make a security decision from them
+		# (docs/how-it-works.md, Security).
+		trusted_proxies static 0.0.0.0/0 ::/0
+		client_ip_headers {$EDGE_CLIENT_IP_HEADER:X-Real-IP}
+	}
 }
 
 (garmin_mcp) {
-	reverse_proxy 127.0.0.1:8000 {
-		# FastMCP bound to 127.0.0.1 turns on DNS-rebinding protection: it
-		# answers 421 to any Host other than 127.0.0.1/localhost and 403 to a
-		# non-local Origin. Present the loopback Host and drop Origin; the
-		# token check is the real gate.
+	reverse_proxy 127.0.0.1:{$GARMIN_MCP_PORT:8000} {
+		# The server is bound to 127.0.0.1, so the SDK's DNS-rebinding guard
+		# on /mcp answers 421 to any other Host and 403 to a non-local Origin.
+		# Present the loopback Host and drop Origin; the token check in Python
+		# is the gate (there is no Origin check yet).
 		header_up Host {upstream_hostport}
 		header_up -Origin
-		# The token stops at the proxy; garmin-mcp never sees it.
-		header_up -Authorization
+		# The caller's address for the sign-in rate limits (ext/auth_http.py).
+		# Replaces any X-Client-IP the caller sent.
+		header_up X-Client-IP {client_ip}
+		# X-Forwarded-For would end with the edge's address, the same for every
+		# caller; X-Client-IP above is the only address Python uses.
+		header_up -X-Forwarded-For
+		# Authorization is passed through: Python checks every token.
 		header_down -Server
 		# Streamable HTTP: flush every write, never buffer a response.
 		flush_interval -1
@@ -34,10 +61,20 @@
 }
 
 http://:{$PORT:8080} {
-	# Access log to stdout for `railway logs`. Caddy redacts the
-	# Authorization header in logs by default.
+	# Access log to stdout (`railway logs`, `docker compose logs`), without
+	# anything that could replay a sign-in: query strings (/authorize state
+	# and code_challenge, the /consent request id), every request header (a
+	# token in Authorization or in any other header a client was set up with
+	# by mistake, cookies, Referer), and the Location header (the
+	# post-approval redirect carries ?code=...&state=...).
 	log {
 		output stdout
+		format filter {
+			request>uri regexp "\?.*$" "?REDACTED"
+			request>headers delete
+			resp_headers>Location delete
+			resp_headers>Set-Cookie delete
+		}
 	}
 	# No software banners: Caddy adds "Via: 1.1 Caddy" to proxied responses.
 	header -Server
@@ -46,10 +83,7 @@ http://:{$PORT:8080} {
 	# Starlette would answer /mcp/ with a 307 to the internal 127.0.0.1 address.
 	rewrite /mcp/ /mcp
 
-	# Probes, no auth. /readyz stays 503 until garmin-mcp has logged in to Garmin.
-	# The path matcher cleans and case-folds the path (/HEALTHZ, /x/../readyz),
-	# but the proxy would forward the raw one: garmin-mcp only ever gets exactly
-	# /healthz or /readyz (the trailing "?" drops any query string).
+	# Probes, no auth. The trailing "?" drops any query string.
 	@healthz {
 		method GET HEAD
 		path /healthz
@@ -67,35 +101,39 @@ http://:{$PORT:8080} {
 		import garmin_mcp
 	}
 
-	@authorized header Authorization "Bearer {$MCP_BEARER_TOKEN}"
-	handle @authorized {
-		import garmin_mcp
-	}
-
-	# The token is part of this URL, so these requests stay out of the access log.
-	handle /{$MCP_BEARER_TOKEN}/* {
+	# The removed https://<domain>/<token>/mcp form: 410, never logged, never
+	# proxied. No real route has a first segment of 32+ token characters.
+	@legacy path_regexp legacy ^/[A-Za-z0-9._~-]{32,}(/|$)
+	handle @legacy {
 		log_skip
-		uri strip_prefix /{$MCP_BEARER_TOKEN}
-		# The top-level /mcp/ rewrite ran before the prefix was stripped, so
-		# /<token>/mcp/ needs its own (else the same 307 to 127.0.0.1).
-		uri path_regexp ^/mcp/$ /mcp
-		import garmin_mcp
+		respond 410
 	}
 
-	# A proxy failure (garmin-mcp restarting, as on every deploy) is an error to
-	# Caddy, and an unhandled error is logged at ERROR with the request URI,
-	# which in URL-token mode is the token: log_skip covers only the access log.
-	# With an error route Caddy logs the failure at DEBUG, which is off. The
-	# client still gets the bare status (502), empty body.
-	handle_errors {
-		respond "" {err.status_code}
+	# Custom routes get no SDK body limit; the consent form is tiny.
+	request_body /consent {
+		max_size 16KB
+	}
+	# Sign-in requests are small: bound what a stranger can send, and so
+	# what they can make the server store.
+	request_body /authorize {
+		max_size 16KB
+	}
+	request_body /register {
+		max_size 64KB
 	}
 
-	# Missing or wrong token: 401, empty body. Unlogged, because a mistyped URL
-	# (e.g. https://<domain>/<token> without /mcp) would put the token in the log;
-	# Railway's own HTTP logs still show these 401s.
 	handle {
-		log_skip
-		respond 401
+		import garmin_mcp
+	}
+
+	# A proxy failure (the server restarting) is an error to Caddy; with an
+	# error route it is logged at DEBUG (off), not at ERROR with the URI.
+	handle_errors {
+		# The site's header lines above do not reach error answers (a 502
+		# while the server restarts, Caddy's own 413 for a body over a cap),
+		# so the banners are removed here too.
+		header -Server
+		header -Via
+		respond "" {err.status_code}
 	}
 }

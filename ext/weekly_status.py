@@ -48,6 +48,10 @@ Decisions worth knowing:
   get_gear_stats), km against the gear's maximumMeters when one is set.
   Gear uuids, the profile number and device ids are used for the calls only
   and never leave this module (not in the result, the sources or the text).
+- Names typed in Garmin (the long session's activity name, gear names) are
+  cleaned where they are read (text_hygiene.name_or_none); the include_sources
+  debug subtree is cleaned as a whole. A failed source carries a fixed phrase
+  (status_common.fetch_sync), never Garmin's error text.
 
 Pure parts (rules, render_text) import nothing from upstream, so tests run
 without it; upstream helpers are imported inside functions, and selfcheck()
@@ -62,7 +66,9 @@ import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import mcp2_compat
 import status_common as sc
+import text_hygiene as th
 
 RULES_VERSION = 1
 
@@ -91,7 +97,8 @@ DEADLINE_S = 60.0
 CALL_TIMEOUT_S = 30.0
 # FIT download + parse of a long ride: fitparse is slow on a 3-4 h file.
 FIT_TIMEOUT_S = 45.0
-# 14 days of activities in one call; a triathlete's fortnight is far below it.
+# 14 days of activities in one call; a triathlete's fortnight is far below it. A full page counts as an
+# incomplete volume comparison (_activities_cut).
 ACTIVITY_LIMIT = 100
 ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 WEIGHT_LOOKBACK_DAYS = 90
@@ -182,38 +189,42 @@ def _left(started: float) -> float:
 
 
 def _method(client: Any, name: str) -> Callable[..., Any]:
-    """client.<name>, or a stand-in that raises when called.
+    """client.<name>(...), looked up when the call runs, in fetch_all's worker thread.
 
-    A missing client or method then becomes one failed source instead of an
-    exception while the calls are being described.
+    Upstream's proxy blocks at the lookup (up to 90 s) while its background
+    login is pending and raises the stored login error there once the login
+    failed, so the lookup must not happen on the event loop: one report would
+    stall every other request of the server, one wait per method. A missing
+    client or method is one failed source. A failed lookup raises its own
+    exception, unwrapped: status_common groups a failure by its type and
+    text, so a wrapper would turn a rate limit or a network failure into an
+    internal error.
     """
-    try:
+    def invoke(*args: Any, **kwargs: Any) -> Any:
         fn = getattr(client, name)
-    except Exception as exc:  # noqa: BLE001 - reported as a failed source
-        reason = sc.clean_error(exc)
-
-        def unavailable(*_args: Any, **_kwargs: Any) -> Any:
-            raise AttributeError(f"Garmin client has no {name}: {reason}")
-
-        return unavailable
-    if not callable(fn):
-        def not_callable(*_args: Any, **_kwargs: Any) -> Any:
+        if not callable(fn):
             raise AttributeError(f"Garmin client attribute {name} is not callable")
+        return fn(*args, **kwargs)
 
-        return not_callable
-    return fn
+    invoke.__name__ = name
+    return invoke
 
 
-# Identifiers that may hide in Garmin error text (uuids, long numeric ids).
-_ID_TEXT_RE = re.compile(
-    r"\b[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}\b|\b\d{7,}\b"
-)
+def _activities_call(client: Any) -> Callable[..., Any]:
+    """connectapi(<garminconnect's activity-list path>, ...); the path is read in the worker thread too."""
+    def invoke(**kwargs: Any) -> Any:
+        try:
+            path = getattr(client, "garmin_connect_activities", None)
+        except Exception:  # noqa: BLE001 - fall back to garminconnect's path
+            path = None
+        return _method(client, "connectapi")(path if isinstance(path, str) and path else ACTIVITIES_PATH, **kwargs)
+
+    invoke.__name__ = "connectapi"
+    return invoke
+
+
 # Dict keys that are identifiers (device-keyed maps such as latestTrainingStatusData).
 _ID_KEY_RE = re.compile(r"^(\d{4,}|[0-9a-fA-F]{32}|[0-9a-fA-F-]{36})$")
-
-
-def _scrub(text: Any) -> Any:
-    return _ID_TEXT_RE.sub("<id>", text) if isinstance(text, str) else text
 
 
 def _mask_keys(obj: Any) -> Any:
@@ -296,7 +307,7 @@ def parse_activities(raw: Any, tz: Any) -> List[Dict[str, Any]]:
             "start_local": start_local,
             "type": type_key,
             "sport": sc.sport_group(type_key),
-            "name": _str(activity.get("activityName")),
+            "name": th.name_or_none(activity.get("activityName")),
             "seconds": max(0.0, float(sc.num(activity.get("duration")) or 0.0)),
             "meters": max(0.0, float(sc.num(activity.get("distance")) or 0.0)),
         })
@@ -439,8 +450,10 @@ def parse_gear(raw: Any) -> List[Dict[str, Any]]:
         uuid = gear.get("uuid")
         if kind is None or not uuid:
             continue
-        make_model = " ".join(p for p in (_str(gear.get("gearMakeName")), _str(gear.get("gearModelName"))) if p)
-        name = _str(gear.get("displayName")) or _str(gear.get("customMakeModel")) or make_model or GEAR_EN[kind]
+        parts = (th.name_or_none(gear.get("gearMakeName")), th.name_or_none(gear.get("gearModelName")))
+        make_model = th.cap(" ".join(p for p in parts if p), th.NAME_MAX)
+        name = (th.name_or_none(gear.get("displayName")) or th.name_or_none(gear.get("customMakeModel"))
+                or make_model or GEAR_EN[kind])
         max_m = sc.num(gear.get("maximumMeters"))
         out.append({
             "uuid": str(uuid),
@@ -840,6 +853,13 @@ def compute_level(flags: List[Dict[str, str]], *, hrv_missing: bool, sleep_missi
 
 # --- fetching -----------------------------------------------------------------
 
+def key_mode_round1_skips(end: dt.date) -> frozenset:
+    """Key mode (GARMIN_AUTH=key): the round-1 sources Garmin's Personal API does not serve. They are never
+    called; each reads "skipped: not available with a Garmin Personal API key", and activities runs first."""
+    return frozenset({"device_last_used", "devices", "schedule"} | {
+        f"training_status@{(end - dt.timedelta(days=back)).isoformat()}" for back in (0, 7)})
+
+
 def _round1_calls(client: Any, start: dt.date, end: dt.date) -> Dict[str, sc.Call]:
     def iso(day: dt.date) -> str:
         return day.isoformat()
@@ -855,16 +875,11 @@ def _round1_calls(client: Any, start: dt.date, end: dt.date) -> Dict[str, sc.Cal
     for offset in range(7):
         day = start + dt.timedelta(days=offset)
         calls[f"sleep@{iso(day)}"] = sc.call(_method(client, "get_sleep_data"), iso(day))
-    try:
-        path = getattr(client, "garmin_connect_activities", None)
-    except Exception:  # noqa: BLE001 - fall back to garminconnect's path
-        path = None
     params = {
         "startDate": iso(end - dt.timedelta(days=13)), "endDate": iso(end),
         "start": "0", "limit": str(ACTIVITY_LIMIT),
     }
-    calls["activities"] = sc.call(_method(client, "connectapi"),
-                                  path if isinstance(path, str) and path else ACTIVITIES_PATH, params=params)
+    calls["activities"] = sc.call(_activities_call(client), params=params)
     for back in (0, 7):
         day = end - dt.timedelta(days=back)
         calls[f"training_status@{iso(day)}"] = sc.call(_method(client, "get_training_status"), iso(day))
@@ -890,18 +905,20 @@ def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
         raise RuntimeError("fitparse is not installed")
     raw = _method(client, "download_activity")(activity_id, dl_fmt=fmt)
     if not raw:
-        raise ValueError("Garmin returned an empty FIT download")
+        raise sc.NoData("Garmin returned an empty FIT download")  # source error "no data from Garmin"
     parsed = parse_fit(bytes(raw), include_records=False)
     drift = sc.dig(parsed, "session", "hr_drift")
     # None when the file has under 60 min of power + heart rate (e.g. no power).
     return {"pct": sc.num(sc.dig(drift, "hr_drift_pct")), "basis": "power"}
 
 
-async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float):
+async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float, key_mode: bool = False):
     """-> (source results, debug slims, {"pct", "basis", "source"} or None).
 
     FIT first (upstream's analysis); the details chart only when the FIT gave
     no drift and the failure was not systemic (rate limit, login, network).
+    In key mode the details chart is never called (the Personal API has none):
+    it is recorded as skipped whenever it would have been reached.
     """
     results: Dict[str, Dict[str, Any]] = {}
     slims: Dict[str, Any] = {}
@@ -918,6 +935,9 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
     # fetch_all marks its own timeouts systemic, but a FIT timeout ("timeout
     # after Ns") is more likely a slow parse of a long file than a Garmin
     # problem, so the (deadline-bounded) details call still gets its try.
+    if key_mode:
+        results["decoupling_details"] = _skip(sc.NOT_WITH_KEY)
+        return results, slims, None
     if res["decoupling_fit"].get("systemic") and not str(error).startswith("timeout after"):
         results["decoupling_details"] = _skip(f"decoupling_fit failed: {error}"[:200])
         return results, slims, None
@@ -931,10 +951,13 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
     return results, slims, (dict(drift, source="details") if drift else None)
 
 
-async def _gear_chain(client: Any, profile_number: Any, started: float):
+async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode: bool = False):
     """-> (source results, debug slims, parse_gear() items with "stats" or None if the list failed)."""
     results: Dict[str, Dict[str, Any]] = {}
     slims: Dict[str, Any] = {}
+    if key_mode:
+        results["gear"] = _skip(sc.NOT_WITH_KEY)
+        return results, slims, None
     if profile_number is None:
         results["gear"] = _skip("device_last_used gave no profile number")
         return results, slims, None
@@ -971,9 +994,26 @@ def _end_date(value: Any, current: dt.datetime) -> dt.date:
     if value is None or not str(value).strip():
         return current.date() - dt.timedelta(days=1)
     try:
-        return dt.date.fromisoformat(str(value).strip())
+        day = dt.date.fromisoformat(str(value).strip())
     except ValueError:
-        raise ValueError(f"end_date must be YYYY-MM-DD, got {value!r}") from None
+        raise sc.BadArgument(f"end_date must be YYYY-MM-DD, got {value!r}") from None
+    return sc.report_date(day, "end_date", value)  # BadArgument outside 0002-01-01..9998-12-31
+
+
+def _text_format(text_format: Any) -> str:
+    """text_format stripped and lower-cased, as get_daily_status reads it; BadArgument unless '' or 'markdown'."""
+    fmt = text_format.strip().lower() if isinstance(text_format, str) else text_format
+    if fmt not in TEXT_FORMATS:
+        raise sc.BadArgument("text_format must be '' or 'markdown'")
+    return fmt
+
+
+def _activities_cut(raw: Any) -> bool:
+    """True when the activity search answer fills its one page (ACTIVITY_LIMIT items or more): Garmin may have
+    cut activities of the 14 days, so the volume comparison is not complete."""
+    if isinstance(raw, dict):
+        raw = raw.get("activityList") or raw.get("activities") or []
+    return isinstance(raw, list) and len(raw) >= ACTIVITY_LIMIT
 
 
 def _missing(status: Dict[str, Any], *, volume_ok: bool, plan_ok: bool, gear_ok: bool,
@@ -1023,23 +1063,34 @@ async def build_weekly_status(
     include_sources: bool = False,
     text_format: str = "",
     now: Optional[dt.datetime] = None,
+    key_mode: bool = False,
 ) -> Dict[str, Any]:
     """The weekly status dict.
 
-    Raises ValueError for a malformed end_date, an unknown text_format, an
-    unknown time zone or (tz not given) an unset REPORT_TZ; every Garmin
-    failure ends up in "missing" / "sources" instead.
+    Raises BadArgument (a ValueError) for a malformed end_date, an unknown
+    text_format, an unknown time zone or (tz not given) an unset REPORT_TZ,
+    and SystemicFailure when the first call fails systemically (login, rate
+    limit, network, stall; no other call was made). Any other Garmin failure
+    ends up in "missing" / "sources" instead.
+
+    key_mode (GARMIN_AUTH=key): the sources of key_mode_round1_skips(), gear
+    and the details chart are never called, activities runs first, and the
+    answer carries "key_mode_note" (also the last line of the markdown text).
     """
-    if text_format not in TEXT_FORMATS:
-        raise ValueError("text_format must be '' or 'markdown'")
+    text_format = _text_format(text_format)
     zone = sc.zone(tz)
     current = _local_now(zone, now)
     end = _end_date(end_date, current)
     start = end - dt.timedelta(days=6)
     started = time.monotonic()
 
-    results = await sc.fetch_all(_round1_calls(client, start, end), first="device_last_used",
-                                 timeout_s=CALL_TIMEOUT_S, deadline_s=_left(started))
+    first = "activities" if key_mode else "device_last_used"
+    results = await sc.fetch_all(_round1_calls(client, start, end), first=first,
+                                 timeout_s=CALL_TIMEOUT_S, deadline_s=_left(started),
+                                 skip=key_mode_round1_skips(end) if key_mode else frozenset())
+    failed = sc.systemic_failure(results, first)
+    if failed:
+        raise sc.SystemicFailure(failed)
     data = {name: sc.data_of(res) for name, res in results.items()}
     slim: Dict[str, Any] = {}
 
@@ -1056,6 +1107,9 @@ async def build_weekly_status(
         slim[f"sleep@{day.isoformat()}"] = nights[-1] or {"synced": False}
     volume_ok = bool(results["activities"].get("ok"))
     acts = parse_activities(data["activities"], zone) if volume_ok else None
+    # One page of ACTIVITY_LIMIT, no second request: a full page may lack activities of the 14 days, so the
+    # comparison with the week before is not trusted (change_pct null, no volume_jump, "volume" in missing).
+    volume_cut = volume_ok and _activities_cut(data["activities"])
     slim["activities"] = {"count": len(acts or []), "types": sorted({str(a["type"]) for a in acts or []})}
     devices = data.get("devices")
     slim["devices"] = {"count": len(devices) if isinstance(devices, list) else None}
@@ -1072,24 +1126,16 @@ async def build_weekly_status(
     profile_number = sc.dig(data.get("device_last_used"), "userProfileNumber")
     slim["device_last_used"] = {"profile_number": profile_number is not None}
 
-    # Second round: gear and decoupling chains side by side.
+    # Second round: gear and decoupling chains side by side. (A systemic
+    # first failure has raised above, before any other call.)
     long_act = pick_long_session(acts, start, end)
-    first = results.get("device_last_used") or {}
-    if not first.get("ok") and first.get("systemic"):
-        # fetch_all already skipped the rest of round 1; do not start more calls.
-        reason = f"device_last_used failed: {first.get('error')}"[:200]
-        results["gear"] = _skip(reason)
-        if long_act is not None:
-            results["decoupling_fit"] = _skip(reason)
-        gear_items, drift = None, None
-    else:
-        (gear_results, gear_slims, gear_items), (drift_results, drift_slims, drift) = await asyncio.gather(
-            _gear_chain(client, profile_number, started), _decoupling_chain(client, long_act, started)
-        )
-        results.update(gear_results)
-        results.update(drift_results)
-        slim.update(gear_slims)
-        slim.update(drift_slims)
+    (gear_results, gear_slims, gear_items), (drift_results, drift_slims, drift) = await asyncio.gather(
+        _gear_chain(client, profile_number, started, key_mode), _decoupling_chain(client, long_act, started, key_mode)
+    )
+    results.update(gear_results)
+    results.update(drift_results)
+    slim.update(gear_slims)
+    slim.update(drift_slims)
 
     gear, gear_complete = gear_section(gear_items) if gear_items is not None else ([], True)
     status: Dict[str, Any] = {
@@ -1111,31 +1157,33 @@ async def build_weekly_status(
         "body": body_section(weighs, start, end),
         "gear": gear,
     }
+    if volume_cut:
+        status["volume"]["change_pct"] = None
     flags = evaluate_flags(status)
+    if volume_cut:
+        flags = [f for f in flags if f["id"] != "volume_jump"]
     level = compute_level(flags, hrv_missing=status["hrv"]["avg_7d"] is None,
-                          sleep_missing=not status["sleep"]["nights"], volume_missing=not volume_ok)
+                          sleep_missing=not status["sleep"]["nights"], volume_missing=not volume_ok or volume_cut)
     status["level"] = level
     status["level_en"] = LEVEL_EN[level]
     status["flags"] = flags
-    status["missing"] = _missing(status, volume_ok=volume_ok, plan_ok=schedule is not None,
+    status["missing"] = _missing(status, volume_ok=volume_ok and not volume_cut, plan_ok=schedule is not None,
                                  gear_ok=gear_items is not None, gear_complete=gear_complete)
     status["thresholds"] = {k: (list(v) if isinstance(v, list) else v) for k, v in THRESHOLDS.items()}
-    sources = sc.source_meta(results)
-    for meta in sources.values():
-        if "error" in meta:
-            meta["error"] = _scrub(meta["error"])
-    status["sources"] = sources
+    # Each error is a fixed phrase from status_common (never Garmin's text), so it holds no identifier.
+    status["sources"] = sc.source_meta(results)
+    if key_mode:
+        status["key_mode_note"] = sc.KEY_MODE_NOTE
     if include_sources:
-        status["debug"] = {
+        # Slims hold Garmin codes (activity types, training-status phrases) and the key paths Garmin's key
+        # names; our answers skip the tool-call wrapper's cleaning, so the subtree is cleaned here.
+        status["debug"] = th.clean_json({
             name: {"slim": slim.get(name), "keys": sc.key_paths(_mask_keys(sc.data_of(res)))}
             for name, res in results.items() if res.get("ok")
-        }
+        })[0]
     if text_format:
-        try:
-            status["text"] = render_text(status, text_format)
-        except Exception:  # noqa: BLE001 - a rendering bug must not cost the report
-            status["text"] = None
-            status["missing"].append("text")
+        # No catch (amendment M2): a rendering bug reaches launch.py's tool-error wrapper, which logs its traceback.
+        status["text"] = render_text(status, text_format)
     return status
 
 
@@ -1160,8 +1208,9 @@ def _hm(value: Any) -> str:
 
 
 def _short(text: Any, limit: int = 30) -> str:
+    """At most `limit` characters, ending with "…" when cut; never cut inside an emoji sequence or a mark."""
     text = str(text or "")
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    return th.cap(text, limit) if len(text) > limit else text
 
 
 def _count(count: Any, noun: str) -> str:
@@ -1236,6 +1285,9 @@ def _lines(status: Dict[str, Any], compact: bool) -> List[Tuple[str, List[Segmen
         text = f"Total: {_hm(volume.get('total_hhmm'))} h (last week: {_hm(volume.get('prev_total_hhmm'))}"
         text += f", {_signed(volume['change_pct'])}%)" if volume.get("change_pct") is not None else ")"
         item(text)
+        if "volume" in (status.get("missing") or []):  # a full activity page: the oldest days may be cut off
+            item(f"Incomplete: Garmin's answer held {ACTIVITY_LIMIT} activities or more, so last week's "
+                 "numbers may be missing some")
 
     head("Load")
     load = status.get("load") or {}
@@ -1347,21 +1399,29 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
     """
     if fmt != "markdown":
         raise ValueError("fmt must be 'markdown'")
-    text = _format(_lines(status, compact=False))
+    # Key mode: the text ends with the note, which counts toward MAX_WORDS.
+    note = status.get("key_mode_note")
+    end = [("plain", [(note, False)])] if note else []
+    text = _format(_lines(status, compact=False) + end)
     if _word_count(text) > MAX_WORDS:
-        text = _format(_lines(status, compact=True))
+        text = _format(_lines(status, compact=True) + end)
     return text
 
 
 # --- MCP tool -----------------------------------------------------------------
 
-def register_tools(app: Any, get_client: Callable[[], Any]) -> Any:
+def register_tools(app: Any, get_client: Callable[[], Any], key_mode: bool = False) -> Any:
     """Register get_weekly_status on upstream's (filtered) app.
 
     get_client returns upstream's configured Garmin client at call time.
+    key_mode (GARMIN_AUTH=key) is passed to build_weekly_status.
     """
 
+    # server_loop: off mcp2_compat's shared tool loop, which upstream's async tools block for each Garmin
+    # call; there that time would count against fetch_all's per-call timeout and the report deadline. Every
+    # Garmin call here is awaited in a worker thread, so the server's loop stays free.
     @app.tool()
+    @mcp2_compat.server_loop
     async def get_weekly_status(end_date: str = "", include_sources: bool = False, text_format: str = "") -> str:
         """Weekly training review: the 7 days ending end_date vs the 7 days before.
 
@@ -1390,16 +1450,20 @@ def register_tools(app: Any, get_client: Callable[[], Any]) -> Any:
             text_format: "markdown" adds a ready English report in "text"
                 (for automation); empty = JSON only.
         """
-        if text_format not in TEXT_FORMATS:
+        try:
+            text_format = _text_format(text_format)
+        except sc.BadArgument:
             return "Error: text_format must be '' or 'markdown'."
+        # Only a bad argument and a failed first call answer as text here. Anything else is a bug: it
+        # propagates to launch.py's tool-error wrapper, which logs the traceback under a ref and gives the
+        # client a fixed text.
         try:
             status = await build_weekly_status(
-                get_client(), end_date, include_sources=include_sources, text_format=text_format
+                get_client(), end_date, include_sources=include_sources, text_format=text_format,
+                key_mode=key_mode,
             )
-        except ValueError as exc:
+        except (sc.BadArgument, sc.SystemicFailure) as exc:
             return f"Error: {exc}"
-        except Exception as exc:  # noqa: BLE001 - a bug here must not crash the server
-            return f"Error: weekly status failed: {_scrub(sc.clean_error(exc))}"
         return sc.compact_json(status)
 
     return app

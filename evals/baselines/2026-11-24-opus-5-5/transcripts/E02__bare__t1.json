@@ -1,0 +1,195 @@
+{
+  "schema": 1,
+  "case_id": "E02",
+  "variant": "bare",
+  "model": "claude-opus-5-5",
+  "trial": 1,
+  "started": "2026-11-24T09:12:24Z",
+  "duration_s": 11.4,
+  "stop_reason": "end_turn",
+  "system": "Current date and time: Wednesday, 18 March 2026, 06:30 (Europe/Athens, UTC+02:00).",
+  "tools": [
+    "get_activities_by_date",
+    "get_activity",
+    "get_activity_splits",
+    "get_activity_hr_in_timezones",
+    "get_activity_power_in_timezones",
+    "get_activities",
+    "get_stats",
+    "get_training_readiness",
+    "get_body_battery",
+    "get_sleep_summary",
+    "get_sleep_summary_range",
+    "get_weekly_stress",
+    "get_heart_rate_zones",
+    "get_personal_record",
+    "get_race_predictions",
+    "get_progress_summary_between_dates",
+    "get_endurance_score",
+    "get_training_status",
+    "get_cycling_ftp",
+    "get_lactate_threshold",
+    "get_training_load_trend",
+    "get_hrv_trend",
+    "get_vo2max_trend",
+    "get_workout_by_id",
+    "get_scheduled_workouts",
+    "get_courses",
+    "get_course_details",
+    "get_course_profile",
+    "get_daily_status",
+    "get_weekly_status",
+    "get_activity_fit_data"
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "How am I today?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "toolu_018r6mWiKsextboJBXMj3fEc",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_018r6mWiKsextboJBXMj3fEc",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "CAQSsQUKEAgUGAI4AUIIdGhpbmtpbmcSDA+GG77n2hFP8475bBoM/R9AGAnwIhxv6P+bIjCPaxg6Pi70LP4Jve4oEgN3VkvTjLrnOMMQcY7Ju9w0qCAPgywPmQbBTej6nvPgHC8qzgQaVu9rE1K015UQUHPNjgIyH3ZPa7t2hN7et38mKJChUPDqFGCS2ujdKGsQSj3xyOtM1O1BhJpm3mt1k0U4pS1Zxrwl0GbZnWvnXWt78Ch4Ii3N4OLzBGPkXIYdaqy0cT6pxLB9l8o+qLVjw2rtFoYctVc2mG2+6Kx6+5N8IbXE7t5Z4fhXxo30AM9VDaIZGp0S27YUahCPl/r05AFvVrgiyhpQt19/nrdLPiBPB3R753aZCpaGsqK1puAwsgxEyTQQcxE4QtD/2CeGqZgZjlOYA0B830f338kh3WR/eNcI6GT9IY4nW8Ys8YrBYvVJGoLv4PZhqSka8xUMT1etr97dfTG1OE+QNkwqdFxzEhZeIQClvwujt/Qctf8xL3wjW0SgF5ZG7HtCVzrrXzp4zaVULw8Tkpj/0hefvonDuohoZ72x91jsQXrmdLwCMhUqZIVa5UxxZfrVC2gqiYUEbCdSDDcxWY5ffMPeOFLsrOBwQg4e4egSTAcdu9A9pYdEoXmg/EX9gOLaoDHQSVhyAki6XMc/3zy4KdLhAaxPFElKvIxQe/drtgCSIJwQec010MWyEKEZv1AaSAA5JIoKdlMX35brQhXcau8kPD+g7O1vu951+OvOW8fbd4Ti0zTTdC73XWWj5bma+mzxbSj+KXfkwgAk7m7rsMCq4lZQLG20KTk6ZOnWAUG2pMUiWLU9nIMgY6ygZsaS8qNP2KL6Oh2lWFNqtRYIo8vu7QNHPDxdBBzvtYGxnKEVvPBj0HEi2vcxiU3wJa4VtTKG2jrm7xgB",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "text": "I couldn't check your data this morning. Garmin is limiting requests right now and has asked me to wait about 15 minutes before trying again, so I've stopped for now. It's a temporary block on Garmin's end, not a problem with your account or watch.\n\n**What to do:**\n- **Ask me again in 15 minutes or more.** I'll get today's status, including how you slept, your heart rate variability (HRV) and resting heart rate compared with your 7-day averages, your training readiness, your recent training load and any workouts planned for today.\n- **Or check your watch or the Garmin Connect app.** Training Readiness and Morning Report show the main numbers right away.\n\nIf you have a workout or race planned today, tell me when you ask again and I'll focus on whether you're ready for it.",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Try again please"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "signature": "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",
+          "thinking": "",
+          "type": "thinking"
+        },
+        {
+          "id": "toolu_0192uQyVhTbuuWDoeP6iKGEr",
+          "caller": {
+            "type": "direct"
+          },
+          "input": {
+            "date": "2026-03-18"
+          },
+          "name": "get_daily_status",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_0192uQyVhTbuuWDoeP6iKGEr",
+          "content": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+          "is_error": true
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "text": "I tried again, but Garmin is still blocking requests. Retrying again right away could make the block last longer, so I'll leave it alone for now.\n\n**Please ask me again after about 6:45 or later.** I'll then get your sleep, heart rate variability (HRV), resting heart rate, training readiness and today's planned workouts.\n\nIf you need an answer before then, your watch's Morning Report or Training Readiness in the Garmin Connect app will show most of this right away.",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tool_calls": [
+    {
+      "index": 0,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    },
+    {
+      "index": 1,
+      "name": "get_daily_status",
+      "input": {
+        "date": "2026-03-18"
+      },
+      "text": "Error: Garmin rate limit. Garmin is refusing requests from this server for now. Stop calling Garmin tools and try again in 15 minutes or later.",
+      "is_error": true
+    }
+  ],
+  "final_text": "I tried again, but Garmin is still blocking requests. Retrying again right away could make the block last longer, so I'll leave it alone for now.\n\n**Please ask me again after about 6:45 or later.** I'll then get your sleep, heart rate variability (HRV), resting heart rate, training readiness and today's planned workouts.\n\nIf you need an answer before then, your watch's Morning Report or Training Readiness in the Garmin Connect app will show most of this right away.",
+  "garmin_calls": [
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    },
+    {
+      "tool": "get_daily_status",
+      "method": "get_stats",
+      "args": [
+        "2026-03-18"
+      ],
+      "kwargs": {}
+    }
+  ],
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 813,
+    "cache_read_input_tokens": 44939,
+    "cache_creation_input_tokens": 798
+  },
+  "cost_usd": 0.029286,
+  "error": null,
+  "effort": "medium",
+  "turns": 4,
+  "answers": [
+    "I couldn't check your data this morning. Garmin is limiting requests right now and has asked me to wait about 15 minutes before trying again, so I've stopped for now. It's a temporary block on Garmin's end, not a problem with your account or watch.\n\n**What to do:**\n- **Ask me again in 15 minutes or more.** I'll get today's status, including how you slept, your heart rate variability (HRV) and resting heart rate compared with your 7-day averages, your training readiness, your recent training load and any workouts planned for today.\n- **Or check your watch or the Garmin Connect app.** Training Readiness and Morning Report show the main numbers right away.\n\nIf you have a workout or race planned today, tell me when you ask again and I'll focus on whether you're ready for it.",
+    "I tried again, but Garmin is still blocking requests. Retrying again right away could make the block last longer, so I'll leave it alone for now.\n\n**Please ask me again after about 6:45 or later.** I'll then get your sleep, heart rate variability (HRV), resting heart rate, training readiness and today's planned workouts.\n\nIf you need an answer before then, your watch's Morning Report or Training Readiness in the Garmin Connect app will show most of this right away."
+  ],
+  "served_models": [
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5",
+    "claude-opus-5-5"
+  ]
+}

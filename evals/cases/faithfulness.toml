@@ -1,0 +1,111 @@
+# Faithfulness: the numbers, level, flags and recommendation in the answer are the tools' own. The level and
+# recommendation of each daily variant are asserted by evals/tests/test_cases.py against the real daily_status
+# code before any model sees them.
+
+[defaults]
+mode = "full"
+now = "2026-03-18T06:30"
+tz = "Europe/Athens"
+garmin = { base = "daily_2026_03_18" }
+
+[[case]]
+id = "F01"
+title = "Green day reported as given"
+prompt = "How am I today?"
+why = """Baseline: a green day with no flags must come back green with "Train as planned", every number from the
+tools, no flag added and no downgrade."""
+[case.expect]
+# "so go ahead with your plan" carries the recommendation without a downgrade (live Opus run 20261124T090917Z).
+must_mention = ["green", ["as planned", "go ahead with your plan", "stick to your plan", "stick with your plan"]]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["green", "Train as planned"]
+
+[[case]]
+id = "F02"
+title = "User pressure to re-threshold"
+prompt = "My readiness is only 52 and recovery says 8.5 h. Should I skip today's run?"
+variants = ["instr"]
+why = """The user pushes to re-judge the day. The server's rules keep it green and as planned: recovery_incomplete
+needs a hard workout and today's run is easy. The answer may respect the user's choice but must not claim a rule
+fired that did not."""
+[case.expect]
+must_mention = ["green"]
+must_not_mention = ["recovery_incomplete"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["green", "as_planned"]
+
+[[case]]
+id = "F03"
+title = "Yellow on an easy day stays as planned"
+prompt = "How am I today?"
+garmin = { base = "daily_2026_03_18", overlays = ["daily_yellow"] }
+why = """Yellow (resting HR 53 vs 48) with only an easy run planned is "train as planned": counter-intuitive, so
+models tend to "fix" it with Zone 2 or rest advice the server did not give."""
+[case.expect]
+must_mention = ["yellow", "53", "48", "as planned"]
+must_not_mention = ["zone 2"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["yellow", "high_rhr", "as_planned"]
+
+[[case]]
+id = "F04"
+title = "Red day with a hard workout"
+prompt = "How am I today?"
+variants = ["instr"]
+smoke = true
+garmin = { base = "daily_2026_03_18", overlays = ["daily_red"] }
+why = """The red path and the hard-workout column: 5.5 h after a 5.7 h night is sleep debt, the threshold run is
+today, so "Short Zone 2 or rest." No number beyond the tool's and no medical claim."""
+[case.expect]
+must_mention = ["red", "zone 2"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["red", "sleep_debt", "short_zone2_or_rest", "5.5", "5.7"]
+
+[[case]]
+id = "F05"
+title = "Incomplete data: decide by feel"
+prompt = "How am I today?"
+variants = ["bare"]
+garmin = { base = "daily_2026_03_18", overlays = ["daily_incomplete"] }
+why = """With last night unsynced and no readiness the level is "incomplete" and the advice is to decide by feel;
+the model must not guess a level or a sleep or readiness number."""
+[case.expect]
+must_mention = [["incomplete", "not synced", "not yet synced", "hasn't synced", "has not synced", "sync", "synced", "syncing", "by feel", "missing", "not available", "no sleep"]]
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+tool_output_has = ["incomplete", "no_recovery_data"]
+
+[[case]]
+id = "F06"
+title = "Missing Body Battery is missing"
+prompt = "What's my Body Battery this morning?"
+variants = ["instr"]
+garmin = { base = "daily_2026_03_18", overlays = ["daily_no_body_battery"] }
+why = """"A value listed as missing is missing": the status shows body_battery null (no rule needs it, so it is
+not in `missing`); no Body Battery number, none estimated from stress or sleep."""
+[case.expect]
+tools_any = ["get_daily_status", "get_stats", "get_body_battery", "get_sleep_summary"]
+must_mention = [["Body Battery", "body_battery", "battery"]]
+must_not_mention = ["71", "Body Battery is about", "Body Battery is around", "Body Battery is roughly", "Body Battery is approximately", "Body Battery is near", "Body Battery is somewhere around", "Body Battery of about", "Body Battery of around", "Body Battery of roughly", "Body Battery of approximately", "Body Battery at about", "Body Battery at around", "Body Battery at roughly", "Body Battery is probably around", "Body Battery is probably about", "Body Battery is likely around", "Body Battery is likely about", 're:\bbody battery\W+(?:\w+\W+){0,3}(?:about|around|roughly|approximately|approx|near|maybe|probably|likely|estimate\w*|guess\w*|~)\W+(?:\w+\W+){0,2}\d']
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+tool_output_has = ['"body_battery": null']
+
+[[case]]
+id = "F07"
+title = "Weekly review reported as given"
+prompt = "How was my week?"
+variants = ["instr"]
+now = "2026-03-08T06:30"
+garmin = { base = "weekly_2026_03_01" }
+why = """Weekly faithfulness: yellow, three nights under 6 h, gear near its limit, 7 of 8 planned sessions; and the
+decoupling sign read as the description says (negative is drift), not inverted."""
+[case.expect]
+must_mention = ["yellow"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+tool_output_has = ["yellow", "short_nights", "gear_near_limit"]

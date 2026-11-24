@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# Docker Compose: the Cloudflare Tunnel token (compose.yaml)
+tunnel.env
 
 # Garmin OAuth tokens: never commit credentials (`railway up` honors this file too)
 tokens/
@@ -10,12 +12,17 @@ tokens/
 garmin_tokens.json
 .garminconnect*
 *garminconnect_base64*
+*garmin_tokens.base64*
+garmin-key/
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Eval runs (CI keeps them as artifacts; baselines live in evals/baselines/)
+evals/runs/
 
 # Local notes
 *.local.md
