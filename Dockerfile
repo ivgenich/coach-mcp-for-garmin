@@ -9,7 +9,7 @@
 # Caddy release binary (static Go build) from the official image.
 FROM caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e AS caddy
 
-FROM python:3.12.15-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+FROM python:3.15.1-slim@sha256:533b0b2f9b5d46fd097091cf826f27902f1d6c3bca714b6dc74551356aa97a51
 
 # Install from GitHub, not PyPI: the PyPI name "garmin-mcp" belongs to an
 # unrelated project (Tyler-Irving/garmin-mcp), and upstream's only tag, 0.1.0
