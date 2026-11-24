@@ -103,7 +103,8 @@ DOC_TABLE_SQL = (
     f"CREATE INDEX IF NOT EXISTS {DOC_TABLE}_kind_start ON {SCHEMA}.{DOC_TABLE} (account_fp, kind, start_date)",
 )
 _KEYWORD_SQL = (
-    f"SELECT doc_key, content, langchain_metadata::text AS meta, ts_rank_cd(content_tsv, q) AS score "
+    f"SELECT doc_key, kind, start_date, end_date, content, langchain_metadata::text AS meta, "
+    "ts_rank_cd(content_tsv, q) AS score "
     f"FROM {SCHEMA}.{DOC_TABLE}, to_tsquery('english', %(q)s) AS q "
     "WHERE content_tsv @@ q AND account_fp = %(fp)s AND kind = %(kind)s "
     "AND start_date >= %(date_from)s AND start_date <= %(date_to)s "
@@ -460,8 +461,11 @@ class PgKeywordBackend:
             log.warning("history keyword search: %s", DB_ERROR_TEXT)
             raise HistoryUnavailable("database") from None
         out = []
-        for key, content, meta, score in rows:
+        for key, kind_col, start_col, end_col, content, meta, score in rows:
+            # PGVectorStore keeps metadata_columns (kind, start_date, end_date) in their own columns, not in
+            # langchain_metadata, so the dates come from the columns.
             m = json.loads(meta) if meta else {}
+            m.update({"kind": kind_col, "start": start_col, "end": end_col})
             m["doc_id"] = key
             out.append((Document(page_content=content, metadata=normalise_metadata(m)), float(score)))
         return out

@@ -155,8 +155,9 @@ class FakeConn:
 @unittest.skipUnless(HAVE_LC, LC_SKIP)
 class KeywordSQL(unittest.TestCase):
     def test_query_is_bound_never_in_sql(self):
-        conn = FakeConn(rows=[("week:2026-01-05", "Week text", json.dumps({"kind": "week", "start": "2026-01-05"}),
-                               0.5)])
+        # The row layout of the real table: kind and the dates live in their own columns, not in the JSON.
+        conn = FakeConn(rows=[("week:2026-01-05", "week", "2026-01-05", "2026-01-11", "Week text",
+                               json.dumps({"tags": ["bike"]}), 0.5)])
         backend = hr.PgKeywordBackend("postgres://x", connect=lambda dsn: conn)
         hits = backend.search(hr.query_tokens(CANARY), kind="week", account_fp=FP, date_from="0001-01-01",
                               date_to="9999-12-31", k=5)
@@ -165,6 +166,9 @@ class KeywordSQL(unittest.TestCase):
         self.assertEqual(sql, hr._KEYWORD_SQL)
         self.assertRegex(params["q"], r"^[a-z0-9 |]+$")
         self.assertEqual(hits[0][0].metadata["doc_id"], "week:2026-01-05")
+        meta = hits[0][0].metadata
+        self.assertEqual((meta["kind"], meta["start"], meta["end"]), ("week", "2026-01-05", "2026-01-11"))
+        self.assertEqual(meta["tags"], ["bike"])
 
     def test_no_token_no_query(self):
         conn = FakeConn()
