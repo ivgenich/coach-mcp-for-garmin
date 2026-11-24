@@ -13,7 +13,7 @@
 # Generated 13 Nov 2026 by a real resolve on python 3.12 of upstream's
 # dependencies at that commit plus mcp==2.3.0:
 #   pip install --dry-run --report r.json -c <old pins> \
-#     python-dotenv==1.2.2 garminconnect==0.3.2 requests==2.33.0 \
+#     python-dotenv==1.2.4 garminconnect==0.3.20 requests==2.34.2 \
 #     "fitparse>=1.2.0" mcp==2.3.0
 # The Garmin-side packages (garminconnect, curl-cffi, ua-generator, requests,
 # certifi, urllib3, charset-normalizer) keep the pins of upstream's uv.lock;
@@ -33,21 +33,21 @@
 annotated-types==0.8.0
 anyio==4.16.0
 attrs==25.4.0
-certifi==2026.10.23
-cffi==2.0.0
-charset-normalizer==3.4.1
+certifi==2026.11.20
+cffi==2.1.1
+charset-normalizer==3.5.2
 click==8.5.1
 cryptography==50.0.2
-curl-cffi==0.15.0
+curl-cffi==0.17.0
 fitparse==1.2.0
 # Garmin's official Personal API client (Apache-2.0). Installed in every image by
 # hash from config/garmin-key-client.txt, imported only with GARMIN_AUTH=key.
-garmin-connect-personal-api-python==1.0.0
-garminconnect==0.3.2
+garmin-connect-personal-api-python==1.1.0
+garminconnect==0.3.20
 googleapis-common-protos==1.76.0
 h11==0.16.0
-httpcore2==2.16.0
-httpx2==2.16.0
+httpcore2==2.16.2
+httpx2==2.16.2
 idna==3.20
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
@@ -64,15 +64,15 @@ opentelemetry-proto==1.45.2
 opentelemetry-sdk==1.45.2
 opentelemetry-semantic-conventions==0.66b2
 protobuf==7.36.2
-pycparser==3.0
-pydantic==2.14.3
-pydantic-core==2.50.4
+pycparser==3.12
+pydantic==2.14.4
+pydantic-core==2.50.5
 pygments==2.21.0
 pyjwt==2.15.1
-python-dotenv==1.2.2
-python-multipart==0.0.33
+python-dotenv==1.2.4
+python-multipart==0.0.34
 referencing==0.37.0
-requests==2.33.0
+requests==2.34.2
 rich==15.0.0
 rpds-py==0.30.0
 sse-starlette==3.7.0
@@ -80,6 +80,6 @@ starlette==1.10.0
 truststore==0.10.5
 typing-inspection==0.4.5
 typing-extensions==4.16.0
-ua-generator==2.0.24
+ua-generator==2.1.9
 urllib3==2.8.0
 uvicorn==0.54.0
