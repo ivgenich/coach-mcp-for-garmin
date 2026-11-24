@@ -1,0 +1,219 @@
+# Labelled queries for the history retrieval set (evals/history). Relevant results are named by the planted
+# episodes of evals/history/athlete.py (grade 2 = what the query is about, 1 = a fair answer too), never by
+# dates, so the labels stay right whatever the generator's anchor date.
+#
+# tool = "similar": find_similar_weeks(end_date = a day of `reference`, focus)
+#        reference = "<episode>" (its first week) or "<episode>#<n>" (its n-th week, from 0)
+# tool = "search":  search_history(query, kind, flags, order)
+# Special relevant names: short_sleep_days (single very short nights), sleep_debt_days (the weekday nights of
+# the sleep-debt weeks).
+# info = true: reported, never part of the gate (a Hebrew query the English model is not expected to answer).
+
+# ---- weeks like this one (find_similar_weeks)
+
+[[query]]
+id = "S01"
+tool = "similar"
+reference = "hrv_drop_3"
+relevant = { hrv_drop_1 = 2, hrv_drop_2 = 2 }
+
+[[query]]
+id = "S02"
+tool = "similar"
+reference = "hrv_drop_2"
+relevant = { hrv_drop_1 = 2, hrv_drop_3 = 2 }
+
+[[query]]
+id = "S03"
+tool = "similar"
+reference = "hrv_drop_1"
+focus = "recovery"
+relevant = { hrv_drop_2 = 2, hrv_drop_3 = 2 }
+
+[[query]]
+id = "S04"
+tool = "similar"
+reference = "sleep_debt_2"
+relevant = { sleep_debt_1 = 2 }
+
+[[query]]
+id = "S05"
+tool = "similar"
+reference = "sleep_debt_1"
+focus = "recovery"
+relevant = { sleep_debt_2 = 2 }
+
+[[query]]
+id = "S06"
+tool = "similar"
+reference = "load_spike_2"
+focus = "training"
+relevant = { load_spike_1 = 2, bike_block_2 = 1 }
+
+[[query]]
+id = "S07"
+tool = "similar"
+reference = "load_spike_1"
+relevant = { load_spike_2 = 2 }
+
+[[query]]
+id = "S08"
+tool = "similar"
+reference = "bike_block_2#1"
+focus = "training"
+relevant = { bike_block_1 = 2 }
+
+[[query]]
+id = "S09"
+tool = "similar"
+reference = "bike_block_1#1"
+focus = "training"
+relevant = { bike_block_2 = 2 }
+
+[[query]]
+id = "S10"
+tool = "similar"
+reference = "taper_2"
+focus = "training"
+relevant = { taper_1 = 2, after_drop_1 = 1, after_drop_2 = 1, after_drop_3 = 1 }
+
+[[query]]
+id = "S11"
+tool = "similar"
+reference = "rest_week_3"
+focus = "training"
+relevant = { rest_week_1 = 2, rest_week_2 = 2 }
+
+[[query]]
+id = "S12"
+tool = "similar"
+reference = "high_stress_2"
+focus = "recovery"
+relevant = { high_stress_1 = 2 }
+
+[[query]]
+id = "S13"
+tool = "similar"
+reference = "after_drop_3"
+focus = "training"
+relevant = { after_drop_1 = 2, after_drop_2 = 2, taper_1 = 1, taper_2 = 1 }
+
+# ---- words (search_history)
+
+[[query]]
+id = "T01"
+tool = "search"
+query = "heavy bike block"
+relevant = { bike_block_1 = 2, bike_block_2 = 2 }
+
+[[query]]
+id = "T02"
+tool = "search"
+query = "taper week before a race"
+relevant = { taper_1 = 2, taper_2 = 2, after_drop_1 = 1, after_drop_2 = 1, after_drop_3 = 1 }
+
+[[query]]
+id = "T03"
+tool = "search"
+query = "short nights and sleep debt"
+relevant = { sleep_debt_1 = 2, sleep_debt_2 = 2 }
+
+[[query]]
+id = "T04"
+tool = "search"
+query = "HRV dropped below its average"
+relevant = { hrv_drop_1 = 2, hrv_drop_2 = 2, hrv_drop_3 = 2 }
+
+[[query]]
+id = "T05"
+tool = "search"
+query = "a burnout week with poor recovery"
+relevant = { hrv_drop_1 = 2, hrv_drop_2 = 2, hrv_drop_3 = 2, load_spike_1 = 1, load_spike_2 = 1, sleep_debt_1 = 1, sleep_debt_2 = 1 }
+
+[[query]]
+id = "T06"
+tool = "search"
+query = "rest week with almost no training"
+relevant = { rest_week_1 = 2, rest_week_2 = 2, rest_week_3 = 2 }
+
+[[query]]
+id = "T07"
+tool = "search"
+query = "travelling, the watch was not worn"
+relevant = { travel_gap = 2 }
+
+[[query]]
+id = "T08"
+tool = "search"
+query = "very stressful week"
+relevant = { high_stress_1 = 2, high_stress_2 = 2 }
+
+[[query]]
+id = "T09"
+tool = "search"
+query = "swimming block"
+relevant = { swim_block = 2 }
+
+[[query]]
+id = "T10"
+tool = "search"
+query = "big jump in training volume and high load"
+relevant = { load_spike_1 = 2, load_spike_2 = 2, bike_block_1 = 1, bike_block_2 = 1 }
+
+[[query]]
+id = "T11"
+tool = "search"
+query = "when was I this tired"
+relevant = { hrv_drop_1 = 2, hrv_drop_2 = 2, hrv_drop_3 = 2, sleep_debt_1 = 2, sleep_debt_2 = 2, high_stress_1 = 1, high_stress_2 = 1 }
+
+[[query]]
+id = "T12"
+tool = "search"
+query = "lots of cycling hours"
+relevant = { bike_block_1 = 2, bike_block_2 = 2 }
+
+[[query]]
+id = "T13"
+tool = "search"
+query = "שבוע רכיבה כבד"
+relevant = { bike_block_1 = 2, bike_block_2 = 2 }
+info = true
+
+# ---- flags, newest first ("when did I last ...")
+
+[[query]]
+id = "F01"
+tool = "search"
+flags = "short_nights"
+order = "newest"
+relevant = { sleep_debt_2 = 2, sleep_debt_1 = 1 }
+
+[[query]]
+id = "F02"
+tool = "search"
+flags = "hrv_down"
+order = "newest"
+relevant = { hrv_drop_3 = 2, hrv_drop_2 = 1, hrv_drop_1 = 1 }
+
+[[query]]
+id = "F03"
+tool = "search"
+flags = "load_high"
+relevant = { load_spike_1 = 2, load_spike_2 = 2 }
+
+# ---- days
+
+[[query]]
+id = "D01"
+tool = "search"
+kind = "day"
+query = "a very short night of sleep"
+relevant = { short_sleep_days = 2, sleep_debt_days = 1 }
+
+[[query]]
+id = "D02"
+tool = "search"
+kind = "day"
+flags = "short_sleep"
+order = "newest"
+relevant = { short_sleep_days = 2, sleep_debt_days = 1 }

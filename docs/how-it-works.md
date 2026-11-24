@@ -79,6 +79,30 @@ nothing in the server may build a URL or make a security decision from the reque
 scheme, `Host` or `X-Forwarded-*` headers (a future Host or Origin check included). The
 server's own URL comes only from `PUBLIC_URL` or the Railway domain.
 
+## The Garmin call guard
+
+Every Garmin call from a tool passes a guard in the server (`ext/garmin_guard.py`). After Garmin
+answers with a rate limit, the guard answers further tool calls with the same rate-limit text for
+15 minutes, without calling Garmin: models tend to retry, and each retry can extend Garmin's block.
+A Garmin login error is never held back this way, since a new login fixes it at once. With history
+search on, the guard's state is shared through Postgres with the worker, which pauses 6 hours after
+a rate limit and 24 hours after a login error, never calls Garmin while a tool call ran in the last
+minute, keeps to one call every 5 seconds and 300 a day, and calls Garmin only from 12:00 to 22:00
+in `REPORT_TZ`. In `full` mode the guard also lets only one thread at a time refresh the Garmin
+login.
+
+## Optional services
+
+History search adds services to the same Railway project: a Postgres with pgvector on the private
+network (the stored history, the job queue and the guard's shared state), a worker
+(`ROLE=worker`, the same image) that indexes days through the guard, and a cron service
+(`ROLE=enqueue`) that queues the day's jobs once a day. The worker and the cron service start
+straight from `entrypoint.sh` into Python: no Caddy, no web server, no volume. In `full` mode the
+app stores its Garmin login in Postgres sealed with `HISTORY_TOKEN_KEY`, and the worker reads it
+from there and never refreshes it ([History worker](history-worker.md)). The secrets of the
+optional features (`OTEL_EXPORTER_OTLP_HEADERS`, `DATABASE_URL`, `HISTORY_TOKEN_KEY`) go to
+Python only, never to Caddy, and the server takes them out of its environment once read.
+
 ## Text from Garmin is untrusted
 
 Names, descriptions and notes come from you or from apps
@@ -115,8 +139,16 @@ the owner only.
   2026). The server's logs keep no tokens, secrets or query strings; a failed tool call logs its
   original error with tokens, passwords, keys and emails removed. An internal error also logs a
   traceback, which is not filtered.
-- **Nothing else.** The server calls only Garmin. It sends no analytics or telemetry: the MCP
-  SDK's OpenTelemetry hooks have no exporter in the image, so they do nothing.
+- **Nothing else, unless you turn it on.** With the default settings the server calls only Garmin.
+  It sends no analytics or telemetry: the MCP SDK's OpenTelemetry hooks get no exporter until you
+  set `TRACING=on`, so they do nothing. With `TRACING=on` it also sends traces and metrics to the
+  tracing service you name: tool names, durations, outcomes, error groups and size buckets, never
+  health values, names, ids, dates, tokens, tool arguments or answers ([Tracing](tracing.md)).
+  With `HISTORY_SEARCH=on` it keeps a copy of your daily and weekly numbers in your own Postgres
+  service and sends nothing out: the public embedding model's files are downloaded from
+  huggingface.co (the app keeps them on its volume; the worker has no volume, so it downloads them
+  again after each worker deploy), and the model runs on your server, so no health text goes to an
+  embedding service ([History search](history-search.md)).
 
 On the server, `/data` holds the Garmin login tokens (`full` mode) and the sign-in database. In
 `key` mode the key itself is in your server's settings (`GARMIN_PERSONAL_API_KEY`), and a

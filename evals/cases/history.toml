@@ -1,0 +1,121 @@
+# History search (group "history"): the server runs with the history tools over an in-memory fixture of the
+# synthetic athlete (evals/history/athlete.py; evals/harness/history.py), never Postgres or Garmin.
+# history = "athlete" (78 weeks, complete), "partial" (the newest 20 weeks, index complete=false), "two_weeks"
+# (a new user), "mismatch" (meta account_mismatch=yes) or "off" (feature off, tools absent).
+# search_history runs without the local model, so on the keyword channel (the production fallback).
+# `now` stays the generator's TODAY (2026-11-23) so "last week" is the athlete's last complete week.
+# These cases need the history packages (config/requirements-history.txt); none is a smoke case.
+
+[defaults]
+mode = "full"
+now = "2026-11-23T09:00"
+tz = "Europe/London"
+garmin = { base = "daily_2026_03_18" }
+history = "athlete"
+
+[[case]]
+id = "H01"
+title = "Weeks like last week cite real dates and stored numbers"
+prompt = "Find past weeks that looked like last week and tell me what happened after them."
+why = """The main use: find_similar_weeks, then dates and followed_by from the answer. Every number must be one
+the tool returned; similarity is a rank, not a percentage."""
+[case.expect]
+tools_all = ["find_similar_weeks"]
+must_mention = [["2025-", "2026-"]]
+must_not_mention = ["% similar", "percent similar"]
+no_invented_numbers = true
+judge = ["no_redecide"]
+
+[[case]]
+id = "H02"
+title = "When did I last have short nights: newest first"
+prompt = "When was the last week I had several short nights of sleep?"
+why = """A "when did I last" question: search_history with flags=short_nights and order=newest. The answer
+names the newest such week (2026-06-15) first."""
+[case.expect]
+tools_all = ["search_history"]
+must_mention = ["2026-06-15"]
+no_invented_numbers = true
+
+[[case]]
+id = "H03"
+title = "Partial index is said"
+prompt = "Have I had a heavy bike block like this before? Look through my whole history."
+history = "partial"
+why = """index.complete is false: the model must say the history is still filling and the results may miss
+older weeks, not present them as the whole record."""
+[case.expect]
+tools_any = ["search_history", "find_similar_weeks"]
+must_mention = [["partial", "still", "not complete", "incomplete", "filling", "so far", "only covers", "only goes back"]]
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+
+[[case]]
+id = "H04"
+title = "Key mode: no load claims from history"
+prompt = "Find weeks where my training load was too high."
+mode = "key"
+why = """load_high is not available with a Personal API key: the tool refuses the flag; the model must not make
+up load numbers from hours."""
+[case.expect]
+must_mention = [["Personal API key", "API key", "key mode", "not available", "isn't available", "unavailable", "no training load", "load isn't"]]
+no_invented_numbers = true
+judge = ["missing_not_estimated"]
+
+[[case]]
+id = "H05"
+title = "Feature off: no 52-call loop"
+prompt = "Find weeks in the past year that were like last week."
+history = "off"
+why = """Without the history tools the model must not call get_weekly_status 52 times; at most a few recent
+weeks, and it says the server has no history search."""
+[case.expect]
+max_tool_calls = 4
+must_mention = [["history search", "search your history", "search history", "history tool", "a few recent weeks", "recent weeks", "week by week", "one week at a time", "52"]]
+no_invented_numbers = true
+
+[[case]]
+id = "H06"
+title = "A two-week user"
+prompt = "Which past weeks were most like this one?"
+history = "two_weeks"
+why = """Fewer than 8 indexed weeks: the tool answers No data with the count; the model relays it and does not
+compare two weeks as if they were a history."""
+[case.expect]
+tools_all = ["find_similar_weeks"]
+must_mention = [["8 indexed weeks", "at least 8", "not enough", "too little", "only 2", "two weeks"]]
+no_invented_numbers = true
+
+[[case]]
+id = "H07"
+title = "Hebrew prompt, English query"
+prompt = "\u05de\u05ea\u05d9 \u05d1\u05e4\u05e2\u05dd \u05d4\u05d0\u05d7\u05e8\u05d5\u05e0\u05d4 \u05d4\u05d9\u05d4 \u05dc\u05d9 \u05e9\u05d1\u05d5\u05e2 \u05d0\u05d5\u05e4\u05e0\u05d9\u05d9\u05dd \u05db\u05d1\u05d3?"
+why = """The query must be written in English (the tool description says so); the answer in Hebrew with the
+bike-block dates (2026-05-11 or 2026-05-18 first)."""
+[case.expect]
+tools_all = ["search_history"]
+must_mention = [["2026-05-11", "2026-05-18"]]
+no_invented_numbers = true
+
+[[case]]
+id = "H08"
+title = "Different Garmin account"
+prompt = "Show me weeks like last week."
+history = "mismatch"
+why = """The stored history belongs to another account: the model relays that and the HISTORY_FORGET remedy
+for the owner, and shows no weeks."""
+[case.expect]
+tools_all = ["find_similar_weeks"]
+must_mention = [["different Garmin account", "another account", "different account"]]
+no_invented_numbers = true
+
+[[case]]
+id = "H09"
+title = "Tired is read from numbers and said so"
+prompt = "When did I last feel this tired?"
+why = """The server has no record of feelings: the answer uses sleep/HRV/resting HR/stress weeks and says that
+"tired" is judged from those numbers."""
+[case.expect]
+tools_any = ["search_history", "find_similar_weeks"]
+must_mention = [["HRV", "sleep", "resting heart rate", "stress"], ["from your numbers", "based on", "judged from", "no record of how you felt", "can't see how you felt", "cannot see how you felt", "doesn't record how you felt"]]
+no_invented_numbers = true

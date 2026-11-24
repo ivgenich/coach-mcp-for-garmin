@@ -36,6 +36,20 @@ RUN pip install --no-deps \
         "mcp==2.3.0" \
     && pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt
 
+# The optional features' packages (ext/feature_config.py; both features are
+# off until their variable is set). Tracing (TRACING=on, docs/tracing.md): the
+# OpenTelemetry SDK and OTLP exporter, small, always installed so the switch
+# needs no rebuild. History search (HISTORY_SEARCH=on, docs/history-search.md):
+# LangChain, Postgres and the local embedding model's runtime, about 140 MB,
+# installed only with the build argument HISTORY=1 (on Railway: the service
+# variable HISTORY=1, which Railway passes as a build argument). Both files are
+# the whole dependency closure with hashes, so --no-deps installs exactly them.
+ARG HISTORY=0
+COPY config/requirements-telemetry.txt /tmp/requirements-telemetry.txt
+COPY config/requirements-history.txt /tmp/requirements-history.txt
+RUN pip install --require-hashes --no-deps -r /tmp/requirements-telemetry.txt \
+    && if [ "$HISTORY" = 1 ]; then pip install --require-hashes --no-deps -r /tmp/requirements-history.txt; fi
+
 COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
 
 # Baked in so `railway ssh` and `docker compose exec` shells, which never run
@@ -71,7 +85,9 @@ ENV GARMIN_MCP_TRANSPORT=streamable-http \
 # Personal API client no longer has the classes, constants and errors key
 # mode uses, or upstream no longer logs in through init_api(email, password)
 # (key_mode.selfcheck()), or the status tools' time zone data is missing (any
-# IANA zone; Europe/London is only a probe).
+# IANA zone; Europe/London is only a probe), or the optional features' modules
+# no longer import with their pinned packages (tracing always; history search
+# and its worker with HISTORY=1).
 #
 # The read-only tool list is baked in at a fixed path: launch.py reads
 # ../config/enabled-tools.txt relative to itself, the repo's own layout, so
@@ -81,7 +97,9 @@ COPY config/enabled-tools.txt /opt/config/enabled-tools.txt
 RUN printf '%s\n' "import sys; sys.path.insert(0, '/opt/garmin-ext'); import mcp2_compat; sys.path.remove('/opt/garmin-ext'); mcp2_compat.register_finder()" \
         > "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/garmin_mcp2_compat.pth" \
     && garmin-mcp-auth --help >/dev/null \
-    && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)"
+    && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)" \
+    && python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import telemetry, feature_config, garmin_guard; from opentelemetry.sdk.trace import TracerProvider; from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter" \
+    && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue"; fi
 
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY entrypoint.sh /entrypoint.sh

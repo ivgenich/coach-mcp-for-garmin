@@ -1151,10 +1151,14 @@ class UpstreamToolsOnTheToolLoop(ShimState):
         self.assertTrue(result.is_error)
         self.assertEqual([block.text for block in result.content], [tool_errors.client_text(tool_errors.LOGIN)])
         self.assertEqual(threads, [mcp2_compat.TOOL_LOOP_THREAD_NAME])
-        lines = [(r.levelno, r.getMessage()) for r in records if r.levelno >= logging.INFO]
+        lines = [(r.levelno, r.getMessage()) for r in records
+                 if r.levelno >= logging.INFO and r.name != "garmin_ext.guard"]
         self.assertEqual(len(lines), 1, lines)
         self.assertEqual(lines[0][0], logging.WARNING)
         self.assertTrue(lines[0][1].startswith("tool error: tool=get_activities group=login: "), lines[0][1])
+        # The call guard's own line: a login failure pauses the worker (never live calls).
+        guard = [r.getMessage() for r in records if r.name == "garmin_ext.guard"]
+        self.assertEqual(guard, ["call guard: Garmin login from a tool call; workers pause 24 h"])
 
     def test_every_async_tool_served_takes_the_tool_loop(self):
         # But the two status reports (R6): they await every Garmin call in a worker thread and time it on their

@@ -22,6 +22,9 @@ Optional fields beyond the shared contract (all default to "not used"):
   when the expected tools run without a model (a check of the fixtures, never of the answer).
 - Expect.db_result, db_collections, db_unchanged, db_no_delete: the fake ArtifactData's state after the run
   (runs/latest result; the only collections written; "collection/doc_id" documents left as they were; no delete).
+- Case.history: the history-search fixture the server runs with (evals/harness/history.py): "athlete",
+  "partial", "two_weeks" or "mismatch" add find_similar_weeks and search_history (HISTORY_TOOLS) over the
+  synthetic athlete in memory; "off" (the default) leaves them out. Those cases need the history packages.
 
 Standard library only.
 """
@@ -43,7 +46,8 @@ FIXTURES_DIR = os.path.join(REPO, "evals", "fixtures")
 TOOLS_FILE = os.path.join(REPO, "config", "enabled-tools.txt")
 KEY_TOOLS_FILE = os.path.join(REPO, "config", "enabled-tools-key.txt")
 
-GROUPS = ("tool_choice", "faithfulness", "failure_texts", "key_mode", "safety", "efficiency", "morning_report")
+GROUPS = ("tool_choice", "faithfulness", "failure_texts", "key_mode", "safety", "efficiency", "morning_report",
+          "history")
 # Groups whose every case must pass on every trial (a failure text ignored once is a failure).
 STRICT_GROUPS = ("failure_texts", "safety")
 MODES = ("full", "key")
@@ -55,6 +59,9 @@ EXTRA_TOOLS = ("ArtifactData", "ToolSearch")
 DEFAULT_VARIANTS = ("bare", "instr")
 DEFAULT_TRIALS = 3
 FIXTURE_FOLDERS = ("overlays", "variants")
+# evals/harness/history.FIXTURES and ext/launch.HISTORY_TOOLS (test_cases checks they are equal).
+HISTORY_FIXTURES = ("athlete", "partial", "two_weeks", "mismatch", "off")
+HISTORY_TOOLS = ("find_similar_weeks", "search_history")
 
 ID_RE = re.compile(r"^[A-Z][0-9]{2}$")
 NOW_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
@@ -65,9 +72,9 @@ PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 CASE_KEYS = frozenset({
     "id", "group", "title", "prompt", "mode", "now", "tz", "variants", "garmin", "smoke", "trials",
     "all_trials_must_pass", "why", "expect", "followups", "prompt_file", "report_url", "extra_tools", "db_seed",
-    "max_turns"})
+    "max_turns", "history"})
 DEFAULT_KEYS = frozenset({"mode", "now", "tz", "variants", "trials", "garmin", "all_trials_must_pass", "prompt_file",
-                          "report_url", "extra_tools", "max_turns"})
+                          "report_url", "extra_tools", "max_turns", "history"})
 GARMIN_KEYS = frozenset({"base", "overlays", "faults"})
 SEED_KEYS = frozenset({"collection", "doc_id", "data", "status_of"})
 FILE_KEYS = frozenset({"defaults", "case"})
@@ -129,11 +136,13 @@ class Case:
     extra_tools: tuple = ()
     db_seed: tuple = ()
     max_turns: int | None = None  # model calls per trial; None = the runner's MAX_TURNS
+    history: str = "off"  # the history-search fixture (HISTORY_FIXTURES); "off" = the tools are not served
 
     @property
     def tools(self) -> frozenset:
-        """Every tool name the case may name: the server's tools in its mode plus its extra tools."""
-        return tool_names(self.mode) | frozenset(self.extra_tools)
+        """Every tool name the case may name: the server's tools in its mode (with the history tools when
+        history is on) plus its extra tools."""
+        return case_tools(self.mode, self.history) | frozenset(self.extra_tools)
 
 
 def read_tool_list(path: str) -> frozenset:
@@ -155,6 +164,11 @@ def tool_names(mode: str) -> frozenset:
     if mode not in _TOOL_CACHE:
         _TOOL_CACHE[mode] = read_tool_list(TOOLS_FILE if mode == "full" else KEY_TOOLS_FILE)
     return _TOOL_CACHE[mode]
+
+
+def case_tools(mode: str, history: str = "off") -> frozenset:
+    """The tools the eval server exposes in `mode` with history fixture `history`."""
+    return tool_names(mode) | (frozenset(HISTORY_TOOLS) if history != "off" else frozenset())
 
 
 def fixture_path(name: str, base: bool = False) -> str:
@@ -414,6 +428,9 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
     if bad:
         raise CaseError(f"{where}: unknown extra tool(s): {', '.join(sorted(bad))}")
     followups = _str_list(merged.get("followups", []), where, "followups")
+    history = merged.get("history", "off")
+    if history not in HISTORY_FIXTURES:
+        raise CaseError(f"{where}: history must be one of {', '.join(HISTORY_FIXTURES)}")
 
     prompt_file, report_url = merged.get("prompt_file"), merged.get("report_url")
     if prompt_file is not None:
@@ -435,7 +452,7 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
     seed = _seed(merged.get("db_seed", []), where, check_files)
     if seed and "ArtifactData" not in extra:
         raise CaseError(f"{where}: db_seed needs ArtifactData in extra_tools")
-    tools = tool_names(mode) | frozenset(extra)
+    tools = case_tools(mode, history) | frozenset(extra)
     exp = _expect(merged.get("expect", {}), where, tools)
     for target in garmin["faults"]:
         if target in tool_names("full") and target not in tools:
@@ -446,7 +463,7 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
                 tz=tz, variants=tuple(variants), garmin=garmin, smoke=merged.get("smoke", False), trials=trials,
                 all_trials_must_pass=strict, why=" ".join(merged["why"].split()), expect=exp,
                 followups=followups, prompt_file=prompt_file, report_url=report_url, extra_tools=extra,
-                db_seed=seed, max_turns=max_turns)
+                db_seed=seed, max_turns=max_turns, history=history)
 
 
 def load_file(path: str, check_files: bool = True) -> list:

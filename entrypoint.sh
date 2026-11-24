@@ -7,12 +7,20 @@
 #      EDGE_CLIENT_IP_HEADER or the sign-in settings (OWNER_SECRET,
 #      PUBLIC_URL, the optional MCP_BEARER_TOKEN, AUTH_DB,
 #      ALLOWED_REDIRECT_URIS).
-#   2. Runs garmin-mcp on 127.0.0.1:8000 in the background and restarts it if
-#      it exits, and (full mode) once more when first-time Garmin tokens appear.
-#   3. Replaces itself with Caddy (PID 1), which owns the public $PORT.
+#      The check also covers the optional features (TRACING, HISTORY_SEARCH,
+#      ROLE and their settings; ext/feature_config.py).
+#   2. ROLE=worker or ROLE=enqueue (history search's job worker and its daily
+#      cron run, docs/history-worker.md): replaces itself with worker.py or
+#      enqueue.py; no Caddy, no MCP server, no volume needed.
+#   3. Otherwise (ROLE=app, the default) runs garmin-mcp on 127.0.0.1:8000 in
+#      the background and restarts it if it exits, and (full mode) once more
+#      when first-time Garmin tokens appear.
+#   4. Replaces itself with Caddy (PID 1), which owns the public $PORT.
 # Python does the sign-in, so it gets OWNER_SECRET, the optional
-# MCP_BEARER_TOKEN and, in key mode, GARMIN_PERSONAL_API_KEY; Caddy is only the
-# edge and gets no secret. Secret values are never printed.
+# MCP_BEARER_TOKEN and, in key mode, GARMIN_PERSONAL_API_KEY, and the optional
+# features' secrets (OTEL_EXPORTER_OTLP_HEADERS, DATABASE_URL,
+# HISTORY_TOKEN_KEY); Caddy is only the edge and gets no secret. Secret values
+# are never printed.
 set -eu
 
 log() { echo "entrypoint: $*" >&2; }
@@ -67,6 +75,21 @@ esac
 # serving.
 python /opt/garmin-ext/launch.py --check-config </dev/null ||
 	die "configuration check failed (see the launch: lines above). Fix the settings (Railway: service variables; Docker: .env) and redeploy or restart."
+
+# --- ROLE=worker or ROLE=enqueue: history search's jobs, not the server -------
+# The check above refused any other ROLE, and these two without
+# HISTORY_SEARCH=on. exec makes the worker PID 1, so the platform's SIGTERM
+# reaches it (its leases are released, docs/history-worker.md).
+role=$(printf '%s' "${ROLE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+case "$role" in
+worker)
+	log "ROLE=worker: starting the history job worker (no MCP server here)."
+	exec python /opt/garmin-ext/worker.py </dev/null
+	;;
+enqueue)
+	exec python /opt/garmin-ext/enqueue.py </dev/null
+	;;
+esac
 
 # GARMIN_AUTH is full or key here: the check above refuses anything else.
 case "$(printf '%s' "${GARMIN_AUTH:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
@@ -140,6 +163,8 @@ pidfile="${TMPDIR:-/tmp}/garmin-mcp.pid"
 # --- Caddy as PID 1 ----------------------------------------------------------
 # Receives the platform's SIGTERM and shuts down cleanly; the container stops
 # with it. Caddy is only the edge (the sign-in is in Python), so it starts
-# without the secrets; env execs it in place, so it stays PID 1. It keeps
-# EDGE_CLIENT_IP_HEADER, which the Caddyfile reads.
-exec env -u OWNER_SECRET -u MCP_BEARER_TOKEN -u GARMIN_PERSONAL_API_KEY caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+# without the secrets, the optional features' ones too (the tracing service's
+# auth headers, the per-signal ones as well, the Postgres URL and password, the token key, and Langfuse's
+# keys should someone set them here); env execs it in place, so it stays
+# PID 1. It keeps EDGE_CLIENT_IP_HEADER, which the Caddyfile reads.
+exec env -u OWNER_SECRET -u MCP_BEARER_TOKEN -u GARMIN_PERSONAL_API_KEY -u OTEL_EXPORTER_OTLP_HEADERS -u OTEL_EXPORTER_OTLP_TRACES_HEADERS -u OTEL_EXPORTER_OTLP_METRICS_HEADERS -u OTEL_EXPORTER_OTLP_LOGS_HEADERS -u DATABASE_URL -u HISTORY_TOKEN_KEY -u PGPASSWORD -u LANGFUSE_SECRET_KEY -u LANGFUSE_PUBLIC_KEY caddy run --config /etc/caddy/Caddyfile --adapter caddyfile

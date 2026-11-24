@@ -35,7 +35,9 @@ In scope, this repository's code and configuration:
 - The read-only tool policy: any way to make the server expose or run a tool that changes Garmin
   data.
 - Leaks of secrets, tokens, Garmin credentials or keys, or health data through tool answers,
-  errors, logs or files.
+  errors, logs, files or telemetry. With tracing on, Grafana and Langfuse receive metadata only
+  (tool names, timings, error groups, token counts and cost), never health values or text
+  ([Tracing](docs/tracing.md)).
 - The edge configuration (`Caddyfile`), the container image built from this repository
   (`Dockerfile`, `entrypoint.sh`), and the deploy files and scripts (`compose.yaml`,
   `scripts/deploy.sh`).

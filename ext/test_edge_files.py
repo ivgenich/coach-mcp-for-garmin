@@ -50,9 +50,10 @@ VERSION_PY = os.path.join(HERE, "version.py")
 KEY_MODE_PY = os.path.join(HERE, "key_mode.py")
 TOOLS_FULL = os.path.join(ROOT, "config", "enabled-tools.txt")
 TOOLS_KEY = os.path.join(ROOT, "config", "enabled-tools-key.txt")
-# The thirteen pages of docs/ (DOCS contract D2, plus evals); README links each of them.
+# The sixteen pages of docs/ (DOCS contract D2, plus evals and the optional features); README links each.
 DOC_PAGES = ("deploy-railway", "deploy-docker", "garmin-login", "connect-claude", "tools", "daily-status",
-             "weekly-status", "maintenance", "updates", "protocol", "how-it-works", "troubleshooting", "evals")
+             "weekly-status", "maintenance", "updates", "protocol", "how-it-works", "troubleshooting", "evals",
+             "tracing", "history-search", "history-worker")
 
 BASH = shutil.which("bash") or "/bin/bash"
 # The OWNER_SECRET alphabet: no 0, 1, i, l or o.
@@ -673,6 +674,83 @@ class EntrypointPort(unittest.TestCase):
                 self.assertLess(check, first(later))
 
 
+@unittest.skipUnless(SHELLS, "needs sh on PATH")
+class EntrypointFeatures(unittest.TestCase):
+    """The optional features in entrypoint.sh: ROLE=worker and ROLE=enqueue replace the script with their
+    module after the config check, and Caddy starts without any feature secret (feature_config.SECRET_ENVS)."""
+
+    def setUp(self):
+        self.text = read(os.path.join(ROOT, "entrypoint.sh"))
+        self.code = [line.strip() for line in self.text.splitlines() if not line.lstrip().startswith("#")]
+
+    def test_caddy_gets_no_feature_secret(self):
+        import feature_config
+
+        (caddy,) = [line for line in self.code if "caddy run" in line]
+        words = caddy.split("caddy run", 1)[0].split()
+        unset = {words[i + 1] for i, word in enumerate(words[:-1]) if word == "-u"}
+        self.assertLessEqual(set(feature_config.SECRET_ENVS), unset)
+        self.assertLessEqual({"PGPASSWORD", "LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY"}, unset)
+
+    def test_caddy_gets_no_per_signal_otlp_headers(self):
+        import telemetry
+
+        (caddy,) = [line for line in self.code if "caddy run" in line]
+        words = caddy.split("caddy run", 1)[0].split()
+        unset = {words[i + 1] for i, word in enumerate(words[:-1]) if word == "-u"}
+        self.assertLessEqual({telemetry.HEADERS_ENV, *telemetry.SIGNAL_HEADERS_ENV}, unset)
+
+    def run_role_block(self, role, shell):
+        start = self.text.index("role=$(printf")
+        block = self.text[start:self.text.index("esac", start) + 4]
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = os.path.join(tmp, "python")
+            with open(stub, "w", encoding="utf-8") as f:
+                f.write('#!/bin/sh\necho "ran $*"\n')
+            os.chmod(stub, 0o755)
+            env = {"PATH": tmp + os.pathsep + os.environ.get("PATH", "")}
+            if role is not None:
+                env["ROLE"] = role
+            script = 'set -eu\nlog() { echo "entrypoint: $*" >&2; }\n' + block + '\necho "went on"\n'
+            return subprocess.run([shell, "-c", script], env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, timeout=30)
+
+    def test_roles(self):
+        for shell in SHELLS:
+            for role, expected in ((None, "went on\n"), ("", "went on\n"), ("app", "went on\n"),
+                                   ("worker", "ran /opt/garmin-ext/worker.py\n"),
+                                   (" Worker ", "ran /opt/garmin-ext/worker.py\n"),
+                                   ("enqueue", "ran /opt/garmin-ext/enqueue.py\n")):
+                with self.subTest(shell=shell, role=role):
+                    proc = self.run_role_block(role, shell)
+                    self.assertEqual((proc.returncode, proc.stdout), (0, expected), proc.stderr)
+
+    def test_roles_start_after_the_check_and_before_the_server(self):
+        def first(needle):
+            return next(i for i, line in enumerate(self.code) if needle in line)
+
+        role = first('case "$role" in')
+        self.assertLess(first("launch.py --check-config"), role)
+        for later in ("mkdir -p", "while :", "caddy run"):
+            with self.subTest(later=later):
+                self.assertLess(role, first(later))
+
+
+class DockerfileFeatures(unittest.TestCase):
+    """The tracing pins always install; the history pins only with the build argument HISTORY=1."""
+
+    def test_install_lines(self):
+        text = read(os.path.join(ROOT, "Dockerfile"))
+        self.assertIn("ARG HISTORY=0", text)
+        self.assertIn("RUN pip install --require-hashes --no-deps -r /tmp/requirements-telemetry.txt", text)
+        self.assertIn('if [ "$HISTORY" = 1 ]; then pip install --require-hashes --no-deps -r '
+                      '/tmp/requirements-history.txt; fi', text)
+        self.assertLess(text.index("ARG HISTORY=0"), text.index('if [ "$HISTORY" = 1 ]'))
+        for name in ("requirements-telemetry.txt", "requirements-history.txt"):
+            with self.subTest(name=name):
+                self.assertIn(f"COPY config/{name} /tmp/{name}", text)
+
+
 def flat(text):
     """Whitespace collapsed, so a pinned text may wrap anywhere."""
     return " ".join(text.split())
@@ -928,9 +1006,9 @@ class DocLinks(unittest.TestCase):
 
 
 class DocIndex(unittest.TestCase):
-    """T-INDEX and T-QS: the thirteen pages, the README links, a one-screen quickstart."""
+    """T-INDEX and T-QS: the doc pages, the README links, a one-screen quickstart."""
 
-    def test_docs_holds_exactly_the_thirteen_pages_and_readme_links_them(self):
+    def test_docs_holds_exactly_the_doc_pages_and_readme_links_them(self):
         present = sorted(os.path.basename(p)[:-3] for p in glob.glob(os.path.join(DOCS_DIR, "*.md")))
         self.assertEqual(present, sorted(DOC_PAGES))
         targets = {t.partition("#")[0] for t in link_targets(read(README))}

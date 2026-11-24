@@ -103,12 +103,45 @@ uses it, and sets it itself.
 | `AUTH_DB` | no | Where the sign-ins are stored. Default `/data/auth.sqlite`, on the volume. |
 | `ALLOWED_REDIRECT_URIS` | no | Extra exact https redirect URIs a client may register, comma-separated, at most 10. claude.ai's and Claude Code's (`http://localhost:<port>/...`) are always allowed. |
 
+The optional features are off until you set their switch; see
+[Optional: tracing and history search](#optional-tracing-and-history-search). A wrong value
+stops the server at startup with a `launch: config error:` line, like the settings above.
+
+| Variable | Needed | What it does |
+|---|---|---|
+| `TRACING` | no, default `off` | `on` sends traces and metrics, with no health values, to your tracing service ([Tracing](tracing.md)). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | with `TRACING=on` | The tracing service's OTLP/HTTP https URL. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | usually, with `TRACING=on` | The service's auth header as `name=value`, a secret: set it with the `read -rs` line above. Caddy never sees it, and the server takes it out of its environment once read. |
+| `HISTORY_SEARCH` | no, default `off` | `on` adds the history tools `find_similar_weeks` and `search_history` ([History search](history-search.md)). Needs an image built with `HISTORY=1`, a Postgres service and a worker service. |
+| `HISTORY` | with `HISTORY_SEARCH=on` | `1` makes Railway build the image with the history packages (about 140 MB more). Railway passes service variables to the build. Set it on the app and the worker. |
+| `DATABASE_URL` | with `HISTORY_SEARCH=on` | The Postgres URL, a secret. On Railway set it to the reference `${{Postgres.DATABASE_URL}}` in the dashboard, so the value is never typed. |
+| `HISTORY_TOKEN_KEY` | with `HISTORY_SEARCH=on` in `full` mode | 32 random bytes in base64, a secret, the same on the app and the worker: the worker reads the Garmin login from Postgres with it ([History worker](history-worker.md)). |
+| `ROLE` | no, default `app` | `worker` on the worker service, `enqueue` on the cron service; both need `HISTORY_SEARCH=on`. |
+| `WORKER_CONCURRENCY` | no, default `1` | Job threads in one worker, 1 to 4. More threads never mean more Garmin calls: every worker shares one rate limit. |
+| `HISTORY_FORGET` | no | `yes` deletes the stored history at the next start (set it on the app and the worker), then delete the variable again ([History search](history-search.md)). |
+
 ## Health check
 
 deploy.sh sets the service's health check path to `/healthz` on its first run. If it says it
 could not, set it in the dashboard: the service's **Settings → Deploy → Healthcheck Path**,
 `/healthz`. Never `/readyz`: in `full` mode it answers 503 until the Garmin login, so the first
 deploy would never finish.
+
+## Optional: tracing and history search
+
+Both are off by default, and nothing changes until you set their variables (table above).
+
+- **Tracing** needs only variables on this service: `TRACING=on`, the endpoint and the auth
+  header of your tracing service. [Tracing](tracing.md) walks through Grafana Cloud's free tier.
+- **History search** needs three more services in the same Railway project: a Postgres with the
+  `vector` extension (private network only), a worker (this repository again, with `ROLE=worker`)
+  and a cron service (`ROLE=enqueue`, once a day). Set `HISTORY=1` and `HISTORY_SEARCH=on` on the
+  app and the worker. [History worker](history-worker.md) has the steps; [History search](history-search.md)
+  says what is stored and how to delete it.
+
+The worker and the cron service run no web server: give them no domain, no volume and no health
+check path. They need the same `GARMIN_AUTH` and `REPORT_TZ` as the app, and in `key` mode the
+same `GARMIN_PERSONAL_API_KEY`.
 
 ## Next
 

@@ -8,7 +8,7 @@ answer with few calls? The evals live in `evals/` and are not part of the server
 
 ## What is measured
 
-About 40 cases in 7 groups, one TOML file per group in `evals/cases/`:
+About 50 cases in 8 groups, one TOML file per group in `evals/cases/`:
 
 | Group | What it checks |
 |---|---|
@@ -19,6 +19,7 @@ About 40 cases in 7 groups, one TOML file per group in `evals/cases/`:
 | safety | Instructions planted in activity, workout and course names are not followed; write requests are refused, not faked |
 | efficiency | One range call instead of many single days; few calls per answer |
 | morning_report | The claude.ai morning-report recipe's flow, offline |
+| history | History search (`find_similar_weeks`, `search_history`) over an in-memory synthetic athlete: real dates and stored numbers, a partial index said, key-mode limits, no 52-call loop with the feature off (docs/history-search.md); needs the history packages |
 
 Each case says what to expect (`[case.expect]`: tools, arguments, call budget, phrases that
 must or must not appear, the error group, judge rubric items) and why the case exists.
@@ -107,6 +108,9 @@ choose `smoke` or `full`, the model and the cap. The workflow runs the offline t
 then the live run, writes `summary.md` to the job page and keeps the run folder as an artifact
 for 30 days.
 
+To trace eval runs in Langfuse, add `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and optionally
+`LANGFUSE_BASE_URL` to the same environment: see [Tracing: eval runs](tracing.md#eval-runs).
+
 ## Cost
 
 Estimates before the first measured run (prices per million tokens: Opus 5.5 $4 in / $20 out,
@@ -117,7 +121,7 @@ tokens over ~2.5 model calls and ~1.5k output tokens with thinking.
 |---|---|---|---|
 | one trial (cached) | 1 | ~$0.03 | ~$0.06 |
 | smoke (6 cases, 1 trial) | 6 | ~$0.2 | ~$0.5 |
-| full (40 cases, ~1.5 variants each, 1 trial: the default) | ~60 | ~$2-4 | ~$4-6 |
+| full (49 cases, ~1.5 variants each, 1 trial: the default) | ~60 | ~$2-4 | ~$4-6 |
 | release baseline (`--trials 3`) | ~180 | ~$7-10 | ~$12-16 |
 
 The judge (Haiku 5.5) adds cents. Offline grading, regrading and `compare` cost nothing.

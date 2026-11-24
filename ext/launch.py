@@ -56,16 +56,44 @@ points. main() also sends server_instructions.INSTRUCTIONS at the handshake,
 add_tool() ends the descriptions of the tools whose answers carry names and
 notes with server_instructions.FREE_TEXT_NOTE, and gate() fails the build if
 the SDK stops sending tools/call through MCPServer.call_tool().
+
+The Garmin call guard (garmin_guard) is on in every install: main() builds
+one, and call_tool() asks it before each Garmin tool call, so a Garmin rate
+limit stops live retries for 15 minutes in code, not only in the text the
+model sees; a refused call is answered with the rate-limit text and Garmin is
+not called. It also serialises full mode's token refresh (refresh_lock).
+
+The optional features (feature_config; both off by default, and then nothing
+below runs):
+- TRACING=on: main() calls telemetry.setup() and call_tool() wraps each call
+  in a "tool" span and records its outcome (telemetry.py, docs/tracing.md);
+- HISTORY_SEARCH=on: the history tools (history_tools.register(), the names
+  in HISTORY_TOOLS) join the read-only list, the guard keeps its state in
+  Postgres (garmin_guard_pg) so the worker sees it, and the app enqueues the
+  catch-up jobs at startup (docs/history-search.md);
+- HISTORY_FORGET=yes: main() deletes the stored history (history_store's
+  forget_all()) before anything else uses the database;
+- ROLE=worker or enqueue: main() runs worker.py's or enqueue.py's main()
+  instead of the server (entrypoint.sh starts those directly;
+  docs/history-worker.md).
+The modules of the features are imported only when a feature is on, so the
+server starts without their packages.
 """
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import datetime
+import importlib
+import importlib.util
 import inspect
 import logging
 import os
 import re
 import sys
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -74,9 +102,12 @@ import auth_config  # noqa: E402
 import auth_http  # noqa: E402
 import auth_store  # noqa: E402
 import course_profile  # noqa: E402
+import feature_config  # noqa: E402
+import garmin_guard  # noqa: E402
 import mcp2_compat  # noqa: E402
 import daily_status  # noqa: E402
 import key_mode  # noqa: E402
+import log_privacy  # noqa: E402
 import server_instructions  # noqa: E402
 import status_common  # noqa: E402
 import text_hygiene  # noqa: E402
@@ -101,6 +132,26 @@ _KEY_MODE = False
 # this set would register unannotated (and the read-only policy below would
 # refuse to expose it).
 EXTRA_READ_ONLY_TOOLS = frozenset({"get_course_profile", "get_daily_status", "get_weekly_status"})
+# The history-search tools (history_tools.py): read-only, they read only
+# Postgres and never call Garmin. They join the allowed list only with
+# HISTORY_SEARCH=on (allowed_tools()), outside config/enabled-tools.txt, and
+# GARMIN_ENABLED_TOOLS may narrow them away like any other tool.
+HISTORY_TOOLS = frozenset({"find_similar_weeks", "search_history"})
+# This repo's tools: they clean their own read points, so call_tool() leaves
+# their answers as they are.
+OWN_TOOLS = EXTRA_READ_ONLY_TOOLS | HISTORY_TOOLS
+
+# The feature settings main() read (feature_config.FeatureConfig); both off
+# until main() runs.
+_FEATURES = feature_config.FeatureConfig()
+# The Garmin call guard main() builds; None until then, so a server built by a
+# test without main() calls Garmin as before.
+_GUARD = None
+# The telemetry module, when main() set tracing up; None otherwise.
+_TELEMETRY = None
+# The outcome group of the tool call running in this context: _failure() sets
+# it, call_tool() reads it for the guard and the telemetry.
+_CALL_GROUP = contextvars.ContextVar("coach_call_group", default=None)
 
 # serverInfo.name for clients. Upstream's main() names its server
 # "Garmin Connect v1.0", Garmin's product name; main() overrides it.
@@ -249,6 +300,8 @@ def allowed_tools(environ):
 
     In key mode (GARMIN_AUTH=key) only key_mode.KEY_MODE_TOOLS; an unset or
     invalid GARMIN_AUTH uses the full list (key_mode.check() reports it).
+    With HISTORY_SEARCH=on (ROLE=app) the HISTORY_TOOLS join the list in
+    both modes.
     """
     mcp2_compat.install()
     from garmin_mcp import tool_annotations
@@ -258,7 +311,14 @@ def allowed_tools(environ):
     # one of this repo's (or after patch() merged them into READ_ONLY_TOOLS).
     read_only = (tool_annotations.READ_ONLY_TOOLS | EXTRA_READ_ONLY_TOOLS) - write
     available = key_mode.KEY_MODE_TOOLS if _is_key_mode(environ) else None
-    allowed, errors = resolve_tools(environ, read_enabled_tools_file(), read_only, write, available)
+    baked = read_enabled_tools_file()
+    features = feature_config.load(environ)
+    if features.history and features.role == "app":
+        baked = list(baked) + sorted(HISTORY_TOOLS)
+        read_only = read_only | (HISTORY_TOOLS - write)
+        if available is not None:
+            available = frozenset(available) | HISTORY_TOOLS
+    allowed, errors = resolve_tools(environ, baked, read_only, write, available)
     if errors:
         raise ConfigError(errors)
     return allowed
@@ -315,6 +375,37 @@ def read_only_server_class(base, allowed):
             return super().add_tool(fn, name, *args, **kwargs)
 
         async def call_tool(self, name, arguments, context=None):
+            # The guard (set up by main()) for a Garmin tool; the history tools never call Garmin.
+            guard = _GUARD if (name in allowed and name not in HISTORY_TOOLS) else None
+            if guard is not None:
+                try:
+                    guard.before_call(garmin_guard.TOOL)
+                except garmin_guard.GuardBlocked as blocked:
+                    _record_tool_call(name, "blocked", tool_errors.RATE_LIMITED, 0.0, None, guard)
+                    return _failure(name, tool_errors.RATE_LIMITED, None, str(blocked))
+                except Exception:  # noqa: BLE001 - the guard never breaks a call
+                    guard = None
+                else:
+                    guard.live_call_started()
+            token = _CALL_GROUP.set(None)
+            started = time.monotonic()
+            result = None
+            try:
+                with _tool_span(name) as span:
+                    result = await self._coach_call_tool(name, arguments, context)
+                    _finish_span(span, _CALL_GROUP.get(), result)
+                return result
+            finally:
+                group = _CALL_GROUP.get() if result is not None else tool_errors.INTERNAL
+                if guard is not None:
+                    guard.live_call_finished()
+                    guard.after_outcome(garmin_guard.TOOL, group)
+                if _TELEMETRY is not None:
+                    _record_tool_call(name, "ok" if group is None else "error", group,
+                                      time.monotonic() - started, result, guard)
+                _CALL_GROUP.reset(token)
+
+        async def _coach_call_tool(self, name, arguments, context=None):
             import anyio.to_thread
             from mcp.shared.exceptions import MCPError
             from mcp_types import CallToolResult, InputRequiredResult, TextContent
@@ -336,7 +427,7 @@ def read_only_server_class(base, allowed):
                 if result.is_error or tool_errors.is_failure_text(text):
                     group, detail = tool_errors.classify_text(text)
                     return _failure(name, group, detail, text, original=result)
-                if name in EXTRA_READ_ONLY_TOOLS:
+                if name in OWN_TOOLS:
                     return result
                 if name == "get_sleep_summary" and tool_errors.is_empty_sleep_summary(text):
                     # A night that has not synced yet: an empty object says nothing, so say "no data".
@@ -378,6 +469,7 @@ def _failure(name, group, detail, text, *, exc_info=None, original=None, message
     """
     from mcp_types import CallToolResult, TextContent
 
+    _CALL_GROUP.set(group)
     ref = tool_errors.new_ref() if group == tool_errors.INTERNAL else None
     tool = tool_errors.redact(name, limit=64)
     line = tool_errors.redact(text)
@@ -407,6 +499,297 @@ def _today_iso():
         return status_common.today_local(status_common.zone()).isoformat()
     except Exception:  # noqa: BLE001 - a failure answer must not fail
         return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+
+
+def _answer_bytes(result):
+    """The UTF-8 size of a result's first text block; 0 when there is none."""
+    try:
+        first = result.content[0] if result is not None and result.content else None
+        text = first.text if getattr(first, "type", None) == "text" else ""
+        return len(text.encode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _mode_name():
+    return "key" if _KEY_MODE else "full"
+
+
+def _tool_span(name):
+    """The "tool <name>" span around one tool call (telemetry.span; a name the client sent that is no
+    served tool reads "other"), or a context that yields None when tracing is off."""
+    if _TELEMETRY is None:
+        return contextlib.nullcontext()
+    try:
+        return _TELEMETRY.span(f"tool {name}", tool=name, caller="tool", mode=_mode_name())
+    except Exception:  # noqa: BLE001 - tracing never breaks a tool call
+        return contextlib.nullcontext()
+
+
+def _finish_span(span, group, result):
+    """The outcome on the tool span: outcome, error group and the answer's size bucket. Never raises."""
+    if span is None:
+        return
+    try:
+        span.set(outcome="ok" if group is None else "error",
+                 answer_bytes_bucket=_TELEMETRY.bytes_bucket(_answer_bytes(result)))
+        if group is not None:
+            span.set(error_group=group)
+            if tool_errors.IS_ERROR.get(group, True):
+                span.error(group)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_tool_call(name, outcome, group, seconds, result, guard):
+    """The tool metrics (coach.tool.calls, .duration, .answer.size) and the cooldown gauge. Never raises."""
+    if _TELEMETRY is None:
+        return
+    try:
+        mode = _mode_name()
+        attrs = {"tool": name, "outcome": outcome, "mode": mode}
+        if group is not None:
+            attrs["error_group"] = group
+        _TELEMETRY.metric_count("coach.tool.calls", 1, **attrs)
+        if outcome != "blocked":
+            _TELEMETRY.metric_observe("coach.tool.duration", seconds, tool=name, mode=mode)
+            _TELEMETRY.metric_observe("coach.tool.answer.size", _answer_bytes(result), tool=name)
+        if guard is not None:
+            until, cooldown_group = guard.cooldown()
+            active = until is not None and until > time.time()
+            gauge = {"error_group": cooldown_group} if active and cooldown_group in tool_errors.GROUPS else {}
+            _TELEMETRY.metric_gauge("coach.garmin.cooldown.active", 1 if active else 0, **gauge)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# The first path segments of the Garmin Connect API that garminconnect and garmin_mcp call (collected from
+# their URL constants); telemetry.GARMIN_ENDPOINT_FAMILIES is the same list (a test keeps them equal). Any
+# other segment, such as a display name in a "/latest/<name>" path, is reported as "other".
+GARMIN_ENDPOINT_FAMILIES = frozenset((
+    "activity-service", "activitylist-service", "adhocchallenge-service", "badge-service",
+    "badgechallenge-service", "biometric-service", "bloodpressure-service", "calendar-service", "course-service",
+    "device-service", "download-service", "fitnessage-service", "fitnessstats-service", "gcs-golfcommunity",
+    "gear-service", "goal-service", "graphql-gateway", "hrv-service", "lifestylelogging-service",
+    "metrics-service", "mobile-gateway", "nutrition-service", "periodichealth-service", "personalrecord-service",
+    "sleep-service", "trainingplan-service", "upload-service", "userprofile-service", "userstats-service",
+    "usersummary-service", "web-gateway", "weight-service", "wellness-service", "workout-service",
+))
+_SOURCE_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
+
+
+def _endpoint_family(path):
+    """The first segment of a Garmin API path when it is a known service ("wellness-service"), else
+    "other". Never the rest: later segments can hold the account's display name or ids."""
+    try:
+        head = str(path).lstrip("/").split("/", 1)[0].split("?", 1)[0]
+    except Exception:  # noqa: BLE001
+        return "other"
+    return head if head in GARMIN_ENDPOINT_FAMILIES else "other"
+
+
+class _BoundThreading:
+    """Stands in for the `threading` module inside upstream garmin_mcp: Thread targets run in the
+    caller's trace context (telemetry.bind_context), so a Garmin call made on _GarminProxy's timeout
+    thread is a child of the tool (or source) span. Everything else is the real module."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def Thread(self, *args, **kwargs):  # noqa: N802 - the threading.Thread name
+        target = kwargs.get("target")
+        if target is not None and _TELEMETRY is not None:
+            try:
+                kwargs["target"] = _TELEMETRY.bind_context(target)
+            except Exception:  # noqa: BLE001
+                pass
+        return self._real.Thread(*args, **kwargs)
+
+
+def _bind_garmin_threads():
+    """Install _BoundThreading in upstream garmin_mcp (idempotent). False when upstream is missing."""
+    try:
+        import garmin_mcp
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(getattr(garmin_mcp, "threading", None), _BoundThreading):
+        garmin_mcp.threading = _BoundThreading(threading)
+    return True
+
+
+def _record_garmin_request(started, group):
+    tel = _TELEMETRY
+    if tel is None:
+        return
+    try:
+        mode = _mode_name()
+        attrs = {"caller": "tool", "outcome": "ok" if group is None else "error", "mode": mode}
+        if group is not None:
+            attrs["error_group"] = group
+        tel.metric_count("coach.garmin.requests", 1, **attrs)
+        tel.metric_observe("coach.garmin.request.duration", time.monotonic() - started, caller="tool", mode=mode)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _traced_run_request(original):
+    """garminconnect Client._run_request wrapped: a CLIENT span "garmin GET <family>" (GET only; the
+    caller, the family and the status code) and the coach.garmin.requests / .request.duration metrics for
+    every request. Exceptions pass through unchanged; only their group is recorded."""
+
+    def _run_request(self, method, path, *args, **kwargs):
+        tel = _TELEMETRY
+        if tel is None:
+            return original(self, method, path, *args, **kwargs)
+        family = _endpoint_family(path)
+        started = time.monotonic()
+        is_get = str(method).upper() == "GET"
+        try:
+            span_cm = (tel.span(f"garmin GET {family}", {"http.request.method": "GET"}, kind="client",
+                                caller="tool", endpoint_family=family)
+                       if is_get else contextlib.nullcontext())
+        except Exception:  # noqa: BLE001
+            span_cm = contextlib.nullcontext()
+        with span_cm as span:
+            try:
+                resp = original(self, method, path, *args, **kwargs)
+            except Exception as exc:
+                group = _exception_group(exc)
+                _record_garmin_request(started, group)
+                _set_garmin_span(span, getattr(getattr(exc, "response", None), "status_code", None), group)
+                raise
+            _record_garmin_request(started, None)
+            _set_garmin_span(span, getattr(resp, "status_code", None), None)
+            return resp
+
+    _run_request._coach_traced = True
+    _run_request.__wrapped__ = original
+    return _run_request
+
+
+def _exception_group(exc):
+    try:
+        return tool_errors.classify_exception(exc)[0]
+    except Exception:  # noqa: BLE001
+        return tool_errors.INTERNAL
+
+
+def _set_garmin_span(span, status, group):
+    if span is None:
+        return
+    try:
+        if isinstance(status, int) and 100 <= status <= 599:
+            span.set(status_code=status)
+        span.set(outcome="ok" if group is None else "error")
+        if group is not None:
+            span.set(error_group=group)
+            if tool_errors.IS_ERROR.get(group, True):
+                span.error(group)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _trace_garmin_requests():
+    """Wrap garminconnect's Client._run_request (full mode; idempotent). False when it is missing."""
+    try:
+        from garminconnect import client as gc_client
+    except Exception:  # noqa: BLE001
+        return False
+    cls = getattr(gc_client, "Client", None)
+    original = getattr(cls, "_run_request", None) if cls is not None else None
+    if original is None:
+        return False
+    if not getattr(original, "_coach_traced", False):
+        cls._run_request = _traced_run_request(original)
+    return True
+
+
+def _source_outcome(result):
+    """coach.status.sources' outcome for one fetch_all result: ok, skipped, timeout or missing."""
+    if not isinstance(result, dict):
+        return "missing"
+    if result.get("ok"):
+        return "ok"
+    error = str(result.get("error") or "")
+    if error.startswith("skipped"):
+        return "skipped"
+    if error.startswith("timeout"):
+        return "timeout"
+    return "missing"
+
+
+def _traced_source(name, fn):
+    """fn run inside a "source <name>" span (in fetch_all's worker thread, which carries the tool span)."""
+
+    def run(*args, **kwargs):
+        tel = _TELEMETRY
+        if tel is None:
+            return fn(*args, **kwargs)
+        try:
+            span_cm = tel.span(f"source {name}", source=name)
+        except Exception:  # noqa: BLE001
+            span_cm = contextlib.nullcontext()
+        with span_cm as span:
+            try:
+                value = fn(*args, **kwargs)
+            except Exception as exc:
+                if span is not None:
+                    with contextlib.suppress(Exception):
+                        group = _exception_group(exc)
+                        span.set(outcome="missing", error_group=group)
+                        if tool_errors.IS_ERROR.get(group, True):
+                            span.error(group)
+                raise
+            if span is not None:
+                with contextlib.suppress(Exception):
+                    span.set(outcome="ok")
+            return value
+
+    return run
+
+
+def _traced_fetch_all(original):
+    """status_common.fetch_all wrapped: each call runs in a "source <name>" span, and every source,
+    skipped ones too, counts once in coach.status.sources by outcome. Results are unchanged."""
+
+    async def fetch_all(calls, *args, **kwargs):
+        if _TELEMETRY is None:
+            return await original(calls, *args, **kwargs)
+        names = {name: (name if isinstance(name, str) and _SOURCE_RE.fullmatch(name) else "other")
+                 for name in calls}
+        wrapped = {name: (_traced_source(names[name], spec[0]), spec[1], spec[2]) for name, spec in calls.items()}
+        results = await original(wrapped, *args, **kwargs)
+        tel = _TELEMETRY
+        if tel is not None:
+            for name, result in results.items():
+                with contextlib.suppress(Exception):
+                    tel.metric_count("coach.status.sources", 1, source=names.get(name, "other"),
+                                     outcome=_source_outcome(result))
+        return results
+
+    fetch_all._coach_traced = True
+    fetch_all.__wrapped__ = original
+    return fetch_all
+
+
+def _trace_status_sources():
+    """Wrap status_common.fetch_all (idempotent); daily_status and weekly_status look it up by attribute."""
+    if not getattr(status_common.fetch_all, "_coach_traced", False):
+        status_common.fetch_all = _traced_fetch_all(status_common.fetch_all)
+
+
+def _install_tracing_hooks():
+    """With tracing on: Garmin calls on upstream's timeout threads keep the trace context, full mode's
+    Garmin requests get CLIENT spans and metrics, and status sources get spans and a counter. Each hook
+    is a no-op while _TELEMETRY is None. Never raises."""
+    for hook in (_bind_garmin_threads, _trace_status_sources) + (() if _KEY_MODE else (_trace_garmin_requests,)):
+        try:
+            hook()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("tracing: a hook could not be installed (%s)", type(exc).__name__)
 
 
 _HOOK_ERROR = ("launch: mcp's MCPServer no longer sends tools/call through call_tool(name, arguments, context); "
@@ -460,7 +843,20 @@ def check_config(environ):
     settings (key_mode.check()), REPORT_TZ (required), EDGE_CLIENT_IP_HEADER
     and, when the sign-in is on (any transport but stdio), its settings and
     then, only if they are valid, whether AUTH_DB opens. No line holds a
-    secret value."""
+    secret value.
+
+    Then the optional features (feature_config.problems(), and whether the
+    image has a turned-on feature's packages). With ROLE=worker only
+    GARMIN_AUTH and the key, REPORT_TZ and the features are checked (the
+    worker serves no tools and no sign-in), with ROLE=enqueue only REPORT_TZ
+    and the features; the allowed tools are then empty."""
+    features = feature_config.load(environ)
+    if features.role != "app":
+        errors = key_mode.check(environ) if features.role == "worker" else []
+        errors += status_common.check_report_tz(environ)
+        errors += feature_config.problems(environ)
+        errors += _package_errors(features)
+        return frozenset(), errors
     allowed, errors = frozenset(), []
     try:
         allowed = allowed_tools(environ)
@@ -475,7 +871,28 @@ def check_config(environ):
         if config is not None and not auth_errors:
             # Creates the file (0600) and its tables as the server would.
             errors += auth_store.check_writable(config.db_path)
+    errors += feature_config.problems(environ)
+    errors += _package_errors(features)
     return allowed, errors
+
+
+def _has_module(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):  # a missing parent package
+        return False
+
+
+def _package_errors(features):
+    """[] or the lines for a turned-on feature whose packages this Python lacks (the image was built
+    without them)."""
+    errors = []
+    if features.tracing and not _has_module("opentelemetry.sdk"):
+        errors.append(feature_config.ERR_T7)
+    if (features.history or features.history_forget) and not all(
+            _has_module(m) for m in feature_config.HISTORY_PACKAGES):
+        errors.append(feature_config.ERR_H11)
+    return errors
 
 
 def _check_config_cli(environ):
@@ -487,10 +904,16 @@ def _check_config_cli(environ):
         print(f"launch: config error: {line}", file=sys.stderr)
     if errors:
         return 1
+    features = feature_config.load(environ)
+    extra = features.summary()
+    if features.role != "app":
+        print(f"launch: config OK ({extra})", file=sys.stderr)
+        return 0
+    extra = f"; {extra}" if extra else ""
     if _is_key_mode(environ):
-        print(f"launch: config OK ({len(allowed)} read-only tools, Garmin Personal API key)", file=sys.stderr)
+        print(f"launch: config OK ({len(allowed)} read-only tools, Garmin Personal API key{extra})", file=sys.stderr)
     else:
-        print(f"launch: config OK ({len(allowed)} read-only tools)", file=sys.stderr)
+        print(f"launch: config OK ({len(allowed)} read-only tools{extra})", file=sys.stderr)
     return 0
 
 
@@ -517,7 +940,7 @@ def patch(garmin_auth="full"):
     # The SDK keeps the first tool registered under a name: an upstream tool
     # named like one of this repo's, registered before it, would be served in
     # its place, labelled read-only by the READ_ONLY_TOOLS merge below.
-    taken = EXTRA_READ_ONLY_TOOLS & tool_annotations.ALL_ANNOTATED_TOOLS
+    taken = OWN_TOOLS & tool_annotations.ALL_ANNOTATED_TOOLS
     if taken:
         raise RuntimeError(f"launch: upstream now has a tool named {', '.join(sorted(taken))}; "
                            "rename this repo's tool")
@@ -535,6 +958,8 @@ def patch(garmin_auth="full"):
         app = course_profile.register_tools(app, get_client, activity_names)
         daily_status.register_tools(app, get_client, key_mode=keyed)
         weekly_status.register_tools(app, get_client, key_mode=keyed)
+        if _history_tools_wanted(_FEATURES):
+            _register_history_tools(app, _FEATURES)
         if _AUTH is not None:
             # The consent page and the root protected-resource metadata. app
             # is upstream's _ToolFilter, which passes custom_route() through.
@@ -544,8 +969,315 @@ def patch(garmin_auth="full"):
         return app
 
     # annotations_for() reads this module global at registration time.
-    tool_annotations.READ_ONLY_TOOLS = tool_annotations.READ_ONLY_TOOLS | EXTRA_READ_ONLY_TOOLS
+    tool_annotations.READ_ONLY_TOOLS = tool_annotations.READ_ONLY_TOOLS | OWN_TOOLS
     courses.register_tools = register_tools
+
+
+def _optional(name):
+    """Import one of the features' modules (a sibling in ext/), or None with one log line naming it."""
+    try:
+        return importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001 - a feature's module never stops the server
+        log.error("feature: cannot import %s (%s); the feature stays off", name, type(exc).__name__)
+        return None
+
+
+def _history_tools_wanted(features):
+    """True when the history tools are registered: HISTORY_SEARCH=on, ROLE=app, not while forgetting."""
+    return features.history and features.role == "app" and not features.history_forget
+
+
+def _register_history_tools(app, features):
+    """history_tools.register(adder, features); adder(fn, name=None, description=None, **kwargs) registers
+    one tool through upstream's filter and the read-only gate, like this repo's other tools. A failure
+    leaves the tools out and the server up."""
+    module = _optional("history_tools")
+    if module is None:
+        return
+
+    def adder(fn, name=None, description=None, **kwargs):
+        if name is not None:
+            kwargs["name"] = name
+        if description is not None:
+            kwargs["description"] = description
+        return app.tool(**kwargs)(fn)
+
+    try:
+        module.register(adder, features)
+    except Exception as exc:  # noqa: BLE001
+        log.error("history search: the tools could not be registered (%s)", type(exc).__name__)
+
+
+def _build_guard(features, environ):
+    """The process's GarminGuard: on the Postgres shared state (garmin_guard_pg.PgSharedState, live=True: the
+    live path answers from memory and writes in the background) with HISTORY_SEARCH=on, else in memory. A
+    shared state that cannot be built falls back to memory with one log line."""
+    zone = (environ.get("REPORT_TZ") or "").strip() or None
+    state = None
+    if features.history and features.database_url_set:
+        module = _optional("garmin_guard_pg")
+        if module is not None:
+            try:
+                state = module.PgSharedState(features.database_url, status_common.zone(zone), live=True)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("call guard: the shared state could not be opened (%s); this process's copy is used",
+                            type(exc).__name__)
+                state = None
+    # Its table is created by the history startup thread (_start_catch_up), after history_store's migrations.
+    return garmin_guard.GarminGuard(state, zone=zone)
+
+
+def _forget_history(features):
+    """HISTORY_FORGET=yes: delete the stored history before anything uses the database: history_store's
+    forget_all() (the schema with the days, weeks, jobs and vectors), then history_retrieval.forget() and
+    history_embed.forget_caches() where those modules are in the image. Logs what each step removed (fixed
+    texts), then how to finish. Never raises: a failed step is one ERROR line, and True only when every step
+    worked."""
+    removed, ok = [], True
+    steps = (("history_store", lambda m: m.PgHistoryStore(features.database_url).forget_all()),
+             ("history_retrieval", lambda m: m.forget(features)),
+             ("history_embed", lambda m: m.forget_caches()))
+    for module_name, step in steps:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            if module_name == "history_store":
+                log.error("history forget: FAILED (the history modules are not in this image); build it with "
+                          "HISTORY=1")
+                return False
+            continue
+        try:
+            removed.append(_removed_text(step(module), module_name))
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            log.error("history forget: FAILED in %s (%s); check DATABASE_URL and the Postgres service, then "
+                      "redeploy with HISTORY_FORGET=yes still set", module_name, type(exc).__name__)
+            if module_name == "history_store":
+                return False
+    log.warning("history forget: removed %s", "; ".join(r for r in removed if r) or "nothing (already empty)")
+    if ok:
+        log.warning("history forget: done. Now delete HISTORY_FORGET from the app and the worker; with "
+                    "HISTORY_SEARCH=on the history is built again from Garmin. Postgres backups may still hold "
+                    "copies: check your Railway backup settings (docs/history-search.md#forgetting)")
+    return ok
+
+
+def _removed_text(result, default):
+    """A log text for what a forget step returned: names (str, list of str, dict keys) or `default`."""
+    if isinstance(result, str):
+        return result[:200]
+    if isinstance(result, dict):
+        return ", ".join(f"{k}: {v}" for k, v in sorted(result.items()) if isinstance(v, (int, str)))[:400]
+    if isinstance(result, (list, tuple)):
+        return ", ".join(str(x) for x in result if isinstance(x, (str, int)))[:400]
+    return default
+
+
+def _start_catch_up(features):
+    """With history search on, the app's history startup, in a background thread so the server starts at
+    once: the migrations in a fixed order (history_store's, then the shared guard state's, then the job
+    queue's), then the catch-up jobs (the days missing from the index, enqueue.catch_up()) and
+    history_jobs.scheduled_jobs() (the sweep, a rebuild after a version change). A failure is one WARNING
+    line (its type only); the daily cron run enqueues the jobs later anyway."""
+    guard_state = getattr(_GUARD, "_state", None)
+
+    def run():
+        try:
+            import enqueue
+            import history_store
+            import jobqueue
+
+            store = history_store.PgHistoryStore(features.database_url)
+            store.migrate()
+            migrate_guard = getattr(guard_state, "migrate", None)
+            if migrate_guard is not None:
+                migrate_guard()
+            queue = jobqueue.PgJobQueue(features.database_url, application_name="coach-mcp-app")
+            queue.migrate()
+            today = datetime.datetime.now(status_common.zone()).date()
+            out = enqueue.catch_up(queue, today, store=store, telemetry=_TELEMETRY)
+            added = out.get("added") if isinstance(out, dict) else None
+            log.info("history search: startup catch-up enqueued %s jobs", added if isinstance(added, int) else "the")
+            try:
+                import history_jobs
+
+                for kind, key, payload in history_jobs.scheduled_jobs(store, today):
+                    queue.enqueue(kind, key, payload)
+            except ImportError:
+                pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("history search: the startup catch-up could not be enqueued (%s)", type(exc).__name__)
+
+    thread = threading.Thread(target=run, name="history-catch-up", daemon=True)
+    thread.start()
+    return thread
+
+
+def _run_role(features):
+    """ROLE=worker or enqueue: run worker.main() or enqueue.main() instead of the server; its exit code."""
+    name = "worker" if features.role == "worker" else "enqueue"
+    try:
+        module = importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001
+        print(f"launch: ROLE={features.role} cannot start: {name}.py could not be imported "
+              f"({type(exc).__name__}); build the image with HISTORY=1", file=sys.stderr)
+        return 1
+    setup_logging = getattr(module, "configure_logging", None)
+    if callable(setup_logging):
+        setup_logging()      # as when worker.py / enqueue.py run as a script: the library records hidden
+    code = module.main()
+    return code if isinstance(code, int) else 0
+
+
+def _setup_features(features, environ, allowed=frozenset()):
+    """Startup of the optional features in the app (main()), in this order: their notes logged, the secrets
+    registered for redaction, tracing set up, the secrets taken out of `environ`, the call guard built (with
+    the refresh lock in full mode), the history forgotten when asked, the catch-up started."""
+    global _TELEMETRY, _GUARD
+
+    for value in feature_config.secret_values(features):
+        tool_errors.register_secret(value)
+    if features.any_on or features.notes or features.history_forget:
+        _configure_logging()
+    for note in features.notes:
+        log.info("%s", note)
+    _TELEMETRY = None
+    if features.tracing:
+        module = _optional("telemetry")
+        if module is not None:
+            try:
+                module.setup(features)
+                # The served tool names may appear in spans; any other name reads "other".
+                # The history tools too when history search is on, so their spans and coach.history.searches
+                # read their names, not "other".
+                module.register_tools(sorted(set(allowed) | (HISTORY_TOOLS if features.history else set())))
+                _TELEMETRY = module
+                _install_tracing_hooks()
+            except Exception as exc:  # noqa: BLE001
+                log.error("tracing: setup failed (%s); tracing stays off", type(exc).__name__)
+    feature_config.take_secrets(environ)
+    _GUARD = _build_guard(features, environ)
+    if not _KEY_MODE:
+        garmin_guard.install_refresh_lock(_GUARD.refresh_lock)
+    forgot_ok = True
+    if features.history_forget and features.database_url_set:
+        forgot_ok = _forget_history(features)
+    if features.history and features.role == "app":
+        if not forgot_ok or features.history_forget:
+            log.warning("history search: the history tools are off while HISTORY_FORGET is set")
+        else:
+            log.info("history search: on")
+            if not _KEY_MODE:
+                _start_token_publisher(features, environ)
+            elif features.database_url_set:
+                # Key mode needs no stored login: delete one a full-mode setup left behind.
+                _start_token_cleanup(features, reason=TOKEN_CLEANUP_KEY_MODE)
+            _start_catch_up(features)
+    elif features.role == "app" and features.database_url_set:
+        _start_token_cleanup(features)
+
+
+def _app_garmin_client():
+    """The app's logged-in garminconnect Client behind courses.garmin_client (upstream's _GarminProxy around
+    the pending-login holder around garminconnect.Garmin), or None while login is pending or failed. Walks
+    the wrappers through their instance dicts, so it never blocks on the login wait in __getattr__."""
+    try:
+        from garmin_mcp import courses
+    except Exception:  # noqa: BLE001
+        return None
+    obj = getattr(courses, "garmin_client", None)
+    for _ in range(5):
+        if obj is None:
+            return None
+        if callable(getattr(type(obj), "_token_expires_soon", None)) and \
+                callable(getattr(type(obj), "_refresh_session", None)):
+            return obj
+        inner = vars(obj) if hasattr(obj, "__dict__") else {}
+        obj = inner.get("_client", inner.get("client"))
+    return None
+
+
+def _refresh_app_token():
+    """TokenPublisher's refresh hook: under the guard's refresh lock, refresh the app's Garmin login when its
+    token expires within garminconnect's margin, so garminconnect rewrites garmin_tokens.json even while no
+    tool call comes in. Calls the unwrapped _refresh_session (install_refresh_lock's wrapper takes the same
+    lock, which is not reentrant). Never raises; a failure is one WARNING line with the class name."""
+    guard = _GUARD
+    client = _app_garmin_client()
+    if guard is None or client is None:
+        return
+    method = getattr(type(client), "_refresh_session")
+    refresh = getattr(method, "__wrapped__", method)
+    try:
+        with guard.refresh_lock:
+            if getattr(client, "is_authenticated", True) and client._token_expires_soon():
+                refresh(client)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("history token publish: the token refresh failed (%s)", type(exc).__name__)
+
+
+def _start_token_publisher(features, environ):
+    """Full mode with history search on: the worker cannot read this service's /data volume, so the app
+    copies its Garmin token file to Postgres, sealed with HISTORY_TOKEN_KEY, whenever it changes
+    (worker_garmin.TokenPublisher, every few minutes in a daemon thread). The app stays the only one that
+    refreshes the login. A failure is one WARNING line; the worker then waits ("token_stale")."""
+    try:
+        import worker_garmin
+
+        store = worker_garmin.PgTokenStore(features.database_url, features.history_token_key)
+        publisher = worker_garmin.TokenPublisher(store, (environ.get("GARMINTOKENS") or "/data/tokens").strip(),
+                                                 refresh=_refresh_app_token)
+
+        def run():
+            try:
+                store.migrate()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("history token publish: the table could not be created (%s)", type(exc).__name__)
+            publisher.start()
+
+        threading.Thread(target=run, name="history-token-setup", daemon=True).start()
+        return publisher
+    except Exception as exc:  # noqa: BLE001
+        log.warning("history token publish: could not start (%s)", type(exc).__name__)
+        return None
+
+
+TOKEN_CLEANUP_HISTORY_OFF = "history search is off"
+TOKEN_CLEANUP_KEY_MODE = "history search runs in key mode"
+TOKEN_CLEANUP_NO_DRIVER = ("history search is off: a Garmin token stored by an earlier full-mode history setup "
+                           "could not be checked or deleted, because this image has no database driver (psycopg); "
+                           "build it with HISTORY=1 once, or delete the history.garmin_token table by hand")
+
+
+def _start_token_cleanup(features, reason=TOKEN_CLEANUP_HISTORY_OFF):
+    """The app started with HISTORY_SEARCH off (or on in key mode) and DATABASE_URL set: delete the sealed
+    Garmin token a full-mode history setup left in Postgres (worker_garmin.delete_stored_token, which never
+    raises), in a daemon thread so the server starts at once. One fixed WARNING line when a row was deleted
+    ("<reason>: the stored Garmin token was deleted from the database"). An image without the database driver
+    logs one fixed WARNING line (TOKEN_CLEANUP_NO_DRIVER); a build whose worker_garmin has no
+    delete_stored_token skips it without a word."""
+    if not _has_module("psycopg"):
+        log.warning("%s", TOKEN_CLEANUP_NO_DRIVER)
+        return None
+    try:
+        import worker_garmin
+    except Exception:  # noqa: BLE001 - not in this image
+        return None
+    delete = getattr(worker_garmin, "delete_stored_token", None)
+    if not callable(delete):
+        return None
+    dsn = features.database_url
+
+    def run():
+        try:
+            if delete(dsn):
+                log.warning("%s: the stored Garmin token was deleted from the database", reason)
+        except Exception:  # noqa: BLE001 - it never raises; nothing may stop the server
+            pass
+
+    thread = threading.Thread(target=run, name="history-token-cleanup", daemon=True)
+    thread.start()
+    return thread
 
 
 LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
@@ -583,6 +1315,9 @@ def _configure_logging():
     if not any(getattr(h, "coach_line_handler", False) for h in root.handlers):
         root.addHandler(_LineHandler())
     root.setLevel(logging.INFO)
+    # garminconnect logs a failed call with the display name in the path and Garmin's answer: hidden; and
+    # every registered secret redacted on the root handlers.
+    log_privacy.install()
     try:
         from mcp.server.mcpserver.utilities.logging import configure_logging
     except ImportError:  # the standard-library test leg; the image has the SDK
@@ -597,7 +1332,7 @@ def _exit_config_errors(errors):
 
 
 def main(argv=None):
-    global _AUTH, _KEY_MODE
+    global _AUTH, _KEY_MODE, _FEATURES
 
     args = sys.argv[1:] if argv is None else list(argv)
     if args == ["--check-config"]:
@@ -605,6 +1340,17 @@ def main(argv=None):
     if args:
         sys.exit("usage: launch.py [--check-config]")
 
+    # The optional features, again (entrypoint.sh ran --check-config first).
+    errors = feature_config.problems(os.environ)
+    if errors:
+        _exit_config_errors(errors)
+    _FEATURES = feature_config.load(os.environ)
+    if _FEATURES.role != "app":
+        sys.exit(_run_role(_FEATURES))
+
+    # Before any Garmin call: garminconnect's own records (a failed call quotes the display name in its path
+    # and Garmin's answer) become one fixed line, whatever handler the SDK adds later.
+    log_privacy.quiet_libraries()
     mcp2_compat.install()
     # GARMIN_AUTH and the key, again (entrypoint.sh ran --check-config first):
     # a server started by hand must not run without a mode.
@@ -641,6 +1387,11 @@ def main(argv=None):
     else:
         # Full mode: an empty base-URL variable passed the check; drop it too.
         os.environ.pop(key_mode.BASE_URL_ENV, None)
+
+    # The call guard (every install) and the optional features: tracing, the
+    # history forget and catch-up. The history tools register later, when
+    # upstream's main() calls the courses hook (patch()).
+    _setup_features(_FEATURES, os.environ, allowed)
 
     # Before upstream's main() builds the server: its name (SERVER_NAME), its
     # version (SERVER_VERSION), the instructions it sends at the handshake

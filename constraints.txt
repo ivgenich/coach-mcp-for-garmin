@@ -23,6 +23,13 @@
 # Re-checked 17 Nov 2026: garmin-connect-personal-api-python 1.0.0 adds no other
 # package (it needs requests>=2.31,<3); certifi raised to 2026.10.23 for
 # PYSEC-2026-4320 (fixed in 2026.10.18).
+#
+# 24 Nov 2026: the OpenTelemetry SDK and OTLP/HTTP exporter (TRACING=on,
+# docs/tracing.md) are in every image, installed by hash from
+# config/requirements-telemetry.txt (generated against these pins; it adds
+# googleapis-common-protos, protobuf and the opentelemetry-* packages below).
+# The history-search packages (config/requirements-history.txt) are NOT pinned
+# here: they go only into an image built with HISTORY=1.
 annotated-types==0.8.0
 anyio==4.16.0
 attrs==25.4.0
@@ -37,6 +44,7 @@ fitparse==1.2.0
 # hash from config/garmin-key-client.txt, imported only with GARMIN_AUTH=key.
 garmin-connect-personal-api-python==1.0.0
 garminconnect==0.3.2
+googleapis-common-protos==1.76.0
 h11==0.16.0
 httpcore2==2.16.0
 httpx2==2.16.0
@@ -48,6 +56,14 @@ mcp==2.3.0
 mcp-types==2.3.0
 mdurl==0.1.2
 opentelemetry-api==1.45.2
+opentelemetry-exporter-http-transport==0.66b2
+opentelemetry-exporter-otlp-common==0.66b2
+opentelemetry-exporter-otlp-proto-common==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-proto==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-semantic-conventions==0.66b2
+protobuf==7.36.2
 pycparser==3.0
 pydantic==2.14.3
 pydantic-core==2.50.4

@@ -53,6 +53,23 @@ and so what a MAJOR, MINOR or PATCH release may change:
   only. [docs/evals.md](docs/evals.md).
 - CI job "evals (offline)" and the `scripts/ci-local.sh` step `evals-offline`: the eval tests and
   the committed baselines graded offline, with no API key and no network.
+- Optional tracing, off by default (`TRACING=on`): OpenTelemetry traces and metrics over OTLP/HTTP
+  for every tool call (tool, duration, outcome, error group, answer size bucket), rebuilt from an
+  attribute allowlist before export so no health value, name, id, token or answer leaves the
+  server. A dead or slow tracing service never slows a tool call. [docs/tracing.md](docs/tracing.md).
+- Optional history search, off by default (`HISTORY_SEARCH=on`, an image built with `HISTORY=1`):
+  the tools `find_similar_weeks` and `search_history` over your stored daily and weekly numbers in
+  Postgres with pgvector, an embedding model that runs on the server, and a separate worker
+  (`ROLE=worker`) and cron service (`ROLE=enqueue`) that fill the history through a Postgres job
+  queue. `HISTORY_FORGET=yes` deletes it. A job added again while it waits or runs merges its
+  payload (true flags stay true), and runs again at most 3 times in a row. A worker that opens a
+  fresh Garmin token loads the profile again before any data call.
+  [docs/history-search.md](docs/history-search.md), [docs/history-worker.md](docs/history-worker.md).
+- A Garmin call guard in every install: after a Garmin rate limit, tool calls get the rate-limit
+  text for 15 minutes without calling Garmin; full mode's login refresh runs one thread at a time.
+- Startup checks for the optional features' settings (`TRACING`, `OTEL_EXPORTER_OTLP_*`,
+  `HISTORY_SEARCH`, `DATABASE_URL`, `HISTORY_TOKEN_KEY`, `ROLE`, `WORKER_CONCURRENCY`,
+  `HISTORY_FORGET`): a wrong value stops the server with one line that never shows a secret.
 
 ### Changed
 
@@ -69,3 +86,15 @@ and so what a MAJOR, MINOR or PATCH release may change:
 - certifi 2026.10.23: versions before 2026.10.18 bundle emSign root certificates whose
   intermediate keys were compromised (PYSEC-2026-4320).
 - Garmin's Personal API client, which receives your key, is installed by hash.
+- The optional features' secrets (`OTEL_EXPORTER_OTLP_HEADERS`, `DATABASE_URL`,
+  `HISTORY_TOKEN_KEY`) never reach Caddy, are taken out of the server's environment once read, and
+  are hidden in every log line. The tracing and history packages are installed by hash.
+- The Garmin client library's own log lines (a failed call quotes the address with your display
+  name and Garmin's answer) are replaced by one fixed line in the app, the history worker and the
+  scheduler; registered secrets read `<redacted>` in every log line on the root handlers.
+- `HISTORY_TOKEN_KEY` must be random: a key of printable characters (a typed phrase), of bytes that
+  count up or down, or of one short block repeated is refused at startup, without being shown.
+- The history worker reads only: `connectapi` takes no keyword but `params`, `get_*` and
+  `download_*` take no `data`, `json`, `files`, `headers` or `method`, and the wrapped client is not
+  reachable through its private names. With `GARMIN_AUTH=key` the app deletes a stored full-mode
+  Garmin token at start; an image without the database driver says it could not check.

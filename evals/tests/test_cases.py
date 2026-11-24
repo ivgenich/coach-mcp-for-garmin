@@ -146,9 +146,9 @@ class ShippedCases(unittest.TestCase):
         files = sorted(n[:-5] for n in os.listdir(cs.CASES_DIR) if n.endswith(".toml"))
         self.assertEqual(files, sorted(cs.GROUPS))
 
-    def test_forty_cases_with_unique_ids(self):
+    def test_forty_nine_cases_with_unique_ids(self):
         ids = [c.id for c in self.cases]
-        self.assertEqual(len(ids), 40)
+        self.assertEqual(len(ids), 49)  # 40 + the 9 history cases
         self.assertEqual(len(set(ids)), len(ids))
 
     def test_morning_report_cases_have_room_for_the_recipe(self):
@@ -201,6 +201,30 @@ class ShippedCases(unittest.TestCase):
                 if name.endswith(".json"):
                     on_disk.add(name[:-5])
         self.assertEqual(on_disk - used, set())
+
+    def test_history_constants_match_the_harness_and_launch(self):
+        from evals.harness import history as hh
+
+        if EXT not in sys.path:
+            sys.path.insert(0, EXT)
+        import mcp2_compat
+
+        mcp2_compat.register_finder()
+        import launch
+
+        self.assertEqual(tuple(cs.HISTORY_FIXTURES), tuple(hh.FIXTURES))
+        self.assertEqual(frozenset(cs.HISTORY_TOOLS), launch.HISTORY_TOOLS)
+
+    def test_history_cases(self):
+        hist = [c for c in self.cases if c.group == "history"]
+        self.assertEqual([c.id for c in hist], [f"H0{i}" for i in range(1, 10)])
+        self.assertEqual({c.history for c in hist}, set(cs.HISTORY_FIXTURES))
+        for case in self.cases:
+            if case.group != "history":
+                self.assertEqual(case.history, "off", case.id)
+            on = case.history != "off"
+            self.assertEqual(set(cs.HISTORY_TOOLS) <= case.tools, on, case.id)
+            self.assertFalse(case.smoke and on, case.id)  # the smoke run needs no history packages
 
     def test_fault_groups_are_tool_errors_groups(self):
         tool_errors = ext_modules()[3]
@@ -394,6 +418,23 @@ class Validation(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.rejects(GOOD.replace('title = "A case"', f'title = "A case"\nmax_turns = {bad}'),
                              "max_turns must be a whole number from 1 to 30")
+
+    def test_history_key(self):
+        # The history tools are named only by a case whose history fixture is on.
+        (case,) = self.load(GOOD)
+        self.assertEqual(case.history, "off")
+        uses = GOOD.replace('first_tool = "get_daily_status"', 'first_tool = "find_similar_weeks"')
+        self.rejects(uses, "unknown tool name(s) for this mode: find_similar_weeks")
+        for name in ("athlete", "partial", "two_weeks", "mismatch"):
+            with self.subTest(name=name):
+                (case,) = self.load(uses.replace('title = "A case"', f'title = "A case"\nhistory = "{name}"'),
+                                    group="history")
+                self.assertEqual(case.history, name)
+                self.assertIn("search_history", case.tools)
+        (case,) = self.load('[defaults]\nhistory = "partial"\n' + uses, group="history")
+        self.assertEqual(case.history, "partial")
+        self.rejects(uses.replace('title = "A case"', 'title = "A case"\nhistory = "on"'),
+                     "history must be one of athlete, partial, two_weeks, mismatch, off")
 
     def test_unknown_case_key(self):
         self.rejects(GOOD.replace('title = "A case"', 'title = "A case"\ncolour = "red"'), "unknown key(s): colour")

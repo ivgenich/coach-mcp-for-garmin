@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 from evals import cost as cost_mod
 from evals import runner
+from evals import tracing
 
 ROOT = runner.ROOT
 CASES_DIR = os.path.join(ROOT, "evals", "cases")
@@ -123,6 +124,9 @@ def cmd_run(args, client_factory=None, harness=None) -> int:
         say(f"refused: a live run needs {KEY_ENV} in the environment (never as an argument). "
             "Offline commands (grade, compare, list) need no key.")
         return 2
+    for problem in tracing.problems():
+        say(f"refused: {problem}")
+        return 2
     try:
         plan = select(load_cases(args.cases_dir), args.cases, args.smoke, args.variants, args.trials)
     except ValueError as e:
@@ -138,7 +142,10 @@ def cmd_run(args, client_factory=None, harness=None) -> int:
         say(f"refused: {run_dir} exists")
         return 2
     budget = cost_mod.Budget(max_usd=args.max_usd)
-    client = cost_mod.MeteredClient((client_factory or _anthropic_client)(), budget)
+    client = cost_mod.MeteredClient(tracing.wrap_client((client_factory or _anthropic_client)()), budget)
+    if tracing.setup():
+        tracing.set_run(run_id)
+        say("eval traces: on (docs/tracing.md, Eval runs)")
     coach = runner.read_coach_prompt() if any("coach" in vs for _, vs, _ in plan) else None
     config = {
         "run_id": run_id, "model": model, "judge_model": judge_model, "effort": args.effort,
@@ -186,6 +193,7 @@ def cmd_run(args, client_factory=None, harness=None) -> int:
             stopped = True
         grading.summarize(run_dir)
 
+    tracing.shutdown()
     config.update(complete=not stopped, spent_usd=round(budget.spent, 6), api_calls=budget.calls,
                   finished=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     write_json(os.path.join(run_dir, "config.json"), config)

@@ -449,8 +449,12 @@ class EveryCase(unittest.TestCase):
         from evals.cases import load_cases
         grading = importlib.import_module("evals.grading")
 
+        from evals.harness import history as history_harness
+
         null_passes = []
         for case in load_cases(CASES_DIR):
+            if case.history != "off" and not history_harness.available():
+                continue  # history cases need config/requirements-history.txt (test_history_eval covers both)
             for variant in case.variants:
                 with self.subTest(case=case.id, variant=variant):
                     client = fakes.ScriptedClient([fakes.answer("I cannot tell.")])

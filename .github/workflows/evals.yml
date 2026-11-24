@@ -58,16 +58,27 @@ jobs:
             constraints.txt
             Dockerfile
             evals/requirements.txt
-      - name: A venv with upstream, the image's pins and the hashed eval pins
+            config/requirements-telemetry.txt
+            config/requirements-history.txt
+      - name: A venv with upstream, the image's pins, the hashed eval pins and the history pins
         run: |
           python -m venv "$RUNNER_TEMP/venv-evals"
           "$RUNNER_TEMP/venv-evals/bin/python" -B scripts/ci-checks.py install-full
           "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes -r evals/requirements.txt
+          "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes --no-deps \
+            -r config/requirements-history.txt
+          # The history cases need these packages; fail here rather than error in the live run.
+          "$RUNNER_TEMP/venv-evals/bin/python" -B -c 'import evals.harness.history as h; assert h.available()'
       - name: Offline tests first (no key needed)
         run: '"$RUNNER_TEMP/venv-evals/bin/python" -B -m unittest discover -s evals/tests -t .'
       - name: Live run
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Eval traces (docs/tracing.md#eval-runs): off unless both keys are set in the "evals"
+          # environment; LANGFUSE_BASE_URL is optional (empty means Langfuse Cloud EU).
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
           EVALS_PYTHON: ${{ runner.temp }}/venv-evals/bin/python
           SUITE: ${{ inputs.suite }}
           MODEL: ${{ inputs.model }}

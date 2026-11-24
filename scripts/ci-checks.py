@@ -19,9 +19,21 @@
     python -B scripts/ci-checks.py text-scan
         No hidden characters (bidirectional controls, zero-width characters,
         other control characters except tab and newline) in any file git
-        tracks or would add.
+        tracks or would add. Grafana dashboards (dashboards/grafana/*.json)
+        name no grafana.net address and hold no "uid" other than a ${DS_*}
+        data source variable (an export from the UI carries the stack's).
     python -B scripts/ci-checks.py pin-drift
-        The Caddy and Python versions CI pins equal the Dockerfile's.
+        The Caddy and Python versions CI pins equal the Dockerfile's. The
+        hashed feature files (config/requirements-telemetry.txt and
+        config/requirements-history.txt) pin every package with a hash, at
+        the version constraints.txt pins when it pins it too (the telemetry
+        file must be in constraints.txt whole), and every package of theirs
+        has a reviewed licence in LICENSES.
+    python -B scripts/ci-checks.py licenses
+        The reviewed licences in LICENSES are allowed (ALLOWED_LICENSES, or
+        an exception with a reason in LICENSE_EXCEPTIONS), and each feature
+        package installed in this Python declares no other licence in its
+        metadata. Packages not installed here are checked from the table.
     python -B scripts/ci-checks.py version [--print]
         ext/version.py holds one VERSION = "X.Y.Z"; on a tag push
         (GITHUB_REF_TYPE=tag) the tag must be vX.Y.Z. With --print: print
@@ -33,7 +45,8 @@
         says, tunnel.env only for the tunnel, .env only for the app, a volume
         at /data. Without compose.yaml there is nothing to check.
     python -B scripts/ci-checks.py audit
-        pip-audit (installed in this Python) on constraints.txt, with the
+        pip-audit (installed in this Python) on constraints.txt and the
+        hashed feature files, with the
         reviewed exceptions in AUDIT_IGNORES (each has a review-by date; one
         that matches no finding any more fails, so it gets removed).
 
@@ -85,6 +98,71 @@ AUDIT_IGNORES = (
      "garminconnect<=0.3.4 writes its token file with mode 0644 (GHSA-wjhr-76vg-2hvc). Upstream "
      "pins garminconnect==0.3.2; the image keeps the tokens in a 0700 directory in a one-user container."),
 )
+# Hash-pinned files of the optional features, installed after constraints.txt's packages: (path, whether
+# constraints.txt must pin every package of it). The telemetry pins go in every image, so the full test
+# leg's verify-env needs them in constraints.txt; the history pins only in HISTORY=1 images.
+FEATURE_REQUIREMENTS = (
+    (os.path.join(ROOT, "config", "requirements-telemetry.txt"), True),
+    (os.path.join(ROOT, "config", "requirements-history.txt"), False),
+)
+# Licence families allowed for the feature packages (SPDX ids, compared case-insensitively).
+ALLOWED_LICENSES = {"mit", "bsd-2-clause", "bsd-3-clause", "0bsd", "apache-2.0", "psf-2.0", "isc", "mpl-2.0",
+                    "zlib", "cc0-1.0"}
+# Other licences, each reviewed: (SPDX id, reason).
+LICENSE_EXCEPTIONS = {
+    "lgpl-3.0-only": "psycopg is used unmodified as a separate, dynamically imported library; LGPL-3.0 then "
+                     "puts no terms on this repo's own code",
+}
+# The reviewed licence of every package in FEATURE_REQUIREMENTS (SPDX expression, from the wheel's metadata
+# when it has one; checked against the installed metadata by `licenses`). A new pin needs a row here.
+LICENSES = {
+    # telemetry (config/requirements-telemetry.txt)
+    "googleapis-common-protos": "Apache-2.0",
+    "opentelemetry-exporter-http-transport": "Apache-2.0",
+    "opentelemetry-exporter-otlp-common": "Apache-2.0",
+    "opentelemetry-exporter-otlp-proto-common": "Apache-2.0",
+    "opentelemetry-exporter-otlp-proto-http": "Apache-2.0",
+    "opentelemetry-proto": "Apache-2.0",
+    "opentelemetry-sdk": "Apache-2.0",
+    "opentelemetry-semantic-conventions": "Apache-2.0",
+    "protobuf": "BSD-3-Clause",
+    # history search (config/requirements-history.txt)
+    "asyncpg": "Apache-2.0",
+    "distro": "Apache-2.0",
+    "flatbuffers": "Apache-2.0",
+    "greenlet": "MIT AND PSF-2.0",
+    "httpcore": "BSD-3-Clause",
+    "httpx": "BSD-3-Clause",
+    "jsonpatch": "BSD-3-Clause",
+    "jsonpointer": "BSD-3-Clause",
+    "langchain-classic": "MIT",
+    "langchain-core": "MIT",
+    "langchain-postgres": "MIT",
+    "langchain-protocol": "MIT",
+    "langchain-text-splitters": "MIT",
+    "langsmith": "MIT",
+    "numpy": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+    "onnxruntime": "MIT",
+    "orjson": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+    "packaging": "Apache-2.0 OR BSD-2-Clause",
+    "pgvector": "MIT",
+    "psycopg": "LGPL-3.0-only",
+    "psycopg-binary": "LGPL-3.0-only",
+    "psycopg-pool": "LGPL-3.0-only",
+    "pyyaml": "MIT",
+    "requests-toolbelt": "Apache-2.0",
+    "sniffio": "MIT OR Apache-2.0",
+    "sqlalchemy": "MIT",
+    "tenacity": "Apache-2.0",
+    "tokenizers": "Apache-2.0",
+    "uuid-utils": "BSD-3-Clause",
+    "websockets": "BSD-3-Clause",
+    "xxhash": "BSD-2-Clause",
+    "zstandard": "BSD-3-Clause",
+}
+# Grafana dashboards: exported JSON must not carry the stack's address or data source uids.
+DASHBOARDS_GLOB = ("dashboards/grafana/", ".json")
+DASHBOARD_UID_RE = re.compile(r"^\$\{DS_[A-Z0-9_]+\}$")
 # Characters text-scan refuses besides the Cc/Cf/Zl/Zp/Co/Cs categories: none today.
 ALLOWED_CONTROLS = {"\t", "\n"}
 
@@ -173,6 +251,98 @@ def constraints() -> dict[str, str]:
     return pins
 
 
+def hashed_pins(path: str) -> tuple[dict[str, str], list[str]]:
+    """({normalised name: version}, problems) of a `--require-hashes` file: every requirement is
+    `name==version` followed by at least one --hash=sha256:<64 hex>."""
+    rel = os.path.relpath(path, ROOT)
+    pins, problems = {}, []
+    joined = re.sub(r"\\\n", " ", read(path))
+    for n, line in enumerate(joined.splitlines(), 1):
+        line = "" if line.lstrip().startswith("#") else line.strip()
+        if not line:
+            continue
+        words = line.split()
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9.+!-]+)", words[0])
+        hashes = [w for w in words[1:] if re.fullmatch(r"--hash=sha256:[0-9a-f]{64}", w)]
+        if not m or not hashes or len(hashes) != len(words) - 1:
+            problems.append(f"{rel}: not a hash-pinned `name==version --hash=sha256:...` line: {words[0]!r}")
+            continue
+        name = norm(m.group(1))
+        if name in pins:
+            problems.append(f"{rel}: {name} is pinned twice")
+        pins[name] = m.group(2)
+    if not pins:
+        problems.append(f"{rel}: no pins")
+    return pins, problems
+
+
+def feature_pin_problems(pins: dict[str, str]) -> list[str]:
+    """pin-drift for FEATURE_REQUIREMENTS against constraints.txt's `pins`, and LICENSES coverage."""
+    problems, seen = [], {}
+    for path, whole in FEATURE_REQUIREMENTS:
+        rel = os.path.relpath(path, ROOT)
+        try:
+            file_pins, bad = hashed_pins(path)
+        except OSError as e:
+            problems.append(f"{rel}: cannot read it ({e.strerror})")
+            continue
+        problems += bad
+        for name, version in sorted(file_pins.items()):
+            if name in pins and pins[name] != version:
+                problems.append(f"{rel} pins {name}=={version} but constraints.txt pins {pins[name]}; "
+                                "change both together")
+            elif whole and name not in pins:
+                problems.append(f"{rel} pins {name}=={version}, which constraints.txt does not pin")
+            if name in seen and seen[name][1] != version:
+                problems.append(f"{rel} pins {name}=={version} but {seen[name][0]} pins {seen[name][1]}")
+            seen.setdefault(name, (rel, version))
+            if name not in LICENSES:
+                problems.append(f"{rel}: {name} has no reviewed licence in LICENSES (scripts/ci-checks.py)")
+        say(f"pin-drift: {rel}: {len(file_pins)} hash-pinned packages")
+    for name in sorted(set(LICENSES) - set(seen)):
+        problems.append(f"LICENSES lists {name}, which no feature requirements file pins: remove the row")
+    return problems
+
+
+def license_ids(expression: str) -> set[str]:
+    """The SPDX ids of an expression ("MPL-2.0 AND (Apache-2.0 OR MIT)"), lowercased."""
+    return {w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
+            if w.upper() not in ("AND", "OR", "WITH")}
+
+
+# Families read from free-text metadata (License: and classifiers) when there is no License-Expression.
+_FAMILY_WORDS = (("lgpl", "lgpl"), ("lesser general public", "lgpl"), ("agpl", "agpl"),
+                 ("affero", "agpl"), ("gpl", "gpl"), ("general public license", "gpl"), ("apache", "apache"),
+                 ("bsd", "bsd"), ("mit", "mit"), ("mozilla", "mpl"), ("mpl", "mpl"), ("python software", "psf"),
+                 ("psf", "psf"), ("isc", "isc"), ("zlib", "zlib"), ("cc0", "cc0"), ("public domain", "cc0"))
+
+
+def license_family(spdx_id: str) -> str:
+    low = spdx_id.lower()
+    for word, family in _FAMILY_WORDS:
+        if word in low:
+            return family
+    return low
+
+
+def metadata_families(meta) -> set[str]:
+    """Licence families an installed distribution's metadata declares (empty when it declares none)."""
+    expression = meta.get("License-Expression")
+    if expression:
+        return {license_family(i) for i in license_ids(expression)}
+    texts = [(meta.get("License") or "").split("\n", 1)[0][:200]]
+    texts += [c.split("::")[-1] for c in (meta.get_all("Classifier") or []) if c.startswith("License ::")]
+    families = set()
+    for text in texts:
+        low = re.sub(r"[^a-z0-9 ]+", " ", text.lower())
+        for word, family in _FAMILY_WORDS:
+            if re.search(rf"\b{word}\b", low):
+                families.add(family)
+                break
+    families.discard("")
+    return families
+
+
 # --- commands ----------------------------------------------------------------------------
 
 def cmd_install_full(args) -> int:
@@ -257,6 +427,31 @@ def git_files() -> list[str]:
     return sorted({p for p in out.decode("utf-8", "surrogateescape").split("\0") if p})
 
 
+def dashboard_problems(rel: str, text: str) -> list[str]:
+    """A Grafana dashboard export names no grafana.net address and no uid but a ${DS_*} variable."""
+    problems = []
+    for n, line in enumerate(text.split("\n"), 1):
+        if "grafana.net" in line.lower():
+            problems.append(f"{rel}:{n}: names a grafana.net address; export the dashboard for sharing "
+                            "(no stack URL)")
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return problems + [f"{rel}: not valid JSON ({e.msg} at line {e.lineno})"]
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "uid" and value is not None and not (isinstance(value, str)
+                                                               and DASHBOARD_UID_RE.fullmatch(value)):
+                    problems.append(f"{rel}: a uid that is not a ${{DS_*}} data source variable: {value!r}"[:200])
+                stack.append(value)
+        elif isinstance(node, list):
+            stack.extend(node)
+    return problems
+
+
 def cmd_text_scan(args) -> int:
     problems, binary, scanned = [], 0, 0
     try:
@@ -278,6 +473,9 @@ def cmd_text_scan(args) -> int:
             binary += 1
             continue
         scanned += 1
+        if rel.startswith(DASHBOARDS_GLOB[0]) and rel.endswith(DASHBOARDS_GLOB[1]) and "/" not in \
+                rel[len(DASHBOARDS_GLOB[0]):]:
+            problems += dashboard_problems(rel, text)
         for n, line in enumerate(text.split("\n"), 1):
             for col, ch in enumerate(line, 1):
                 if ch not in ALLOWED_CONTROLS and unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cs"):
@@ -308,7 +506,36 @@ def cmd_pin_drift(args) -> int:
             problems.append(f"{what}: the Dockerfile uses {image[0]} but {where} pins {ci[0]}; change both together")
         else:
             say(f"pin-drift: {what} {image[0]} in the Dockerfile and {where}")
+    try:
+        pins = constraints()
+    except (OSError, ValueError) as e:
+        return finish("pin-drift", problems + [str(e)])
+    problems += feature_pin_problems(pins)
     return finish("pin-drift", problems)
+
+
+def cmd_licenses(args) -> int:
+    import importlib.metadata as md
+
+    problems, checked = [], 0
+    for name, expression in sorted(LICENSES.items()):
+        for spdx in sorted(license_ids(expression)):
+            if spdx not in ALLOWED_LICENSES and spdx not in LICENSE_EXCEPTIONS:
+                problems.append(f"{name}: licence {spdx} is neither allowed nor a reviewed exception")
+        try:
+            meta = md.distribution(name).metadata
+        except md.PackageNotFoundError:
+            continue
+        checked += 1
+        declared = metadata_families(meta)
+        reviewed = {license_family(i) for i in license_ids(expression)}
+        if declared - reviewed:
+            problems.append(f"{name}: the installed metadata declares {', '.join(sorted(declared - reviewed))}, "
+                            f"not in the reviewed {expression!r}; review it and update LICENSES")
+    for spdx, reason in sorted(LICENSE_EXCEPTIONS.items()):
+        say(f"licenses: reviewed exception {spdx}: {reason}")
+    say(f"licenses: {len(LICENSES)} reviewed packages, {checked} installed here and checked against their metadata")
+    return finish("licenses", problems)
 
 
 def cmd_version(args) -> int:
@@ -384,25 +611,35 @@ def cmd_compose(args) -> int:
 
 
 def cmd_audit(args) -> int:
-    """pip-audit on constraints.txt. A finding fails unless AUDIT_IGNORES names it (by id or alias) and its
-    review date has not passed; an exception that matches nothing any more fails too, so none lingers."""
+    """pip-audit on constraints.txt and FEATURE_REQUIREMENTS, one run per file: pip-audit refuses to mix a file
+    without hashes (constraints.txt) with hash-pinned ones in one run. Any run that fails or writes no report
+    fails the step. A finding fails unless AUDIT_IGNORES names it (by id or alias) and its review date has not
+    passed; an exception that matches nothing any more fails too, so none lingers."""
     problems, reasons = [], {}
     for vuln, review_by, reason in AUDIT_IGNORES:
         reasons[vuln] = reason
         if dt.date.fromisoformat(review_by) < dt.date.today():
             problems.append(f"the exception for {vuln} passed its review date {review_by}: review it ({reason})")
+    files = [CONSTRAINTS] + [path for path, _ in FEATURE_REQUIREMENTS]
+    dependencies, failed_runs = [], []
     with tempfile.TemporaryDirectory(prefix="ci-audit-") as tmp:
-        report = os.path.join(tmp, "audit.json")
-        cmd = [sys.executable, "-m", "pip_audit", "--requirement", CONSTRAINTS, "--no-deps", "--disable-pip",
-               "--strict", "--progress-spinner", "off", "--format", "json", "--output", report]
-        say("audit: pip-audit " + " ".join(shlex.quote(c) for c in cmd[3:-2]))
-        rc = subprocess.run(cmd, check=False).returncode
-        try:
-            data = json.loads(read(report))
-        except (OSError, ValueError):
-            return finish("audit", problems + [f"pip-audit wrote no report (exit status {rc}); see above"])
+        for i, path in enumerate(files):
+            report = os.path.join(tmp, f"audit-{i}.json")
+            cmd = [sys.executable, "-m", "pip_audit", "--requirement", path, "--no-deps", "--disable-pip",
+                   "--strict", "--progress-spinner", "off", "--format", "json", "--output", report]
+            say("audit: pip-audit " + " ".join(shlex.quote(c) for c in cmd[3:-2]))
+            rc = subprocess.run(cmd, check=False).returncode
+            try:
+                data = json.loads(read(report))
+            except (OSError, ValueError):
+                problems.append(f"pip-audit wrote no report for {os.path.relpath(path, ROOT)} "
+                                f"(exit status {rc}); see above")
+                continue
+            dependencies += data.get("dependencies", [])
+            if rc != 0:
+                failed_runs.append((os.path.relpath(path, ROOT), rc))
     used, findings, audited = set(), set(), 0
-    for dep in data.get("dependencies", []):
+    for dep in dependencies:
         if dep.get("skip_reason"):
             problems.append(f"{dep.get('name')}: not audited: {dep['skip_reason']}")
             continue
@@ -423,8 +660,9 @@ def cmd_audit(args) -> int:
                 problems.append(f"known vulnerability: {line}")
     for vuln in sorted(set(reasons) - used):
         problems.append(f"the exception for {vuln} matches no finding any more: remove it from AUDIT_IGNORES")
-    if rc != 0 and not findings and not problems:
-        problems.append(f"pip-audit exited with status {rc} and no finding; see above")
+    if failed_runs and not findings and not problems:
+        problems += [f"pip-audit exited with status {rc} on {path} and no finding; see above"
+                     for path, rc in failed_runs]
     say(f"audit: pinned packages audited: {audited}; findings: {len(findings)}")
     return finish("audit", problems)
 
@@ -443,10 +681,11 @@ def main() -> int:
     s.add_argument("--print", action="store_true", help="print X.Y.Z alone")
     sub.add_parser("compose")
     sub.add_parser("audit")
+    sub.add_parser("licenses")
     args = p.parse_args()
     return {"install-full": cmd_install_full, "verify-env": cmd_verify_env, "text-scan": cmd_text_scan,
             "pin-drift": cmd_pin_drift, "version": cmd_version, "compose": cmd_compose,
-            "audit": cmd_audit}[args.cmd](args)
+            "audit": cmd_audit, "licenses": cmd_licenses}[args.cmd](args)
 
 
 if __name__ == "__main__":

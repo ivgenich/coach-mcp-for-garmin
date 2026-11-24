@@ -61,6 +61,7 @@ Prices as of November 2026. Check the providers' pages before you start.
 | Railway | $5 a month: the Hobby plan costs $5 and includes $5 of usage, and this server uses about $2-4. A new Railway account gets a one-time $5 trial credit for up to 30 days. Upgrade to Hobby before the trial ends: afterwards the account falls back to the Free plan's $1 of credit a month, which does not cover this server, and Railway deletes volumes made during the trial 30 days after the credit expires, with your Garmin login on them. [Railway plans](https://docs.railway.com/reference/pricing/plans) |
 | Docker on your own computer | No hosting fee. The computer must stay on, and the Cloudflare Tunnel needs a domain on Cloudflare, which you pay your domain registrar for. Cloudflare says Cloudflare Tunnel is "Available on all plans" ([Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), checked November 2026). |
 | Claude | Any plan works, Free included: see [Claude plans and apps](#claude-plans-and-apps). |
+| Optional features | Tracing: a free tracing service is enough ([Tracing](docs/tracing.md)). History search: a Postgres and a small worker on Railway, an estimated $4-8 a month more ([History worker](docs/history-worker.md)). Both are off by default. |
 | Garmin | `full` mode: no fee. `key` mode: Garmin's Personal API pages state no price ([Personal API FAQ](https://developer.garmin.com/gc-developer-program/personal/personal-faq/), checked November 2026). |
 
 Each person runs their own server, so each person pays for their own hosting.
@@ -119,7 +120,16 @@ server, with their own Garmin login or key and their own owner secret.
   your Privacy Settings whether your chats may be used to improve Claude
   ([Anthropic](https://www.anthropic.com/news/updates-to-our-consumer-terms)). Your host, Railway
   or Cloudflare in front of your own computer, carries the traffic and can read it. The server
-  itself calls only Garmin, and sends no analytics or telemetry. More:
+  itself calls only Garmin. It sends no telemetry by default. Optional tracing, which you turn on,
+  sends a fixed list of fields to the tracing service you name: tool names, timings, outcomes,
+  error groups, size buckets, date-range lengths, the auth mode, the caller, the Garmin endpoint
+  family, job and queue counts, history result counts and lag, source names, and the server's
+  version and role; never health values, names, ids, tokens or text
+  ([what is sent](docs/tracing.md#what-is-sent-and-what-never-is)). Optional history search keeps
+  a copy of your numbers in your own Postgres and sends nothing out; its embedding model's public
+  files are downloaded from huggingface.co (the app keeps them on its volume; the worker has no
+  volume, so it downloads them again after each worker deploy) and the model runs on your server
+  ([History search](docs/history-search.md)). More:
   [What leaves your server](docs/how-it-works.md#what-leaves-your-server).
 - **Text from Garmin is untrusted.** Names and notes can come from apps and coaches linked to your
   Garmin account. The server cleans them and tells Claude they are data, but an instruction in
@@ -137,6 +147,13 @@ server, with their own Garmin login or key and their own owner secret.
 - **Your Garmin data** through the read-only tools of upstream garmin_mcp: activities, splits,
   zones, sleep, HRV, stress, Body Battery, training status, VO2max, race predictions, records and
   more. No tool can change your Garmin data. [Every tool, per mode](docs/tools.md).
+- **Optional add-ons, off by default.** The basic deploy is one service, as in the
+  [Quickstart](#quickstart); neither add-on is needed.
+  [Tracing](docs/tracing.md) (`TRACING=on`): tool latency, errors and Garmin rate limits on a
+  dashboard, with no health values. [History search](docs/history-search.md)
+  (`HISTORY_SEARCH=on`): "find weeks like this one" over your stored history; it adds three
+  services next to the server (a Postgres, a [worker](docs/history-worker.md) and a daily
+  scheduler), and its embedding model runs on your server.
 - **Optional recipes for claude.ai:** a [coach Project](recipes/coach-project/README.md), and an
   experimental [morning report page](recipes/claude-ai-morning-report/README.md).
 
@@ -177,7 +194,11 @@ GitHub: **Watch → Custom → Releases**.
    mode: deleting the volume deleted the server's Garmin tokens. If you think they leaked, also
    change your Garmin password; Garmin does not document whether that ends sessions that already
    exist.
-4. **Optional:** delete the Claude chats that hold your health data, the routines and the page of
+4. **Optional features.** History search: delete the Postgres, worker and cron services with the
+   project; Postgres backups can still hold copies, so check your Railway backup settings
+   ([History search](docs/history-search.md#forgetting)). Tracing: delete the tracing project or stack at your
+   tracing service and revoke its token.
+5. **Optional:** delete the Claude chats that hold your health data, the routines and the page of
    the morning report recipe, and the owner secret in your password manager.
 
 ## Lost the owner secret?
@@ -222,6 +243,9 @@ This is a personal project, maintained on a best-effort basis, with no SLA.
 | [Maintenance](docs/maintenance.md) | Garmin re-login, key renewal, new secrets and tokens |
 | [Updates and versions](docs/updates.md) | Versions, the public API, updating, rolling back |
 | [MCP protocol](docs/protocol.md) | Protocol versions, server instructions, checking a deploy |
+| [Tracing](docs/tracing.md) | Optional: traces and metrics with no health values, the dashboard and alerts |
+| [History search](docs/history-search.md) | Optional: the history tools, what is stored, retrieval quality, forgetting |
+| [History worker](docs/history-worker.md) | Optional: the Postgres, worker and cron services, the job queue |
 | [Evals](docs/evals.md) | How a Claude model behaves with the tools: cases, running, cost, results |
 | [How it works](docs/how-it-works.md) | Architecture, the sign-in, security, what leaves your server |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes and fixes |

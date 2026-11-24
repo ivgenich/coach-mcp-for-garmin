@@ -21,6 +21,9 @@ a ToolSearch that loads ArtifactData's schema (with ToolSearch present, Artifact
 deferred: offered only after a search names it, as in a routine). Their calls are in
 tool_calls like any other; the database's final state is the transcript's "db".
 
+History search: a case's history fixture (Case.history, evals/harness/history.py) goes to
+start_server(history=...) when it is not "off"; other cases call start_server as before.
+
 Prompt caching: one breakpoint on the last tool definition (tools are identical for
 every case of a mode), one on the system prompt, and top-level automatic caching for
 the growing conversation.
@@ -35,6 +38,7 @@ import time
 from datetime import datetime, timezone
 
 from evals import cost as cost_mod
+from evals import tracing
 
 SCHEMA = 1
 MAX_TURNS = 8
@@ -337,15 +341,19 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
         "effort": effort, "turns": 0, "answers": [], "served_models": [],
     }
     srv = ctools = None
+    trace_token = tracing.begin_trial(case.id, variant, trial, model)
     try:
         extra = tuple(getattr(case, "extra_tools", ()) or ())
         if extra:
             ctools = ClientTools(extra, getattr(case, "report_url", None), resolve_seed(case, harness))
         g = case.garmin or {}
         state = harness.load_state(g.get("base", "empty"), list(g.get("overlays") or []), dict(g.get("faults") or {}))
-        with harness.start_server(mode=case.mode, state=state, now=case.now, tz=case.tz) as srv:
+        history = getattr(case, "history", "off") or "off"
+        server_kw = {"history": history} if history != "off" else {}
+        with harness.start_server(mode=case.mode, state=state, now=case.now, tz=case.tz, **server_kw) as srv:
             system = build_system(variant, harness.clock_line(case.now, case.tz), srv.instructions, coach_prompt)
             tools = api_tools(srv.tools)
+            tracing.known_tools([t["name"] for t in tools])
             tr["system"] = system
             tr["tools"] = [t["name"] for t in tools] + [t["name"] for t in (ctools.definitions() if ctools else [])]
             _loop(client, case, model, effort, max_turns, srv, system, tools, tr, ctools)
@@ -367,6 +375,7 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
                 pass
         tr["duration_s"] = round(time.monotonic() - t0, 3)
         tr["cost_usd"] = round(tr["cost_usd"], 6)
+        tracing.end_trial(trace_token, tr)
     return tr
 
 
@@ -420,11 +429,14 @@ def _loop(client, case, model, effort, max_turns, srv, system, tools, tr, ctools
                 if ctools is not None and ctools.handles(name):
                     text, is_error = ctools.call(name, args)
                 else:
-                    try:
-                        outcome = srv.call(name, args)
-                    except Exception as e:
-                        raise HarnessError(f"{name}: {type(e).__name__}: {e}") from e
-                    text, is_error = str(outcome.text), bool(outcome.is_error)
+                    with tracing.tool_call(name) as span:
+                        try:
+                            outcome = srv.call(name, args)
+                        except Exception as e:
+                            raise HarnessError(f"{name}: {type(e).__name__}: {e}") from e
+                        text, is_error = str(outcome.text), bool(outcome.is_error)
+                        if is_error:
+                            span.error()
                 tr["tool_calls"].append({"index": len(tr["tool_calls"]), "name": name, "input": args,
                                          "text": text, "is_error": is_error})
                 result = {"type": "tool_result", "tool_use_id": block.get("id"), "content": text}

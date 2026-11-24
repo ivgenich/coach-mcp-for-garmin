@@ -10,7 +10,8 @@ model sees exactly what a client of the server sees. No network, no port, no pro
 Patched for the life of the server, in the harness only:
 - status_common.now_local / today_local: the frozen clock (the status tools' "today", the bad-input date hint);
 - status_common._utc_stamp / weekly_status._utc_stamp: the frozen clock in UTC (sources' fetched_at);
-- tool_errors.new_ref: FIXED_REF, so an internal error always reads "(ref 0badc0de)".
+- tool_errors.new_ref: FIXED_REF, so an internal error always reads "(ref 0badc0de)";
+- with history other than "off": the history tools over an in-memory fixture (evals/harness/history.py).
 One server per process at a time (upstream's client is a module global).
 """
 
@@ -33,6 +34,7 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 from . import fake_garmin
+from . import history as history_fixture
 from .state import empty_state
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -214,23 +216,27 @@ class Server:
 
 
 @contextlib.contextmanager
-def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S):
+def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S, history="off"):
     """Run the server in `mode` ("full" or "key") over the fake Garmin `state` (load_state()'s result, or None
     for no data), with the clock frozen at `now` ("2026-03-18T06:30", local time) in zone `tz` (also the
-    server's REPORT_TZ). Yields a Server: .tools, .instructions, .call(name, args), .calls."""
+    server's REPORT_TZ). history: a fixture of evals/harness/history.py ("athlete", "partial", "two_weeks",
+    "mismatch") adds find_similar_weeks and search_history over it; "off" (the default) leaves them out.
+    Yields a Server: .tools, .instructions, .call(name, args), .calls."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+    if history not in history_fixture.FIXTURES:
+        raise ValueError(f"history must be one of {history_fixture.FIXTURES}, got {history!r}")
     moment = frozen_now(now, tz)
     if not _ONE_SERVER.acquire(blocking=False):
         raise RuntimeError("an eval server is already running in this process (one at a time)")
     try:
         with contextlib.ExitStack() as stack:
-            yield _start(stack, mode, state if state is not None else empty_state(), moment, tz, timeout)
+            yield _start(stack, mode, state if state is not None else empty_state(), moment, tz, timeout, history)
     finally:
         _ONE_SERVER.release()
 
 
-def _start(stack, mode, state, moment, tz, timeout):
+def _start(stack, mode, state, moment, tz, timeout, history="off"):
     ext = ext_modules()
     import garmin_mcp
     from garmin_mcp import courses, tool_annotations
@@ -258,6 +264,8 @@ def _start(stack, mode, state, moment, tz, timeout):
     stack.enter_context(mock.patch.object(sc, "_utc_stamp", lambda: utc_stamp))
     stack.enter_context(mock.patch.object(ext.weekly_status, "_utc_stamp", lambda: utc_stamp))
     stack.enter_context(mock.patch.object(ext.tool_errors, "new_ref", lambda: FIXED_REF))
+    if history != "off":
+        history_fixture.install(stack, ext.launch, history, moment.date(), keyed)
 
     # Upstream's globals and launch's, restored when the server stops.
     saved = (courses.register_tools, tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS,

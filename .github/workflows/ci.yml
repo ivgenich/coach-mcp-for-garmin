@@ -64,6 +64,7 @@ jobs:
             constraints.txt
             Dockerfile
             config/garmin-key-client.txt
+            config/requirements-telemetry.txt
       - name: Caddy at the image's version, and gitleaks for the release-check tests
         run: |
           scripts/ci-tools.sh "$RUNNER_TEMP/bin" caddy gitleaks
@@ -75,9 +76,71 @@ jobs:
       - name: Unit tests, no skip allowed for upstream, mcp 2.x or caddy
         env:
           REQUIRE_UPSTREAM: "1"
+          REQUIRE_TELEMETRY: "1"
         run: python -B scripts/ci-unittest.py
       - name: Sign-in end to end on 127.0.0.1 (fake secrets, no Garmin login)
         run: python -B scripts/e2e-local.py --work "$RUNNER_TEMP/e2e" --caddy "$RUNNER_TEMP/bin/caddy"
+
+  tests-postgres:
+    # History search's Postgres code (job queue, shared Garmin guard, history store, retrieval) against a real
+    # Postgres with pgvector. These tests skip everywhere else (no COACH_TEST_DATABASE_URL): here a skip fails.
+    name: tests (postgres)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          POSTGRES_USER: coach
+          POSTGRES_PASSWORD: ci-only-not-secret
+          POSTGRES_DB: coach_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coach -d coach_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      COACH_TEST_DATABASE_URL: postgresql://coach:ci-only-not-secret@127.0.0.1:5432/coach_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            config/requirements-telemetry.txt
+            config/requirements-history.txt
+      - name: The image's pins plus the history pins (HISTORY=1), in a venv of its own
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-history"
+          "$RUNNER_TEMP/venv-history/bin/python" -B scripts/ci-checks.py install-full
+          "$RUNNER_TEMP/venv-history/bin/python" -m pip install --require-hashes --no-deps \
+            -r config/requirements-history.txt
+          "$RUNNER_TEMP/venv-history/bin/python" -c "import psycopg"
+      - name: Caddy at the image's version, and gitleaks (the full leg's other tests need them)
+        run: |
+          scripts/ci-tools.sh "$RUNNER_TEMP/bin" caddy gitleaks
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: Unit tests with the database (job queue, guard, history store, retrieval); no history or Postgres skip
+        env:
+          REQUIRE_UPSTREAM: "1"
+          REQUIRE_TELEMETRY: "1"
+          REQUIRE_HISTORY: "1"
+          REQUIRE_DATABASE: "1"
+        run: |
+          "$RUNNER_TEMP/venv-history/bin/python" -B scripts/ci-unittest.py
+      - name: History eval tests, and the retrieval gate without a model (memory, then Postgres)
+        run: |
+          py="$RUNNER_TEMP/venv-history/bin/python"
+          "$py" -B -m unittest discover -s evals/tests -t . -p 'test_history_*.py'
+          "$py" -B -m evals.history --embeddings none --gate
+          "$py" -B -m evals.history --backend postgres --embeddings none --gate
 
   evals-offline:
     name: evals (offline)
@@ -95,14 +158,20 @@ jobs:
             constraints.txt
             Dockerfile
             evals/requirements.txt
-      - name: A venv of its own (tests-full checks its venv equals constraints.txt)
+            config/requirements-telemetry.txt
+            config/requirements-history.txt
+      - name: A venv of its own (tests-full checks its venv equals constraints.txt), with the history pins
         run: |
           python -m venv "$RUNNER_TEMP/venv-evals"
           "$RUNNER_TEMP/venv-evals/bin/python" -B scripts/ci-checks.py install-full
           "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes -r evals/requirements.txt
+          "$RUNNER_TEMP/venv-evals/bin/python" -m pip install --require-hashes --no-deps \
+            -r config/requirements-history.txt
       - name: Eval tests and committed baselines, graded offline (no key, no network)
         run: |
           py="$RUNNER_TEMP/venv-evals/bin/python"
+          # The history eval tests skip without the history packages: here a missing package fails.
+          "$py" -B -c 'import evals.harness.history as h; assert h.available(), "history packages missing"'
           "$py" -B -m unittest discover -s evals/tests -t .
           for d in evals/baselines/*/; do
             [ -d "$d/transcripts" ] || continue
@@ -167,7 +236,7 @@ jobs:
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - name: gitleaks over every commit (findings redacted)
         run: gitleaks git --redact --no-banner --no-color --verbose .
-      - name: pip-audit on constraints.txt
+      - name: pip-audit on constraints.txt and the feature files (one run each)
         run: python -B scripts/ci-checks.py audit
 
   smoke:
@@ -189,3 +258,5 @@ jobs:
         env:
           SMOKE_PYTHON: python
         run: scripts/ci-smoke.sh
+      - name: The history image builds too (HISTORY=1; build only)
+        run: docker build --build-arg HISTORY=1 -t coach-mcp:history .

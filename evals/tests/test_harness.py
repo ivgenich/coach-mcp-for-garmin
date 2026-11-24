@@ -246,9 +246,21 @@ class Faults(unittest.TestCase):
             out = srv.call("get_daily_status", {})
             first = srv.calls
             other = srv.call("get_stats", {"date": "2026-03-18"})
+            after = srv.calls
         self.assertEqual((out.text, out.is_error), (self.expected("rate_limited", False), True))
         self.assertEqual([call["method"] for call in first], ["get_stats"])  # the systemic stop: one call
-        self.assertFalse(other.is_error)  # other tools still answer
+        # Garmin's rate limit is account-wide, so the call guard (garmin_guard) pauses live calls for every
+        # tool: the next tool answers rate_limited without calling Garmin.
+        self.assertTrue(other.is_error)
+        self.assertEqual(after, first)
+
+    def test_a_login_fault_does_not_block_other_tools(self):
+        state = load_state("daily_2026_03_18", [], {"get_daily_status": "login"})
+        with start_server("full", state, DAILY_NOW, TZ) as srv:
+            out = srv.call("get_daily_status", {})
+            other = srv.call("get_stats", {"date": "2026-03-18"})
+        self.assertTrue(out.is_error)
+        self.assertFalse(other.is_error)  # a login cooldown pauses only the worker
 
     def test_login_fault_on_the_status_tool_in_key_mode(self):
         state = load_state("daily_2026_03_18", [], {"get_daily_status": "login"})

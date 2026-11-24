@@ -50,6 +50,12 @@ Patched for the life of the server, in the harness only:
 | `status_common._utc_stamp`, `weekly_status._utc_stamp` -> `now` in UTC | `sources.*.fetched_at` stays the same run to run |
 | `tool_errors.new_ref` -> `0badc0de` | an internal error always reads `(ref 0badc0de)` |
 
+`start_server(..., history="athlete")` (or `partial`, `two_weeks`, `mismatch`) also serves `find_similar_weeks` and
+`search_history` over an in-memory fixture of the synthetic athlete (`history.py`): launch's history
+registration runs with `allowed_tools`, `_history_tools_wanted` and `history_tools.service_from_config`
+patched for the life of the server. It needs the history packages (`config/requirements-history.txt`) and
+raises `HistoryPackagesMissing` without them; `history="off"` (the default) changes nothing.
+
 Upstream's own 28 tools take every date as an argument; none reads the clock. One server per process at a time
 (upstream's client is a module global); a second `start_server` while one runs raises `RuntimeError`. Every
 upstream and launch global the start changes is restored when the `with` block ends.
