@@ -3,4 +3,4 @@
 #   pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt
 # Its one dependency, requests, is pinned in constraints.txt, which also pins
 # this package's version. Change both files together.
-garmin-connect-personal-api-python==1.0.0 --hash=sha256:a709a7836651f173f7b82a22074cb96def9caf7c17ee41fdfaa6d40657c5711b
+garmin-connect-personal-api-python==1.1.0 --hash=sha256:a7740642f51090a629ebe873f8c016bfaa5f6296b77cbebe849d5cdbc2dbdb73 --hash=sha256:f128b3c601544788950eb7172581395057fe6d675db584f3dd3df37057f61bae
