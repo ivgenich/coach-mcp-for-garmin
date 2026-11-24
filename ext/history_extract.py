@@ -17,8 +17,10 @@ Key mode (GARMIN_AUTH=key) has no training status, so the week's load and
 fitness fields are masked (null), never zero (mask_for_mode).
 
 A day is "empty" when no source gave a value (no watch worn, before the
-account started, or not synced yet). Days are final FINAL_AFTER_DAYS after
-their date (late syncs). Standard library only.
+account started, or not synced yet). Only an empty day whose every source
+answered (no failed call, is_answered_empty) counts toward the backfill stop.
+Days are final FINAL_AFTER_DAYS after their date (late syncs). Standard
+library only.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ NUMBERS_VERSION = 1
 RULES_VERSION = (ds.RULES_VERSION, ws.RULES_VERSION)
 
 FINAL_AFTER_DAYS = 3          # a day is final 3 days after its date (late syncs)
-EMPTY_STOP_DAYS = 14          # backfill stops after 14 empty final days in a row (account start)
+EMPTY_STOP_DAYS = 14          # backfill stops after 14 answered empty days in a row (account start)
 HISTORY_WEEKS = 52            # owner: 1 year of history
 HRV_LOOKBACK_DAYS = 21        # the oldest week's 28-day HRV average needs 3 weeks before it
 BACKFILL_DAYS = HISTORY_WEEKS * 7 + HRV_LOOKBACK_DAYS
@@ -93,6 +95,18 @@ FULL_ONLY_DAY: tuple = ()
 # Week fields kept from the stored training-status answer when a week is rebuilt without Garmin calls.
 STORED_LOAD_FIELDS = ("load_acute", "load_chronic", "acwr", "acwr_status", "load_optimal_min", "load_optimal_max",
                       "vo2max_run", "vo2max_bike", "training_status", "training_balance")
+
+# The source each day field comes from (merge_day: an answered source replaces its fields, a failed one keeps them).
+FIELD_SOURCE: Dict[str, str] = {
+    **dict.fromkeys(("sleep_seconds", "sleep_score", "deep_min", "rem_min", "awake_min", "spo2_avg", "spo2_min",
+                     "resp_sleep_avg", "overnight_hrv"), "sleep"),
+    **dict.fromkeys(("hrv", "hrv_7d", "hrv_status", "hrv_low_upper", "hrv_balanced_low", "hrv_balanced_upper"),
+                    "hrv"),
+    **dict.fromkeys(("rhr", "rhr_7d", "stress_avg", "body_battery_high", "body_battery_low"), "stats"),
+    "sessions": "activities",
+}
+for _sport in SPORTS:
+    FIELD_SOURCE.update(dict.fromkeys((f"{_sport}_sessions", f"{_sport}_seconds", f"{_sport}_meters"), "activities"))
 
 _METRIC_DAY_FIELDS = tuple(k for k in DAY_FIELDS if k not in ("mode", "missing", "sessions")
                            and not k.startswith(tuple(f"{s}_" for s in SPORTS)))
@@ -194,6 +208,11 @@ def profile_id(payloads: Mapping[str, Any]) -> Optional[str]:
 def day_numbers(day: dt.date, payloads: Mapping[str, Any], tz: Any, mode: str) -> Dict[str, Any]:
     """One day's numbers from its raw answers: payloads[source] for SOURCES, None when that call failed.
 
+    "missing" lists the failed sources only. Garmin's "no data" for a source is an answer: the caller passes it
+    as an empty answer ({} / []), not None, so a day where every source answered with nothing has "missing" == []
+    (is_answered_empty) on the fetch path and in the stored row alike. Rows stored before this rule may still
+    list such a source; they read as not answered empty, the safe side (they never stop the backfill).
+
     sleep: the night filed under `day`; hrv / stats: Garmin's per-day answers; activities: the activity list
     of `day` (activities that start on another local date are dropped).
     """
@@ -247,6 +266,12 @@ def is_empty_day(numbers: Mapping[str, Any]) -> bool:
     if any(numbers.get(k) is not None for k in _METRIC_DAY_FIELDS):
         return False
     return not numbers.get("sessions")
+
+
+def is_answered_empty(numbers: Mapping[str, Any]) -> bool:
+    """True for an empty day whose every source answered ("missing" is empty): no watch data that day for sure.
+    A day with a failed source (Garmin down, a network error) is never this, so it cannot stop the backfill."""
+    return not (numbers.get("missing") or []) and is_empty_day(numbers)
 
 
 def is_final_day(day: dt.date, today: dt.date) -> bool:

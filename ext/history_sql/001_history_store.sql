@@ -1,4 +1,4 @@
--- History search store (B3): numbers only, never names, ids, notes or raw Garmin answers.
+-- History search store: numbers only, never names, ids, notes or raw Garmin answers.
 -- Applied by history_store.PgHistoryStore.migrate() in one transaction, under an advisory lock.
 -- Versions 001-099 belong to the history store, 100-199 to the job queue and the shared guard state.
 

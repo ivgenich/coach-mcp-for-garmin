@@ -10,12 +10,17 @@ use together. garminconnect's refresh is replaced by a stand-in class when garmi
 from __future__ import annotations
 
 import datetime
+import json
 import logging
+import os
+import stat
 import sys
+import tempfile
 import threading
 import time
 import types
 import unittest
+from unittest import mock
 import zoneinfo
 
 import garmin_guard as gg
@@ -217,7 +222,7 @@ class SharedAcrossProcesses(unittest.TestCase):
         self.assertEqual(cm.exception.group, gg.LIVE_BUSY)
 
     def test_a_long_live_call_keeps_the_other_process_worker_out(self):
-        """Review fix: the heartbeat is rewritten while a live call runs and at its end, so a worker in another
+        """The heartbeat is rewritten while a live call runs and at its end, so a worker in another
         process takes no token during a long live call or in the LIVE_QUIET seconds after it."""
         self.app.live_call_started()
         self.clock.tick(90)                   # a long live call: the start heartbeat alone is too old now
@@ -274,7 +279,7 @@ class SharedAcrossProcesses(unittest.TestCase):
         self.assertEqual(taken, gg.BUCKET_DAILY_MAX)
 
     def test_the_daily_cap_waits_for_the_next_window(self):
-        """Review fix: at the cap the refusal says daily_cap until the next 12:00 local, not 5 s later."""
+        """At the cap the refusal says daily_cap until the next 12:00 local, not 5 s later."""
         for _ in range(gg.BUCKET_DAILY_MAX):
             self.worker.before_call("worker")
             self.clock.tick(gg.BUCKET_SPACING)
@@ -449,6 +454,81 @@ class RefreshLock(unittest.TestCase):
         sys.modules["garminconnect"] = None  # import fails
         sys.modules["garminconnect.client"] = None
         self.assertFalse(gg.install_refresh_lock(threading.Lock()))
+
+
+class AtomicTokenDump(unittest.TestCase):
+    """install_atomic_token_dump() on a stand-in garminconnect.client.Client with garminconnect's dump rules."""
+
+    def setUp(self):
+        saved = {name: sys.modules.get(name) for name in ("garminconnect", "garminconnect.client")}
+
+        def restore():
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.addCleanup(restore)
+
+        class Client:
+            def __init__(self, token="t1"):
+                self.token = token
+
+            def dumps(self):
+                return json.dumps({"di_token": self.token})
+
+            def dump(self, path):
+                raise AssertionError("the original dump ran")
+
+        package = types.ModuleType("garminconnect")
+        client = types.ModuleType("garminconnect.client")
+        client.Client = Client
+        package.client = client
+        sys.modules["garminconnect"], sys.modules["garminconnect.client"] = package, client
+        self.Client = Client
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+
+    def test_a_folder_gets_garmin_tokens_json_owner_only(self):
+        self.assertTrue(gg.install_atomic_token_dump())
+        self.assertTrue(gg.install_atomic_token_dump())  # twice: no double wrap
+        folder = os.path.join(self.dir, "tokens")
+        self.Client("one").dump(folder)   # a missing folder is created, as garminconnect does
+        target = os.path.join(folder, "garmin_tokens.json")
+        with open(target, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"di_token": "one"})
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o600)
+        self.Client("two").dump(folder)
+        with open(target, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"di_token": "two"})
+        self.assertEqual(os.listdir(folder), ["garmin_tokens.json"])  # no temporary file left
+        self.assertEqual(self.Client.dump.__wrapped__.__name__, "dump")
+
+    def test_a_json_path_is_the_file_itself(self):
+        gg.install_atomic_token_dump()
+        target = os.path.join(self.dir, "mine.json")
+        self.Client().dump(target)
+        self.assertTrue(os.path.isfile(target))
+
+    def test_a_failed_write_keeps_the_old_file_and_leaves_no_temporary_file(self):
+        gg.install_atomic_token_dump()
+        self.Client("old").dump(self.dir)
+        target = os.path.join(self.dir, "garmin_tokens.json")
+        with mock.patch.object(gg.os, "fsync", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.Client("new").dump(self.dir)
+        with open(target, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"di_token": "old"})
+        self.assertEqual(os.listdir(self.dir), ["garmin_tokens.json"])
+
+    def test_without_garminconnect_or_dumps(self):
+        del self.Client.dumps
+        self.assertFalse(gg.install_atomic_token_dump())
+        sys.modules["garminconnect"] = None
+        sys.modules["garminconnect.client"] = None
+        self.assertFalse(gg.install_atomic_token_dump())
 
 
 if __name__ == "__main__":

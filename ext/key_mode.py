@@ -1,23 +1,23 @@
 """Key mode (GARMIN_AUTH=key): read Garmin through an official Garmin Personal API key.
 
-GARMIN_AUTH is required, full or key, with no default (KEY contract D2). In key mode the server never logs in to
+GARMIN_AUTH is required, full or key, with no default. In key mode the server never logs in to
 Garmin with an email and password: a Personal API key (GARMIN_PERSONAL_API_KEY) becomes a 24-hour access token,
-cached at GARMIN_KEY_TOKEN_CACHE (D4, D8), and KeyModeGarmin stands in for the garminconnect client the tools
-already call (D6, D7), backed by Garmin's own client (garmin-connect-personal-api-python). Upstream's tools and
+cached at GARMIN_KEY_TOKEN_CACHE, and KeyModeGarmin stands in for the garminconnect client the tools
+already call, backed by Garmin's own client (garmin-connect-personal-api-python). Upstream's tools and
 this repository's status tools run unchanged on it; every name it does not implement raises NotInKeyMode (an
 AttributeError), so key mode fails closed.
 
 What launch.py calls, in this order:
 - auth_mode(environ): "full", "key", or None when GARMIN_AUTH is unset, empty or neither;
-- check(environ): the startup error lines of the mode and key settings (4.2), the GARMIN_ENABLED_TOOLS line aside
+- check(environ): the startup error lines of the mode and key settings, the GARMIN_ENABLED_TOOLS line aside
   (that one is the tool policy's, with KEY_MODE_TOOLS and ERR_TOOL_NOT_IN_KEY_MODE);
 - cache_path(environ): the token cache file, or None when GARMIN_KEY_TOKEN_CACHE breaks the path rule;
 - take_key(environ): the key, removed from the environment with GARMIN_PERSONAL_API_BASE_URL, and registered
   with tool_errors.register_secret() so no log line can carry it;
-- install(key, cache_file): replaces garmin_mcp.init_api (upstream's login hook, D5) with key mode's login;
+- install(key, cache_file): replaces garmin_mcp.init_api (upstream's login hook) with key mode's login;
 - selfcheck(): the Docker build's check that Garmin's client and upstream's hook are still what this file needs.
 
-The key and its tokens never reach a log line, an exception text or a client text (D11, D14): every key-mode
+The key and its tokens never reach a log line, an exception text or a client text: every key-mode
 exception carries a fixed text and is raised `from None`, outside any `except` block; an HttpError is read only
 for its status code. Garmin's client and requests are imported only inside key-mode code paths, so this module
 imports on Python 3.10 with the standard library and tool_errors only, and full mode never loads the client.
@@ -39,26 +39,26 @@ import tool_errors
 
 log = logging.getLogger("garmin_ext.key_mode")
 
-# --- names and constants (contract 4.1) ----------------------------------------------------------------------
+# --- names and constants -------------------------------------------------------------------------------------
 
 AUTH_ENV = "GARMIN_AUTH"                       # values: "full" | "key"
 MODE_FULL = "full"
 MODE_KEY = "key"
 KEY_ENV = "GARMIN_PERSONAL_API_KEY"
 CACHE_ENV = "GARMIN_KEY_TOKEN_CACHE"           # internal; the Dockerfile sets /data/garmin-key/token.json
-CACHE_DIR_NAME = "garmin-key"                  # the cache file's folder must have this name (D4)
+CACHE_DIR_NAME = "garmin-key"                  # the cache file's folder must have this name
 DEFAULT_CACHE = "~/.config/garmin-key/token.json"   # only when CACHE_ENV is unset (outside the image)
 BASE_URL_ENV = "GARMIN_PERSONAL_API_BASE_URL"  # refused, and removed from os.environ in key mode
 IS_CN_ENV = "GARMIN_IS_CN"
 OFFICIAL_BASE_URL = "https://personal.connectapi.garmin.com"
-KEY_MIN, KEY_MAX = 20, 512                     # shorter is a paste that did not land (live test B1), not a key
+KEY_MIN, KEY_MAX = 20, 512                     # shorter is a paste that did not land, not a key
 KEY_RE = re.compile(r"[!-~]{20,512}")          # fullmatch, after strip(); KEY_MIN to KEY_MAX characters
 _KEY_CHARS_RE = re.compile(r"[!-~]+")          # a key's characters, any length
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]+={0,2}(?:\.[A-Za-z0-9_-]+={0,2}){2}")   # fullmatch, and 20 <= len <= 8192
 TOKEN_MIN, TOKEN_MAX = 20, 8192
 REFUSED_LATCH_S = 900
 REFRESH_WINDOW_S = 3600                        # a token with less left is replaced (the library's own window)
-SHORT_TOKEN_S = 23 * 3600                      # a new token that lasts less: the key itself expires then (F6)
+SHORT_TOKEN_S = 23 * 3600                      # a new token that lasts less: the key itself expires then
 HELD_MARGIN_S = 300                            # a failed refresh keeps the held token while more than this is left
 HELD_RETRY_S = 60                              # ... and asks Garmin again only after this long
 KEY_MODE_TOOLS = frozenset({
@@ -89,7 +89,7 @@ ERR_CACHE_PATH = ("GARMIN_KEY_TOKEN_CACHE must be an absolute path to a .json fi
                   "value is not shown); the image sets /data/garmin-key/token.json, so delete the variable")
 ERR_CACHE_WRITE = "GARMIN_KEY_TOKEN_CACHE: cannot write {folder} ({strerror}); mount a writable volume at /data"
 
-# --- exception texts (4.3); the tool_errors table reads them (D11) --------------------------------------------
+# --- exception texts; the tool_errors table reads them --------------------------------------------------------
 
 TEXT_KEY_REFUSED = "Garmin authentication failed: Personal API key refused (HTTP {code})"
 TEXT_TOKEN_REFUSED = "Garmin authentication failed: Personal API token refused (HTTP 401)"
@@ -120,11 +120,11 @@ LOG_FAILED = "garmin key mode: token request failed (%s)"
 LOG_HELD = "garmin key mode: using the held access token, valid until %s, until a token request works"
 LOG_MODE_FIXED = "garmin key mode: token cache file mode fixed to 0600"
 
-# Upstream's login hook (F14): main() must still log in through this call for install() to take over.
+# Upstream's login hook: main() must still log in through this call for install() to take over.
 HOOK_TEXT = "init_api(email, password)"
 
 
-# --- exceptions (D11) ----------------------------------------------------------------------------------------
+# --- exceptions ----------------------------------------------------------------------------------------------
 
 class KeyModeError(tool_errors.KnownFailure):
     """Base of key mode's failures: one fixed message argument, so upstream's copy.copy() keeps type and text."""
@@ -163,7 +163,7 @@ def _not_in_key_mode(name):
     return NotInKeyMode(TEXT_NOT_IN_KEY_MODE.format(name=text))
 
 
-# --- configuration (D2-D4) -----------------------------------------------------------------------------------
+# --- configuration -------------------------------------------------------------------------------------------
 
 def _value(environ, name):
     """The variable's value stripped of surrounding spaces; "" when unset ("set" = non-empty after stripping)."""
@@ -204,7 +204,7 @@ def _path_ok(path):
 
 def cache_path(environ):
     """The token cache file: GARMIN_KEY_TOKEN_CACHE, or ~/.config/garmin-key/token.json when it is unset or empty.
-    None when the path breaks the rule of D4: absolute, normalised (no .., ., // or trailing /), a .json file, in
+    None when the path breaks the path rule: absolute, normalised (no .., ., // or trailing /), a .json file, in
     a folder named garmin-key. So key mode can only ever create or chmod a folder named garmin-key."""
     raw = environ.get(CACHE_ENV)
     if isinstance(raw, str) and raw.strip():
@@ -270,7 +270,7 @@ def check(environ):
 def take_key(environ=None):
     """The key (stripped; "" when unset), after removing GARMIN_PERSONAL_API_KEY and GARMIN_PERSONAL_API_BASE_URL
     from `environ` (os.environ by default) and registering the key with tool_errors.register_secret(), so no
-    child process inherits it and no log line can carry it (D3, D14)."""
+    child process inherits it and no log line can carry it."""
     environ = os.environ if environ is None else environ
     raw = environ.pop(KEY_ENV, None)
     environ.pop(BASE_URL_ENV, None)
@@ -281,7 +281,7 @@ def take_key(environ=None):
 
 
 def prepare_cache(path):
-    """The cache folder 0700 (created or fixed); an existing cache file wider than 0600 chmodded to 0600 (D4)."""
+    """The cache folder 0700 (created or fixed); an existing cache file wider than 0600 chmodded to 0600."""
     _make_private_folder(os.path.dirname(path))
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -310,7 +310,7 @@ def _cached_access_token(path):
     return token if isinstance(token, str) else None
 
 
-# --- failures from Garmin's client, read without keeping their text (D11) ------------------------------------
+# --- failures from Garmin's client, read without keeping their text ------------------------------------------
 
 _TYPE_JUNK_RE = re.compile(r"[^A-Za-z]")
 
@@ -374,7 +374,7 @@ def _other(failure):
 
 
 def _data_failure(failure, activity):
-    """The exception for a failed data request (D11's table), never raised here."""
+    """The exception for a failed data request (by HTTP status or failure kind), never raised here."""
     kind, status = failure.kind, failure.status
     if kind == "http":
         if status == 429:
@@ -431,7 +431,7 @@ def _expiry_ok(expires_at):
     return math.isfinite(expires_at) and 0 < expires_at < 32503680000  # before the year 3000
 
 
-# --- token manager (D8) --------------------------------------------------------------------------------------
+# --- token manager -------------------------------------------------------------------------------------------
 
 class TokenManager:
     """Holds the access token for `key`; one lock around every token request.
@@ -508,7 +508,7 @@ class TokenManager:
         result = None
         try:
             result = self._auth.obtain_token(self._key)
-        except Exception as exc:  # noqa: BLE001 - mapped below, outside this block (D11)
+        except Exception as exc:  # noqa: BLE001 - mapped below, outside this block
             failure = _describe(exc)
         if failure is not None:
             if failure.kind == "http" and failure.status in (400, 401, 403):
@@ -616,7 +616,7 @@ def _date(value, name):
 
 
 def _activity_id(value):
-    """str(_validate_positive_integer(int(x), "activity_id")), as garminconnect's get_activity builds it (F23)."""
+    """str(_validate_positive_integer(int(x), "activity_id")), as garminconnect's get_activity builds it."""
     return str(_validators()[1](int(value), "activity_id"))
 
 
@@ -644,7 +644,7 @@ def _query(params):
     return {key: ("true" if value is True else "false" if value is False else value) for key, value in params.items()}
 
 
-# --- the adapter (D6, D7) ------------------------------------------------------------------------------------
+# --- the adapter ---------------------------------------------------------------------------------------------
 
 _ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 _METRICS_PATH = "/metrics-service/metrics/maxmet/daily"
@@ -658,7 +658,7 @@ _SEARCH_PARAMS = frozenset({"start", "limit", "startDate", "endDate", "activityT
 
 
 class KeyModeGarmin:
-    """Stands in for garminconnect's Garmin client in key mode (D7).
+    """Stands in for garminconnect's Garmin client in key mode.
 
     Exactly the names of _IMPLEMENTED (each mirrors garminconnect 0.3.2's signature and input checks) and the two
     path attributes; any other name raises NotInKeyMode. A path segment or query value is built only from a
@@ -685,7 +685,7 @@ class KeyModeGarmin:
     def __repr__(self):
         return "KeyModeGarmin()"
 
-    # -- requests, one retry after a refused token (D8), mapping outside `except` (D11)
+    # -- requests, one retry after a refused token, mapping outside `except`
 
     def _call(self, op, activity=False):
         for attempt in (1, 2):
@@ -852,7 +852,7 @@ def _session():
 class _LibraryHttp:
     """KeyModeGarmin's HTTP layer over GarminPersonalApiClient: one shared session for data calls, one client per
     token (a client's headers are fixed when it is built, so a new token never changes a request in flight), and
-    the base URL forced to Garmin's own host whatever the environment says (D3)."""
+    the base URL forced to Garmin's own host whatever the environment says."""
 
     def __init__(self, *, session=None, timeout=30.0):
         self._lib = _library()
@@ -878,7 +878,7 @@ class _LibraryHttp:
 
 
 def library_authenticator(cache_file, *, session=None, clock=time.time):
-    """Garmin's PersonalApiAuthenticator on its own session, caching at `cache_file`, base URL forced (D3)."""
+    """Garmin's PersonalApiAuthenticator on its own session, caching at `cache_file`, base URL forced."""
     lib = _library()
     auth = lib.PersonalApiAuthenticator(session=session if session is not None else _session(),
                                         bearer_token_cache_file=cache_file, clock=clock)
@@ -900,7 +900,7 @@ def _check_hook(garmin_mcp):
 
 
 def login(tokens, http):
-    """Key mode's init_api(): the adapter, after one token request (D5). Garmin refusing the key raises
+    """Key mode's init_api(): the adapter, after one token request. Garmin refusing the key raises
     KeyModeLoginError, so upstream's /readyz says failed; a rate limit, a network failure, a 5xx or an unusable
     token answer is logged (by TokenManager) and the adapter is returned anyway: each call asks again."""
     garmin = KeyModeGarmin(tokens, http)
@@ -912,7 +912,7 @@ def login(tokens, http):
 
 
 def install(key, cache_file=None, *, authenticator=None, http=None, clock=time.time):
-    """Make upstream log in with the key: replace garmin_mcp.init_api (F14) before upstream's main() runs.
+    """Make upstream log in with the key: replace garmin_mcp.init_api before upstream's main() runs.
 
     `key` is take_key()'s value and must pass the key check; `cache_file` is cache_path()'s (None: cache_path of
     os.environ, read now). Prepares the cache

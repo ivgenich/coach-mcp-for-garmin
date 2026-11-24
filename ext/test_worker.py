@@ -22,7 +22,7 @@ import worker
 import worker_garmin
 from jobqueue import DONE, FAILED, QUEUED, MemoryJobQueue
 
-TZ = ZoneInfo("Asia/Jerusalem")
+TZ = ZoneInfo("Europe/Berlin")
 NOON = dt.datetime(2026, 11, 24, 12, tzinfo=TZ).timestamp()
 TP = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 
@@ -42,7 +42,7 @@ class Clock:
 
 
 class GuardBlocked(Exception):
-    """Same name and fields as garmin_guard.GuardBlocked (B1); the worker matches it by name."""
+    """Same name and fields as garmin_guard.GuardBlocked; the worker matches it by name."""
 
     def __init__(self, group, until):
         super().__init__(group)
@@ -144,7 +144,7 @@ class Registry(unittest.TestCase):
 
 
 class RunAsMain(Base):
-    """Review fix S1: entrypoint.sh runs `python worker.py`, so this file loads as __main__ while the handler
+    """entrypoint.sh runs `python worker.py`, so this file loads as __main__ while the handler
     modules `import worker` again; their worker.Permanent must still fail the job with its group."""
 
     def tearDown(self):
@@ -214,7 +214,7 @@ class RunAsMain(Base):
 
 class Startup(unittest.TestCase):
     def test_no_telemetry_with_tracing_off(self):
-        """Review fix: the queue stats gauges never run with tracing off."""
+        """The queue stats gauges never run with tracing off."""
         import feature_config
 
         self.assertIsNone(worker._setup_telemetry(feature_config.load({})))
@@ -225,7 +225,7 @@ class Startup(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_main_registers_every_secret_form_and_takes_the_secrets(self):
-        """Review fix: as launch does, the DSN password and the token key are redacted, and the secret
+        """As launch does, the DSN password and the token key are redacted, and the secret
         variables leave the environment before anything else starts."""
         import base64
         import secrets as secrets_mod
@@ -339,6 +339,71 @@ class Dispatch(Base):
             w.run_once()
         self.assertEqual(sorted((r.kind, r.status, r.last_error_group) for r in self.q.rows()),
                          [("index_day", FAILED, "no_data"), ("rebuild", FAILED, "bad_account")])
+
+    def test_prepare_runs_before_the_transaction_and_feeds_the_handler(self):
+        state = {"open": False}
+        seen = []
+        real = self.q.transaction
+
+        @contextlib.contextmanager
+        def tracked():
+            state["open"] = True
+            try:
+                with real() as conn:
+                    yield conn
+            finally:
+                state["open"] = False
+
+        self.q.transaction = tracked
+
+        def prepare(job, ctx):
+            seen.append(("prepare", state["open"], ctx.conn))
+            return {"answer": 42}
+
+        def handler(job, ctx):
+            seen.append(("handler", state["open"], ctx.prepared))
+
+        w = self.make({"index_day": worker.Handler(handler, True, prepare)})
+        self.q.enqueue("index_day", "index_day:2026-11-20")
+        w.run_once()
+        self.assertEqual(seen, [("prepare", False, None), ("handler", True, {"answer": 42})])
+        self.assertEqual(self.q.rows()[0].status, DONE)
+
+    def test_a_prepare_failure_is_handled_like_a_handler_failure(self):
+        def prepare(job, ctx):
+            raise jobqueue.Defer(600, "not_final")
+
+        ran = []
+        w = self.make({"build_week": worker.Handler(lambda job, ctx: ran.append(1), True, prepare)})
+        self.q.enqueue("build_week", "build_week:2026-11-16")
+        w.run_once()
+        row = self.q.rows()[0]
+        self.assertEqual((row.status, row.attempts, row.last_error_group), (QUEUED, 0, "not_final"))
+        self.assertEqual(ran, [])
+        with self.assertRaises(TypeError):
+            worker.register("index_day", lambda job, ctx: None, prepare="not callable")
+
+    def test_token_stale_logs_one_warning_an_hour(self):
+        worker.clear()
+        self.addCleanup(worker.clear)
+
+        def stale(job, ctx):
+            raise worker_garmin.TokenStale()
+
+        w = self.make(handlers(index_day=(stale, True)))
+        with self.assertLogs("garmin_ext.worker", "INFO") as logs:
+            for i in range(3):
+                self.q.enqueue("index_day", f"index_day:2026-11-{10 + i}")
+                w.run_once()
+                self.clock.advance(60)
+            self.clock.advance(worker.STALE_LOG_S)
+            self.q.enqueue("index_day", "index_day:2026-11-19")
+            w.run_once()
+        warnings = [r for r in logs.records if r.levelname == "WARNING"]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("token_stale", warnings[0].getMessage())
+        self.assertEqual(worker.TOKEN_STALE, worker_garmin.TOKEN_STALE)
+        self.assertGreaterEqual(sum(r.last_error_group == "token_stale" for r in self.q.rows()), 3)
 
     def test_defer(self):
         def not_final(job, ctx):

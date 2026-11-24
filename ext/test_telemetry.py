@@ -27,8 +27,8 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import telemetry as t  # noqa: E402
-import tool_errors  # noqa: E402
+import telemetry as t
+import tool_errors
 
 HAVE_SDK = (importlib.util.find_spec("opentelemetry") is not None
             and importlib.util.find_spec("opentelemetry.sdk") is not None
@@ -264,7 +264,7 @@ class Headers(unittest.TestCase):
             self.assertEqual(t.parse_headers(bad), {}, bad)
 
     def test_every_header_the_check_passes_is_kept(self):
-        """Review fix S3: "X_Scope_OrgID" passed feature_config but this returned {} (every header dropped)."""
+        """The header name "X_Scope_OrgID" passed feature_config but this used to return {} (every header dropped)."""
         import feature_config
 
         raw = "Authorization=Basic%20abc,X_Scope_OrgID=tenant1"

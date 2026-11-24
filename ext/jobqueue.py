@@ -1,6 +1,6 @@
 """The history job queue: a small JobQueue interface, a Postgres implementation and an in-memory one.
 
-Plan section 5b. Jobs live in `history.jobs`; a worker claims one with
+Jobs live in `history.jobs`; a worker claims one with
 `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1)`, holds it under a lease it renews
 (heartbeat), and finishes it with complete(), fail() or defer(). Each claim carries a fresh claim token, and every
 write a worker makes to its job is fenced by that token, so a worker whose lease expired (and whose job another
@@ -212,7 +212,7 @@ class _Row:
 
 class _MemoryTxn:
     """A transaction on MemoryJobQueue: enqueues and the completion are buffered and applied together on commit,
-    or dropped on rollback. Handlers may register their own writes with on_commit(fn) (B3's memory store)."""
+    or dropped on rollback. Handlers may register their own writes with on_commit(fn) (an in-memory store)."""
 
     def __init__(self, queue):
         self.queue = queue
@@ -551,13 +551,28 @@ MIGRATE_LOCK_ID = 0x636F6163
 MIGRATE_LOCK = f"SELECT pg_advisory_xact_lock({MIGRATE_LOCK_ID})"
 
 
+# The limits every history connection carries (the queue, the guard, the token, the store, retrieval and its
+# SQLAlchemy engine): one slow statement or lock wait cannot hang a tool call or a job, and a transaction left
+# idle (a stuck worker) is closed by the server and its row locks released.
+STATEMENT_TIMEOUT_MS = 30000
+LOCK_TIMEOUT_MS = 10000
+IDLE_IN_TRANSACTION_MS = int(LEASE_S * 1000)    # a job's transaction never needs to idle longer than its lease
+CONNECT_TIMEOUT_S = 5
+
+
+def pg_options(statement_timeout_ms: int = STATEMENT_TIMEOUT_MS) -> str:
+    """The libpq `options` value with the shared timeouts (statement_timeout_ms 0 = no statement limit)."""
+    return (f"-c statement_timeout={int(statement_timeout_ms)} -c lock_timeout={LOCK_TIMEOUT_MS} "
+            f"-c idle_in_transaction_session_timeout={IDLE_IN_TRANSACTION_MS}")
+
+
 def connect(dsn: str, *, autocommit: bool = True, application_name: str = "coach-mcp"):
-    """A psycopg 3 connection with short timeouts. The DSN is never logged. Autocommit by default: callers
-    group statements with `with conn.transaction():` (psycopg's recommended pattern)."""
+    """A psycopg 3 connection with short timeouts (pg_options). The DSN is never logged. Autocommit by default:
+    callers group statements with `with conn.transaction():` (psycopg's recommended pattern)."""
     import psycopg
 
-    return psycopg.connect(dsn, autocommit=autocommit, connect_timeout=5, application_name=application_name,
-                           options="-c statement_timeout=30000 -c lock_timeout=10000")
+    return psycopg.connect(dsn, autocommit=autocommit, connect_timeout=CONNECT_TIMEOUT_S,
+                           application_name=application_name, options=pg_options())
 
 
 class PgJobQueue:

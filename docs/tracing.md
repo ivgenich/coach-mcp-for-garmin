@@ -169,6 +169,9 @@ suffix):
 | `gen_ai.client.token.usage` | `gen_ai_client_token_usage_bucket` | `gen_ai_token_type`, `gen_ai_request_model` |
 | `coach.eval.cost` | `coach_eval_cost_total` | `gen_ai_request_model` |
 
+The last two rows come only from eval runs: the server and its workers never send token counts
+or cost, since they make no model calls.
+
 The whole set stays well under 2,000 series, far below the free plan's 10,000.
 
 ## Spans

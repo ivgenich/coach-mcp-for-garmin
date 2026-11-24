@@ -1,9 +1,13 @@
 # coach-mcp-for-garmin
 
-A server you deploy for yourself that lets Claude read your Garmin Connect data: activities,
-sleep, HRV, training load, planned workouts and more. Ask "How am I today?" in the Claude app on
-your phone, and Claude answers from your own numbers. Every tool is read-only, and the server has
-a sign-in of its own, so only you can connect it to Claude. On top of the tools of
+[![CI](https://github.com/ivgenich/coach-mcp-for-garmin/actions/workflows/ci.yml/badge.svg)](https://github.com/ivgenich/coach-mcp-for-garmin/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+An MCP server you deploy for yourself that lets Claude read your Garmin Connect data: activities,
+sleep, HRV, training load, planned workouts and more. MCP (Model Context Protocol) is the open
+standard Claude uses to call tools on servers like this one. Ask "How am I today?" in the Claude
+app on your phone, and Claude answers from your own numbers. Every tool is read-only, and the
+server has a sign-in of its own, so only you can connect it to Claude. On top of the tools of
 [Taxuspt/garmin_mcp](https://github.com/Taxuspt/garmin_mcp) it adds a daily status (a green,
 yellow or red level and a recommendation for today's workout, by fixed rules), a weekly status
 and a course climb profile.
@@ -14,43 +18,63 @@ and a course climb profile.
 > API under Garmin's own terms, with less data. Not medical advice. Your Garmin data goes to the
 > AI provider you use. Details: [Risks and privacy](#risks-and-privacy).
 
+**Contents:** [Is this for you?](#is-this-for-you) ·
+[Quickstart](#quickstart) · [What it costs](#what-it-costs) ·
+[Claude plans and apps](#claude-plans-and-apps) · [Other MCP clients](#other-mcp-clients) ·
+[One server per person](#one-server-per-person) · [Risks and privacy](#risks-and-privacy) ·
+[What you get](#what-you-get) · [Updates and versions](#updates-and-versions) ·
+[Uninstall and revoke](#uninstall-and-revoke) · [Lost the owner secret?](#lost-the-owner-secret) ·
+[Evals](#evals) · [Help](#help) · [Docs](#docs) · [License and credit](#license-and-credit)
+
+## Is this for you?
+
+It is if you use a Garmin watch with Garmin Connect, want Claude to answer from your own data,
+and are fine running a few commands in a terminal and paying for your own small server (about
+$5 a month on Railway). You need a computer with bash, git and python3: macOS, Linux, or WSL on
+Windows. The Railway CLI installs with Homebrew (optional), npm or Scoop.
+
+It is not if you want an app to install from a store, a service someone else runs for you, one
+server for several people, or a tool that changes your Garmin data: every tool only reads.
+
 ## Quickstart
 
-You need a Claude account (any plan: see [Claude plans and apps](#claude-plans-and-apps)), a
-Garmin Connect account, your time zone as an IANA name such as `Europe/London`, and about an
-hour. You also need a computer with a terminal and git; for Railway, also the Railway CLI
-([Before you start](docs/deploy-railway.md#before-you-start)). In `full` mode the one-time
-Garmin login runs there too.
+You need a Claude account ([any plan](#claude-plans-and-apps)), a Garmin Connect account, your
+time zone as an IANA name such as `Europe/London`, about an hour, a terminal and the Railway CLI
+([Before you start](docs/deploy-railway.md#before-you-start)).
 
 1. **Choose a Garmin mode.** `GARMIN_AUTH` is required and has no default:
 
    | `GARMIN_AUTH` | What you get | How the server reaches Garmin |
    |---|---|---|
-   | `full` | Every tool: activities, sleep and recovery, training status and load, planned workouts, courses, the daily and weekly status | You log in to Garmin once with your email and password, in a terminal; an unofficial interface |
-   | `key` | Less: activities, sleep, HRV, daily stats, Body Battery, heart-rate zones and VO2max. No training readiness, training status or load, planned workouts, courses, race predictions or records; the daily status works without readiness and planned workouts | A Garmin Personal API key you create on the Garmin Connect website; Garmin's official API, which the server only reads with |
+   | `full` | Every tool: activities with laps and time in zones, sleep and recovery, training readiness, status and load, planned workouts, courses, records, the daily and weekly status | You log in to Garmin once with your email and password, on your server; an unofficial interface |
+   | `key` | Less: activities, sleep, HRV, daily stats, Body Battery, heart-rate zones and VO2max, and the daily and weekly status. No laps or time in zones, weekly stress, training readiness, training status or load, endurance score, lactate threshold, cycling FTP, progress summaries, planned workouts, courses, race predictions or records; the daily status works without readiness and planned workouts | A Garmin Personal API key you create on the Garmin Connect website; Garmin's official API, which the server only reads with |
 
-   Upkeep: `full`: log in again about every 6 months. `key`: make a new key before it expires
-   (30 days to one year; Garmin emails you about a week before).
-   `key`: create your key now on the Garmin Connect website
-   ([how](docs/garmin-login.md#key-mode-create-a-key)) and keep it in your password manager;
-   the deploy asks for it. More on each mode: [Garmin modes and login](docs/garmin-login.md).
-2. **Deploy your own server**, one per person:
-   - **Railway**, about $5 a month: [Deploy on Railway](docs/deploy-railway.md).
-   - **Docker on your own computer** that stays on, behind a Cloudflare Tunnel (you need a
-     domain on Cloudflare; adding one can take a day): [Deploy with Docker](docs/deploy-docker.md).
+   Upkeep: `full`: log in again about every 6 months. `key`: a new key before it expires; create
+   it now ([how](docs/garmin-login.md#key-mode-create-a-key)). [More](docs/garmin-login.md).
+2. **Deploy your own server**, one per person, on Railway (about $5 a month). In a terminal:
 
-   The deploy creates your **owner secret**. Save it in your password manager.
-3. **Connect Garmin** (`full` only): run the one-time login, `garmin-mcp-auth`, in a terminal
-   ([how](docs/garmin-login.md#full-mode-the-one-time-login)). In `key` mode there is nothing to
-   do: the deploy already has your key.
+   ```bash
+   git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
+   cd coach-mcp-for-garmin
+   git checkout v1.0.0    # or the newest release tag; if no release is listed yet, skip this line
+   export GARMIN_AUTH=full REPORT_TZ=Europe/London    # your mode and your own zone
+   ./scripts/deploy.sh
+   ```
+
+   It creates your **owner secret**: save it in your password manager ([details](docs/deploy-railway.md)).
+   Advanced, partly untested: [Docker](docs/deploy-docker.md) on your own computer, behind a Cloudflare Tunnel.
+3. **Connect Garmin** (`full` only): the one-time login runs on your server, not on your computer
+   (the `garmin-mcp-auth` command exists only there). deploy.sh offers to start it for you over
+   `railway ssh` ([how](docs/garmin-login.md#full-mode-the-one-time-login)). `key`: nothing to do.
 4. **Add it to Claude.** On claude.ai: **Customize → Connectors → Add → Add custom connector**.
    URL: `https://<your-host>/mcp`, exactly, with no trailing slash.
    Authentication: **Sign in now**. OAuth client: **Register automatically** (keep them if
    Claude marks them **Detected**). Click **Add**, then **Connect** if Claude shows it.
    A page on your server opens. Check that the address bar shows your server before you type
-   the owner secret; a password manager offers it only on the address you saved it for.
-   Click **Approve**. [Details, and Claude Code](docs/connect-claude.md).
-5. **Ask** in the Claude app on your phone: "How am I today?"
+   the owner secret, then click **Approve**. [Details, and Claude Code](docs/connect-claude.md).
+5. **Ask** in the Claude app on your phone: "How am I today?" It works when Claude answers with
+   a short status: a green, yellow or red level, a few of last night's numbers and a
+   recommendation for today. If it doesn't: [Troubleshooting](docs/troubleshooting.md).
 
 ## What it costs
 
@@ -58,10 +82,10 @@ Prices as of November 2026. Check the providers' pages before you start.
 
 | Part | Cost |
 |---|---|
-| Railway | $5 a month: the Hobby plan costs $5 and includes $5 of usage, and this server uses about $2-4. A new Railway account gets a one-time $5 trial credit for up to 30 days. Upgrade to Hobby before the trial ends: afterwards the account falls back to the Free plan's $1 of credit a month, which does not cover this server, and Railway deletes volumes made during the trial 30 days after the credit expires, with your Garmin login on them. [Railway plans](https://docs.railway.com/reference/pricing/plans) |
+| Railway | $5 a month: the Hobby plan costs $5 and includes $5 of usage, and this server uses about $2-4. A new Railway account gets a one-time $5 trial credit for up to 30 days. Upgrade to Hobby before the trial ends: afterwards the account falls back to the Free plan's $1 of credit a month, which does not cover this server, and Railway deletes volumes (the server's disk that survives redeploys) made during the trial 30 days after the credit expires, with your Garmin login and sign-ins on them. [Railway plans](https://docs.railway.com/reference/pricing/plans) |
 | Docker on your own computer | No hosting fee. The computer must stay on, and the Cloudflare Tunnel needs a domain on Cloudflare, which you pay your domain registrar for. Cloudflare says Cloudflare Tunnel is "Available on all plans" ([Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/), checked November 2026). |
 | Claude | Any plan works, Free included: see [Claude plans and apps](#claude-plans-and-apps). |
-| Optional features | Tracing: a free tracing service is enough ([Tracing](docs/tracing.md)). History search: a Postgres and a small worker on Railway, an estimated $4-8 a month more ([History worker](docs/history-worker.md)). Both are off by default. |
+| Optional features | Tracing: a free tracing service is enough ([Tracing](docs/tracing.md)). History search (Railway only for now): a Postgres, a small worker and a daily scheduler, an estimated $4-8 a month more ([History worker](docs/history-worker.md#cost)). Both are off by default. |
 | Garmin | `full` mode: no fee. `key` mode: Garmin's Personal API pages state no price ([Personal API FAQ](https://developer.garmin.com/gc-developer-program/personal/personal-faq/), checked November 2026). |
 
 Each person runs their own server, so each person pays for their own hosting.
@@ -84,6 +108,12 @@ Enterprise.
 Source: Anthropic's
 [Add a connector that isn't in the directory](https://claude.com/docs/connectors/custom/add-unlisted.md),
 checked November 2026.
+
+## Other MCP clients
+
+The server is a remote MCP server over streamable HTTP, with an OAuth sign-in (and an optional
+static bearer token). It is tested with Claude only. Other clients that support remote MCP
+servers with OAuth should work, but are untested.
 
 ## One server per person
 
@@ -144,22 +174,25 @@ server, with their own Garmin login or key and their own owner secret.
 - **Weekly status** (`get_weekly_status`): the last 7 days against the 7 before.
   [Fields and rules](docs/weekly-status.md).
 - **Course profile** (`get_course_profile`): the climbs and elevation profile of a saved course.
-- **Your Garmin data** through the read-only tools of upstream garmin_mcp: activities, splits,
-  zones, sleep, HRV, stress, Body Battery, training status, VO2max, race predictions, records and
-  more. No tool can change your Garmin data. [Every tool, per mode](docs/tools.md).
+- **Your Garmin data** through the read-only tools of upstream garmin_mcp: activities, sleep,
+  HRV, Body Battery, VO2max and more, and in `full` mode also laps, time in zones, weekly stress,
+  training status, race predictions and records. No tool can change your Garmin data.
+  [Every tool, per mode](docs/tools.md).
 - **Optional add-ons, off by default.** The basic deploy is one service, as in the
   [Quickstart](#quickstart); neither add-on is needed.
   [Tracing](docs/tracing.md) (`TRACING=on`): tool latency, errors and Garmin rate limits on a
   dashboard, with no health values. [History search](docs/history-search.md)
-  (`HISTORY_SEARCH=on`): "find weeks like this one" over your stored history; it adds three
-  services next to the server (a Postgres, a [worker](docs/history-worker.md) and a daily
-  scheduler), and its embedding model runs on your server.
+  (`HISTORY_SEARCH=on`, Railway only for now): "find weeks like this one" over your stored
+  history; it adds three services next to the server (a Postgres, a
+  [worker](docs/history-worker.md) and a daily scheduler), and its embedding model runs on your
+  server.
 - **Optional recipes for claude.ai:** a [coach Project](recipes/coach-project/README.md), and an
   experimental [morning report page](recipes/claude-ai-morning-report/README.md).
 
-In `key` mode the course tools and the tools for planned workouts, training readiness, status and
-load, records and race predictions are off, and the daily and weekly status work with fewer
-values: [Every tool, per mode](docs/tools.md).
+In `key` mode these are off: laps and time in zones, weekly stress, training readiness, training
+status and load, endurance score, lactate threshold, cycling FTP, progress summaries, planned
+workouts, courses (the course profile included), race predictions and records. The daily and
+weekly status work with fewer values: [Every tool, per mode](docs/tools.md).
 
 ## Updates and versions
 
@@ -168,7 +201,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and a
 PATCH releases don't. The public API (tool names, the fields of `get_daily_status` and
 `get_weekly_status`, `RULES_VERSION`, the settings), how to update and how to roll back:
 [Updates and versions](docs/updates.md). To hear about new releases, watch this repository on
-GitHub: **Watch → Custom → Releases**.
+GitHub: **Watch → Custom → Releases**. Until the first release is listed, stay on `main`.
 
 ## Uninstall and revoke
 
@@ -224,8 +257,8 @@ committed transcripts offline. [Evals](docs/evals.md).
 
 - Something doesn't work: [Troubleshooting](docs/troubleshooting.md).
 - A security problem: report it privately, as [SECURITY.md](SECURITY.md) explains.
-- Questions and bug reports: GitHub issues. Never paste tokens, secrets, keys, emails or health
-  data into an issue.
+- Questions and bug reports: GitHub issues (the **Question** and **Bug report** forms). Never paste tokens, secrets, keys, emails or health
+  data into an issue. To change something: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This is a personal project, maintained on a best-effort basis, with no SLA.
 
@@ -253,7 +286,7 @@ This is a personal project, maintained on a best-effort basis, with no SLA.
 
 ## License and credit
 
-MIT, see [LICENSE](LICENSE). The MCP server itself is
+MIT, see [LICENSE](LICENSE) and [NOTICE](NOTICE). The MCP server itself is
 [Taxuspt/garmin_mcp](https://github.com/Taxuspt/garmin_mcp) by Alexandre Domingues (MIT), which
 the Docker build downloads at a pinned commit; this repository adds the proxy and the sign-in,
 the deployment, the `ext/` tools and the recipes around it. In `key` mode the server uses Garmin's

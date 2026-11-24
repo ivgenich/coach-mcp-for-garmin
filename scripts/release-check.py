@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Release gate for maintainers: checks this repository before the tag v<version>.
 
-    python3 scripts/release-check.py --version 1.0.0 [--denylist FILE] [--expect-tag] [--repo PATH]
+    python3 scripts/release-check.py --version 1.0.0 [--denylist FILE] [--expect-tag] [--since COMMIT]
+                                     [--repo PATH]
 
 Read-only: it never tags, commits or pushes, and every git call uses
 `git --no-optional-locks`. The HEAD tree is read from `git archive HEAD` into a
 temporary folder that is removed afterwards. Checks R1-R10: the version in
 ext/version.py (read with ast, never imported), the CHANGELOG heading with the
 UTC date of HEAD's commit, a clean tree on main, the tag state, GitHub noreply
-identities and +0000 offsets in every commit, tracked-file hygiene, gitleaks on
+emails in every commit, +0000 offsets in the commits since the previous release
+tag (before the first tag: since BASELINE, or --since COMMIT) and on the
+tag itself, tracked-file hygiene, gitleaks on
 the HEAD tree and the history, a private denylist (kept outside the
 repository; its entries are never printed) and script modes.
 Exit 0 only on RESULT: PASS. Standard library plus the git and gitleaks
@@ -34,6 +37,12 @@ REQUIRED_FILES = (".gitignore", "LICENSE", "README.md", "CHANGELOG.md", "SECURIT
 FORBIDDEN_NAMES = ("*.sqlite*", "*.token", "*.secret", "garmin_tokens.json", "*garmin_tokens.base64*",
                    "*garminconnect_base64*", "*.pyc", ".DS_Store")
 FORBIDDEN_DIRS = ("tokens", "garmin-key", "__pycache__")
+# The commits up to this one were made before the +0000 rule and keep their
+# local offsets (rewriting published history is not worth it). Before the first
+# release tag, R6 checks offsets only in the commits after it; once a tag
+# exists, only the commits after the newest tag. A repository without this
+# commit (a fork with new history, the tests) is checked in full.
+BASELINE = "7b9c03e68a509715a04cc4ddc49b3d0c9179ff74"
 
 
 class GitError(Exception):
@@ -165,12 +174,32 @@ def run_gitleaks(exe, args, report_dir, tree_dir=None):
     return False, findings, f"exit {proc.returncode}"
 
 
+def offset_scope(repo, tag, since):
+    """(revision range, words for the output) of the commits whose offsets R6 checks."""
+    if since is None:
+        code, prev = repo.git("describe", "--tags", "--abbrev=0", "--match", "v*", "--exclude", tag, "HEAD",
+                              check=False)
+        if code == 0 and prev.strip():
+            prev = prev.strip()
+            return f"refs/tags/{prev}..HEAD", f"since {prev}" if re.match(r"^[A-Za-z0-9_.-]{1,64}$", prev) else \
+                "since the previous tag"
+        since = BASELINE
+    code, base = repo.git("rev-parse", "-q", "--verify", f"{since}^{{commit}}", check=False)
+    if code == 0:
+        base = base.strip()
+        if repo.git("merge-base", "--is-ancestor", base, "HEAD", check=False)[0] == 0:
+            return f"{base}..HEAD", f"after commit {base[:7]}"
+    return "HEAD", "of HEAD's history"
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="release-check.py", description="Read-only release gate (R1-R10).")
     p.add_argument("--version", required=True, help="the release version, e.g. 1.0.0")
     p.add_argument("--denylist", metavar="FILE", help="personal details to look for, one per line (kept outside "
                    "the repository; never printed)")
     p.add_argument("--expect-tag", action="store_true", help="v<version> must exist, be annotated and point at HEAD")
+    p.add_argument("--since", metavar="COMMIT", help="check date offsets only in the commits after this one (default: "
+                   "the newest release tag, else the built-in baseline)")
     p.add_argument("--repo", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    help="the repository (default: this one)")
     args = p.parse_args(argv)
@@ -199,6 +228,12 @@ def main(argv=None):
     except GitError:
         print("release-check: not a git repository with a commit")
         return 2
+    if args.since is not None:
+        code = 1 if args.since.startswith("-") else \
+            repo.git("rev-parse", "-q", "--verify", f"{args.since}^{{commit}}", check=False)[0]
+        if code != 0 or repo.git("merge-base", "--is-ancestor", args.since, "HEAD", check=False)[0] != 0:
+            print("release-check: --since is not a commit in HEAD's history")
+            return 2
 
     results = []  # (status, line)
 
@@ -279,12 +314,14 @@ def main(argv=None):
             problems.append("repo-local user.email is not a GitHub noreply address")
         rows = [x for x in repo.out("log", "--all", "--format=%ae%x00%ce").splitlines() if x]
         bad_mail = sum(1 for r in rows if not all(e.strip().lower().endswith(NOREPLY) for e in r.split("\0")))
-        offsets = [x for x in repo.out("log", "--all", "--format=%ad %cd", "--date=format:%z").splitlines() if x]
+        span, scope = offset_scope(repo, tag, args.since)
+        offsets = [x for x in repo.out("log", "--format=%ad %cd", "--date=format:%z", span, "--").splitlines() if x]
         bad_zone = sum(1 for r in offsets if any(o != "+0000" for o in r.split()))
         if bad_mail:
             problems.append(f"{bad_mail} of {len(rows)} commits carry an email that is not a GitHub noreply address")
         if bad_zone:
-            problems.append(f"{bad_zone} of {len(rows)} commits carry a local time zone offset; commit with TZ=UTC")
+            problems.append(f"{bad_zone} of {len(offsets)} commits {scope} carry a local time zone offset; commit "
+                            "with TZ=UTC")
         if args.expect_tag and exists:
             tagger = repo.out("for-each-ref", f"refs/tags/{tag}",
                               "--format=%(taggeremail)%00%(taggerdate:format:%z)").strip()
@@ -298,7 +335,8 @@ def main(argv=None):
         else:
             extra = "; the tag's tagger too" if args.expect_tag and exists else ""
             add("PASS", "R6 identity:", f"repo-local user.email is a GitHub noreply address; every author and "
-                f"committer email in {len(rows)} commits is one too; every date offset is +0000{extra}")
+                f"committer email in {len(rows)} commits is one too; every date offset in the {len(offsets)} commits "
+                f"{scope} is +0000{extra}")
 
         # R7 tracked files
         tracked = [x for x in repo.out("ls-files", "-z").split("\0") if x]

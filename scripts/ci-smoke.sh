@@ -150,6 +150,11 @@ start_fails edge-header-empty "launch: config error: EDGE_CLIENT_IP_HEADER is se
 pid1_secrets() {
 	docker exec "$1" sh -c 'tr "\0" "\n" </proc/1/environ | grep -cE "^(OWNER_SECRET|MCP_BEARER_TOKEN|GARMIN_PERSONAL_API_KEY)="' || true
 }
+# users NAME: the users of Caddy (PID 1), of the server (launch.py) and of the
+# sign-in database; want "caddy app app". "launc[h]" keeps this sh -c out of the match.
+users() {
+	docker exec "$1" sh -c 'p=$(grep -l "garmin-ext/launc[h].py" /proc/[0-9]*/cmdline 2>/dev/null | head -n 1); echo "$(stat -c %U /proc/1) $(stat -c %U "${p%/cmdline}") $(stat -c %U /data/auth.sqlite)"' 2>/dev/null || echo "exec failed"
+}
 # log_hits FILE: lines of FILE that hold a secret value of this run.
 log_hits() { grep -cF -e "$OWNER_SECRET" -e "$MCP_BEARER_TOKEN" -e "$GARMIN_PERSONAL_API_KEY" "$1" || true; }
 
@@ -175,6 +180,14 @@ code=$(curl -s -o /dev/null -D "$WORK/h401" -w '%{http_code}' --max-time 10 -X P
 ok=no
 [ "$code" = 401 ] && grep -i '^www-authenticate:' "$WORK/h401" | grep -qF "$want" && ok=yes
 check full/no-token "$ok" "POST /mcp without a token $code (want 401 with $want)"
+# Origin reaches the server through Caddy: a foreign one gets 403, Claude's the usual 401.
+for pair in "https://evil.example 403" "https://claude.ai 401"; do
+	origin=${pair% *}
+	want_code=${pair#* }
+	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$BASE/mcp" -H "Origin: $origin" \
+		-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$INIT" || true)
+	check full/origin "$(yes_if test "$code" = "$want_code")" "POST /mcp with Origin $origin: $code (want $want_code)"
+done
 if "$PY" -B scripts/test-protocol.py --url "$BASE/mcp" --expect-version "$VERSION" \
 	--expect-name coach-mcp-for-garmin >"$WORK/protocol.txt" 2>&1; then
 	check full/test-protocol yes "$(tail -n 1 "$WORK/protocol.txt")"
@@ -189,6 +202,8 @@ else
 fi
 indent "$WORK/connector.txt"
 check full/caddy-env "$(yes_if test "$(pid1_secrets "$MAIN")" = 0)" "Caddy (PID 1) holds no secret variable"
+got=$(users "$MAIN")
+check full/users "$(yes_if test "$got" = "caddy app app")" "Caddy, the server, auth.sqlite: $got (want caddy app app)"
 docker logs "$MAIN" >"$WORK/full.log" 2>&1
 want="launch: config OK ($FULL_N read-only tools)"
 check full/config "$(yes_if grep -qF "$want" "$WORK/full.log")" "the log says: $want (with the key variable blank)"

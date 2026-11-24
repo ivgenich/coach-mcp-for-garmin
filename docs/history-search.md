@@ -15,8 +15,10 @@ is in [history-worker.md](history-worker.md).
 
 Both read only Postgres and never call Garmin. Every answer is compact JSON:
 
-- `index`: `from`, `to`, `weeks`, `days`, `complete` (no missing day up to yesterday and the backfill reached a
-  year or the account start), `stale` (the newest stored day is more than 3 days before yesterday);
+- `index`: `from`, `to`, `weeks`, `days`, `complete` (every day from `from` to yesterday is stored, every day
+  older than 3 days is final, and the history reaches a year back or the account start; see
+  [How far back the history goes](#how-far-back-the-history-goes)), `stale` (the newest stored day is more than
+  3 days before yesterday);
 - `reference` (find_similar_weeks): the reference week's dates and stored numbers;
 - `results`: for each week or day its dates, level, flags, tags, the stored `numbers`, a code-built `why`
   (find_similar_weeks: the closest numbers as "result vs reference"; search_history: each matching flag or tag
@@ -51,12 +53,36 @@ Everything lives in one Postgres schema, `history`, in the database `DATABASE_UR
 | `history.guard_state` | the shared Garmin call guard's row (cooldowns and counters) |
 | `history.garmin_token` | full mode only: the app's Garmin token file, sealed with AES-256-GCM under `HISTORY_TOKEN_KEY`, so the worker can call Garmin |
 
-A day fetched again (the Monday recheck) keeps a stored value when its source fails this time; a new value
-replaces it.
+A day fetched again (the Monday recheck, or a day fetched again because it was not final) takes the new
+answer of every source that answered, an empty answer too (a value Garmin no longer has becomes null), and
+keeps the stored values of a source that failed this time.
+
+## How far back the history goes
+
+The worker fills the history newest day first, one day at a time, up to a year back (plus 3 weeks for the
+oldest week's HRV average). It stops earlier at the account start: after 14 days in a row on which every
+Garmin call answered and none had data. The day it stops at is kept as the backfill floor (`history.meta`).
+
+- A day on which a call failed never counts toward those 14 days, whatever the error. Garmin unavailable (a
+  5xx answer, a network error, a timeout) is retried with backoff (about 1 and 5 minutes later); after the
+  third try the day is stored with that source missing and stays not final. The daily sweep fetches up to 5
+  such older days again each day until they are final; a day that already failed again is retried on the
+  Monday sweep only, so a day Garmin keeps failing costs a few calls a week.
+- A source Garmin refuses (HTTP 403, for example a metric your device does not record) is not retried: the day
+  is stored final with that source missing. Garmin's "no data" is an answer, not a missing source.
+- The stop is skipped while an older stored day has data (a long break without the watch, not the start).
+- The floor is provisional: each daily sweep checks a few days before it once (7, 21, 49 and 98 days
+  earlier). When one of them has data, the floor is removed and the backfill goes on from there.
+- `index.complete` is true only when no day from the start of the index to yesterday is missing, no day
+  older than 3 days is still not final, and the history reaches a year back or the floor. Days stored before
+  the floor by those checks are not part of the index range.
+
+A day is "empty" when no source has a value. Garmin's 7-day averages (resting heart rate, HRV) can make the
+first days of a break count as days with data; that only delays the stop, so it is left as it is.
 
 ## Forgetting
 
-- `HISTORY_FORGET=yes` on the app (and the worker) drops the whole schema `history` at the next start: the
+- `HISTORY_FORGET=yes` on the app (and on the worker and the scheduler) drops the whole schema `history` at the next start: the
   days, weeks, documents and vectors, the job queue, the guard's row and the sealed token, then runs
   `VACUUM`. The history tools stay off while the flag is set; remove it afterwards
   ([history-worker.md](history-worker.md#stopping-redeploying-forgetting)).
@@ -144,7 +170,7 @@ queries get bge's search instruction prefix. Health text never leaves the server
 | Where | `/data/models` (the volume); a service without `/data` uses the temp directory and downloads again after a deploy |
 | Checks | every file hashed on every load; a mismatch is deleted and fetched again |
 | Failure | a failed download or hash starts a 24 h back-off (a marker file plus an in-process copy): no download is tried until it ends; the worker defers `embed_doc` jobs (6 h) and `search_history` falls back to keywords |
-| Measured (macOS arm64, 1 thread) | imports +82 MB RSS, model +96 MB; one query 3.5 ms after load; 32 documents 0.25 s. Linux numbers come from the H0 measurement job |
+| Measured (macOS arm64, 1 thread) | imports +82 MB RSS, model +96 MB; one query 3.5 ms after load; 32 documents 0.25 s. Linux numbers are not listed here |
 
 The reranker model (`MINILM_RERANKER`: `Xenova/ms-marco-MiniLM-L-6-v2` int8, 23 MB) follows the same rules
 and loads only with `RERANK = True`.

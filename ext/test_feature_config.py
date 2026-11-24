@@ -71,7 +71,7 @@ class Defaults(unittest.TestCase):
         self.assertIn(fc.NOTE_TRACING_OFF_SETTINGS, cfg.notes)
 
     def test_features_off_ignores_values_the_old_server_ignored(self):
-        """Review fix: with both features off, settings the server before them never read refuse nothing."""
+        """With both features off, settings the server before them never read refuse nothing."""
         for env in ({"OTEL_SDK_DISABLED": "maybe"}, {"ROLE": "web"}, {"ROLE": "scheduler", "TRACING": "off"},
                     {"HISTORY_FORGET": "no"}, {"HISTORY_FORGET": "true", "HISTORY_SEARCH": "off"},
                     {"OTEL_SDK_DISABLED": "1", "ROLE": "x", "HISTORY_FORGET": "0"},
@@ -124,7 +124,7 @@ class Tracing(unittest.TestCase):
                 self.assertNotIn(secret, "".join(lines))
 
     def test_the_check_and_the_exporter_read_headers_the_same_way(self):
-        """Review fix S3: "X_Scope_OrgID" passed the check but telemetry.parse_headers() returned {} for it, so
+        """The header name "X_Scope_OrgID" used to pass the check but telemetry.parse_headers() returned {} for it, so
         every header was dropped and the export went unauthenticated. One rule now (parse_header_pairs): every
         HTTP token name passes both; anything else is refused by the check (ERR_T4), never dropped."""
         example = "Authorization=Basic%20abc,X_Scope_OrgID=tenant1"
@@ -240,7 +240,7 @@ class History(unittest.TestCase):
         self.assertEqual(fc.problems(history_env(HISTORY_TOKEN_KEY=base64.b64encode(good).decode())), [])
 
     def test_typed_counting_and_repeated_keys_are_refused(self):
-        """Review fix S3: a typed phrase, the bytes 0..31 and a repeated block passed the 16-distinct-bytes test.
+        """A typed phrase, the bytes 0..31 and a repeated block passed the 16-distinct-bytes test.
         The rule (weak_key) is the one worker_garmin.parse_token_key uses."""
         block = bytes.fromhex("9f3c51e2a87d06b4c2e95f1a3d7b08c6")
         for raw in (b"0123456789abcdefghijklmnopqrstuv", b"my-secret-password-is-hunter2!!!", bytes(range(32)),

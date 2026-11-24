@@ -24,8 +24,13 @@ This module adds what the SDK leaves to the provider:
     resource binding       every code and token is bound to <PUBLIC_URL>/mcp (RFC 8707)
     tokens                 stored as SHA-256 hashes in auth_store; single-use codes;
                            refresh tokens rotate on every use, and a reused one revokes
-                           its grant, except for a 120 s idempotent replay window
+                           its grant, except for a 30 s idempotent replay window
+                           (kept in memory only: after a restart a reuse revokes)
     static bearer          the optional MCP_BEARER_TOKEN header, for Claude Code or CI
+    OriginCheck            /mcp refuses (403) a request whose Origin header is not
+                           PUBLIC_URL's, Claude's web apps' or in ALLOWED_ORIGINS
+    IssuerParameter        RFC 9207: `iss` on every authorization response, and
+                           authorization_response_iss_parameter_supported in the metadata
 
 Nothing here logs a secret: not OWNER_SECRET, MCP_BEARER_TOKEN, codes, tokens,
 client secrets, state, PKCE values or pending ids.
@@ -50,7 +55,7 @@ from collections import OrderedDict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Tuple
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from mcp.server.auth.json_response import PydanticJSONResponse
 from mcp.server.auth.provider import (
@@ -90,7 +95,7 @@ LOOPBACK_URL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})   # as pydan
 REDIRECT_HELP = ("allowed: the claude.ai or claude.com callback, ALLOWED_REDIRECT_URIS, "
                  "or http://127.0.0.1|localhost|[::1] on any port")
 REDIRECT_NO_LONGER_ALLOWED = "redirect_uri is registered but no longer allowed; " + REDIRECT_HELP
-CONSENT_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"   # F3
+CONSENT_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"   # no form-action
 SELFCHECK_PATHS = (
     "/authorize", "/token", "/register", "/revoke",
     "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource/mcp",
@@ -130,7 +135,7 @@ def _is_loopback(url: AnyUrl) -> bool:
 
 def _loopback_key(url: AnyUrl) -> tuple:
     # Everything but the port. A registered "http://localhost" has an empty path
-    # and a requested "http://localhost:5555" has "/": the same here (F15).
+    # and a requested "http://localhost:5555" has "/": the same here.
     return (url.scheme, (url.host or "").lower(), url.path or "/", url.query, url.fragment,
             url.username, url.password)
 
@@ -211,7 +216,7 @@ class LoopbackAwareClient(OAuthClientInformationFull):
                 if _is_loopback(registered) and _loopback_key(registered) == wanted:
                     return redirect_uri
         # Any other URI must match a registered one exactly, compared in the same
-        # spelling (an empty path is "/", as F15 has it for loopback), so an
+        # spelling (an empty path is "/", as for loopback), so an
         # ALLOWED_REDIRECT_URIS entry like "https://app.example.com" works too.
         if redirect_uri is not None:
             wanted = _normal(redirect_uri)
@@ -222,7 +227,7 @@ class LoopbackAwareClient(OAuthClientInformationFull):
 
     def validate_scope(self, requested_scope: Optional[str]) -> Optional[List[str]]:
         # One owner, one all-or-nothing grant: scopes mean nothing here, and
-        # claude.ai has been seen asking for "claudeai". Accept and echo (D2).
+        # claude.ai has been seen asking for "claudeai". Accept and echo.
         if requested_scope is None:
             return None
         return [s for s in requested_scope.split(" ") if s]
@@ -233,7 +238,7 @@ class LoopbackAwareClient(OAuthClientInformationFull):
 
 @dataclass(frozen=True)
 class _Replay:
-    """F4: what a rotation returned, kept in memory only for REFRESH_REUSE_GRACE."""
+    """What a refresh rotation returned, kept in memory only for REFRESH_REUSE_GRACE."""
 
     token: OAuthToken
     access_expires_at: float
@@ -250,7 +255,7 @@ class OwnerAuthProvider:
         self.config = config
         self.store = store
         self._allowed_redirects = _exact_redirects(config)
-        # Guards refresh rotation together with the replay map (F4 rule 4); the
+        # Guards refresh rotation together with the replay map; the
         # store has its own lock per operation. Nothing awaits while holding it.
         self._lock = threading.Lock()
         self._replay: "OrderedDict[str, _Replay]" = OrderedDict()
@@ -267,7 +272,7 @@ class OwnerAuthProvider:
     # registration
 
     def redirect_allowed(self, uri: AnyUrl) -> bool:
-        """D4: exact https allowlist, or http loopback on any port and path; never a
+        """Exact https allowlist, or http loopback on any port and path; never a
         fragment or user info."""
         if uri.fragment is not None or uri.username or uri.password:
             return False
@@ -329,7 +334,7 @@ class OwnerAuthProvider:
         scopes = " ".join(params.scopes or [])
         if (params.state is not None and len(params.state) > auth_config.MAX_STATE_LEN) \
                 or len(scopes) > auth_config.MAX_SCOPE_LEN:
-            raise AuthorizeError("invalid_request", "state or scope too long")   # F12
+            raise AuthorizeError("invalid_request", "state or scope too long")
         pending = secrets.token_urlsafe(32)
         stored = self.store.add_pending(
             pending_hash=hash_secret(pending), client_id=client.client_id, redirect_uri=str(params.redirect_uri),
@@ -337,7 +342,7 @@ class OwnerAuthProvider:
             code_challenge=params.code_challenge, scopes=scopes, resource=resource,
             ttl=auth_config.PENDING_TTL, max_pending=auth_config.MAX_PENDING,
             max_per_client=auth_config.MAX_PENDING_PER_CLIENT)
-        if not stored:   # F5: never delete another client's sign-in to make room
+        if not stored:   # never delete another client's sign-in to make room
             raise AuthorizeError("temporarily_unavailable", "too many sign-ins in progress; try again in a few minutes")
         log.info("authorize: client %s, redirect host %s", client.client_id, _host_of(str(params.redirect_uri)))
         return f"{self.config.consent_url}?req={pending}"
@@ -350,7 +355,7 @@ class OwnerAuthProvider:
         if row is None or row["client_id"] != client.client_id:
             return None
         if row["used_at"] is not None:
-            # RFC 6749 section 4.1.2: a code used twice; revoke what it produced (AZ-4).
+            # RFC 6749 section 4.1.2: a code used twice; revoke what it produced.
             if row["grant_id"]:
                 self._revoke(row["grant_id"], auth_store.REASON_CODE_REUSE)
             return None
@@ -374,7 +379,7 @@ class OwnerAuthProvider:
             grant_id=secrets.token_hex(16), access_hash=hash_secret(access), refresh_hash=hash_secret(refresh),
             access_ttl=auth_config.ACCESS_TTL, refresh_ttl=auth_config.REFRESH_TTL)
         if not result["ok"]:
-            if result["revoked"]:   # F13: lost a race with another exchange of the same code
+            if result["revoked"]:   # lost a race with another exchange of the same code
                 log.warning("token: grant revoked for client %s (%s)", result["revoked"][1],
                             auth_store.REASON_CODE_REUSE)
             if result["reason"] == "expired":
@@ -385,7 +390,7 @@ class OwnerAuthProvider:
         return OAuthToken(access_token=access, token_type="Bearer", expires_in=auth_config.ACCESS_TTL,
                           scope=result["scopes"] or None, refresh_token=refresh)
 
-    # refresh tokens (F4: rotation with an idempotent replay window)
+    # refresh tokens: rotation with an idempotent replay window
 
     def _replay_prune(self, now: float) -> None:
         while self._replay:
@@ -397,7 +402,7 @@ class OwnerAuthProvider:
     def _replay_for(self, token_hash: str, client_id: str) -> Optional[_Replay]:
         """The pair a rotation of this token returned, if a retry may get it again:
         at most REFRESH_REUSE_GRACE old, the same client, the new refresh token still
-        unused and its grant not revoked (F4 rule 2). Call with self._lock held."""
+        unused and its grant not revoked. Call with self._lock held."""
         now = self.clock()
         self._replay_prune(now)
         entry = self._replay.get(token_hash)
@@ -425,7 +430,7 @@ class OwnerAuthProvider:
             if row["revoked_at"] is not None or row["expires_at"] <= self.clock():
                 return None
             if row["used_at"] is not None and self._replay_for(token_hash, client.client_id) is None:
-                # A rotated-away refresh token came back: a copy exists somewhere (F4 rule 3).
+                # A rotated-away refresh token came back: a copy exists somewhere.
                 self._revoke(row["grant_id"], auth_store.REASON_REFRESH_REUSE)
                 return None
         return RefreshToken(token=refresh_token, client_id=row["client_id"], scopes=_split(row["scopes"]),
@@ -436,7 +441,7 @@ class OwnerAuthProvider:
         old_hash = hash_secret(refresh_token.token)
         access, refresh = "at_" + secrets.token_urlsafe(32), "rt_" + secrets.token_urlsafe(32)
         access_scopes = " ".join(scopes)
-        # F4 rule 4: the rotation, its inserts and the map entry happen together,
+        # The rotation, its inserts and the map entry happen together,
         # with no await, so a concurrent duplicate sees an unused token or the entry.
         with self._lock:
             rotated = self.store.rotate_refresh(
@@ -542,10 +547,14 @@ def register_routes(app: Any, auth: OwnerAuth) -> None:
 
 
 def asgi_middleware(auth: OwnerAuth) -> List[Tuple[type, dict]]:
-    """The ASGI middleware this sign-in needs, for mcp2_compat.set_asgi_middleware."""
-    return [(RegistrationFilter, {"allowed_grants": auth_config.GRANT_TYPES,
-                                  "valid_scopes": auth_config.VALID_SCOPES,
-                                  "max_body": REGISTRATION_MAX_BODY})]
+    """The ASGI middleware this sign-in needs, for mcp2_compat.set_asgi_middleware (first = outermost)."""
+    return [
+        (RegistrationFilter, {"allowed_grants": auth_config.GRANT_TYPES,
+                              "valid_scopes": auth_config.VALID_SCOPES,
+                              "max_body": REGISTRATION_MAX_BODY}),
+        (OriginCheck, {"allowed": auth.config.allowed_origins, "enabled": auth.config.origin_check}),
+        (IssuerParameter, {"issuer": auth.config.public_url, "consent_url": auth.config.consent_url}),
+    ]
 
 
 def _root_resource_metadata(auth: OwnerAuth) -> Callable:
@@ -707,7 +716,7 @@ async def _consent_post(auth: OwnerAuth, store: AuthStore, request: Request) -> 
     media_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
     if media_type != "application/x-www-form-urlencoded":
         return _message_page(400, "Bad request", "Send the sign-in form from the page.")
-    # 3. A browser marks a form posted from another site (D5).
+    # 3. A browser marks a form posted from another site.
     site = request.headers.get("sec-fetch-site")
     if site is not None and site.strip().lower() not in ("same-origin", "none"):
         return _message_page(403, "Refused", "A sign-in form posted from another site is refused.")
@@ -734,13 +743,14 @@ async def _consent_post(auth: OwnerAuth, store: AuthStore, request: Request) -> 
         if taken is None:
             return _expired_page()
         log.info("consent: denied for client %s", taken["client_id"])
-        return _redirect(construct_redirect_uri(taken["redirect_uri"], error="access_denied", state=taken["state"]))
-    # 7. A scripted submit without the button still approves (F16).
+        return _redirect(construct_redirect_uri(taken["redirect_uri"], error="access_denied", state=taken["state"],
+                                                iss=auth.config.public_url))
+    # 7. A scripted submit without the button still approves.
     if action is None and secret:
         action = "approve"
     if action != "approve":
         return _message_page(400, "Bad request", "Press Approve or Deny on the sign-in page.")
-    # 8. Wrong secret: three strikes end the request and tell the app (F16).
+    # 8. Wrong secret: three strikes end the request and tell the app.
     if not _same_secret(secret, auth.config.owner_secret):
         counted = store.pending_failure(pending_hash, max_failures=auth_config.MAX_SECRET_FAILURES)
         if counted is None:
@@ -749,7 +759,7 @@ async def _consent_post(auth: OwnerAuth, store: AuthStore, request: Request) -> 
         log.warning("consent: wrong owner secret (%d of %d)", failures, auth_config.MAX_SECRET_FAILURES)
         if deleted:
             return _redirect(construct_redirect_uri(failed_row["redirect_uri"], error="access_denied",
-                                                    state=failed_row["state"]))
+                                                    state=failed_row["state"], iss=auth.config.public_url))
         _, name = _client_name(store, failed_row["client_id"])
         return _form_page(auth, pending_id, failed_row, name, error="Wrong secret.", status=403)
     # 9. Approved: take the request and mint the code in one transaction.
@@ -758,8 +768,10 @@ async def _consent_post(auth: OwnerAuth, store: AuthStore, request: Request) -> 
     if taken is None:
         return _expired_page()
     log.info("consent: approved for client %s", taken["client_id"])
-    # The OAuth parameters come from the stored request, never from the form.
-    return _redirect(construct_redirect_uri(taken["redirect_uri"], code=code, state=taken["state"]))
+    # The OAuth parameters come from the stored request, never from the form. iss (RFC 9207) is the
+    # issuer exactly as the metadata names it: AuthSettings keeps PUBLIC_URL's spelling (build()).
+    return _redirect(construct_redirect_uri(taken["redirect_uri"], code=code, state=taken["state"],
+                                            iss=auth.config.public_url))
 
 
 # --- /register body filter (ASGI) -------------------------------------------------------------
@@ -805,7 +817,7 @@ class RegistrationFilter:
                 trailing = message
                 break
             body.extend(message.get("body", b""))
-            if len(body) > self.max_body:   # F17: counted as streamed, not from Content-Length
+            if len(body) > self.max_body:   # counted as streamed, not from Content-Length
                 await _registration_too_large(send)
                 return
             if not message.get("more_body", False):
@@ -833,7 +845,7 @@ class RegistrationFilter:
         """The narrowed body, or None to pass the original unchanged."""
         try:
             data = json.loads(body.decode("utf-8"))
-        except (ValueError, RecursionError):   # not UTF-8, not JSON, or nested too deep (F17)
+        except (ValueError, RecursionError):   # not UTF-8, not JSON, or nested too deep
             return None
         if not isinstance(data, dict):
             return None
@@ -844,13 +856,13 @@ class RegistrationFilter:
         changed: List[str] = []
 
         if isinstance(asked_grants, list) and "authorization_code" in asked_grants:
-            grants = list(self.allowed_grants)   # F10: exactly these two
+            grants = list(self.allowed_grants)   # exactly these two
             dropped += [f"grant {g}" for g in asked_grants if g not in grants]
             if asked_grants != grants:
                 data["grant_types"] = grants
                 if any(g not in asked_grants for g in grants):
                     changed.append("grant_types")
-        if asked_method == "client_secret_basic":   # F2
+        if asked_method == "client_secret_basic":   # the SDK needs client_id in the /token form
             data["token_endpoint_auth_method"] = "client_secret_post"
             changed.append("client_secret_basic->client_secret_post")
         if isinstance(asked_scope, str):
@@ -918,6 +930,159 @@ async def _registration_too_large(send: Callable) -> None:
         (b"cache-control", b"no-store"),
     ]})
     await send({"type": "http.response.body", "body": body})
+
+
+# --- the Origin check on /mcp (ASGI) ----------------------------------------------------------
+
+
+ORIGIN_REFUSED_BODY = b'{"error":"forbidden","error_description":"Origin not allowed"}'
+ORIGIN_LOG_MAX = 50   # distinct refused origins logged per process, so a flood cannot fill the log
+
+
+class OriginCheck:
+    """The MCP spec's Origin rule for /mcp (Streamable HTTP): a request that carries an Origin
+    header gets 403 unless the origin is allowed (`allowed`: PUBLIC_URL's, Claude's web apps and
+    ALLOWED_ORIGINS, as auth_config.normal_origin spells them). A request without Origin passes:
+    Claude's backend, Claude Code and other programs send none; a browser always does.
+
+    Origin is then removed before the SDK sees the request. The server listens on 127.0.0.1, so
+    the SDK's own DNS-rebinding guard allows only loopback origins and would refuse every allowed
+    one; its Host half still runs (Caddy presents the loopback Host). enabled=False (ORIGIN_CHECK=off)
+    skips the check and only removes the header, as Caddy did before this check existed.
+
+    Only /mcp: the OAuth endpoints are meant for cross-origin use (the SDK answers CORS there), and
+    /consent refuses a form posted from another site by Sec-Fetch-Site.
+    """
+
+    def __init__(self, app: Any, *, allowed=frozenset(), enabled: bool = True) -> None:
+        self.app = app
+        self.allowed = frozenset(allowed)
+        self.enabled = bool(enabled)
+        self._logged: set = set()
+
+    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+        if scope.get("type") != "http" or scope.get("path") not in (auth_config.MCP_PATH, auth_config.MCP_PATH + "/"):
+            await self.app(scope, receive, send)
+            return
+        headers = scope.get("headers", [])
+        origins = [value for name, value in headers if name.lower() == b"origin"]
+        if not origins:
+            await self.app(scope, receive, send)
+            return
+        if self.enabled:
+            refused = [raw for raw in origins
+                       if auth_config.normal_origin(raw.decode("latin-1")) not in self.allowed]
+            if refused:
+                self._log_refused(refused[0].decode("latin-1"))
+                await send({"type": "http.response.start", "status": 403, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(ORIGIN_REFUSED_BODY)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ]})
+                await send({"type": "http.response.body", "body": ORIGIN_REFUSED_BODY})
+                return
+        scope = dict(scope)
+        scope["headers"] = [(name, value) for name, value in headers if name.lower() != b"origin"]
+        await self.app(scope, receive, send)
+
+    def _log_refused(self, origin: str) -> None:
+        shown = _plain(origin, LOG_VALUE_MAX)
+        if shown in self._logged or len(self._logged) >= ORIGIN_LOG_MAX:
+            return
+        self._logged.add(shown)
+        log.warning("mcp: refused a request from origin %r (not PUBLIC_URL, Claude or ALLOWED_ORIGINS)", shown)
+
+
+# --- RFC 9207: the issuer in authorization responses (ASGI) ---------------------------------------
+
+
+METADATA_PATH = "/.well-known/oauth-authorization-server"
+ISS_SUPPORTED = "authorization_response_iss_parameter_supported"
+
+
+class IssuerParameter:
+    """RFC 9207 for the parts the SDK serves itself:
+
+    - GET /.well-known/oauth-authorization-server: adds
+      "authorization_response_iss_parameter_supported": true to the SDK's JSON;
+    - /authorize: an error redirect back to the client (the SDK's own) gets iss=<issuer>.
+      The success answer goes to /consent, which is no authorization response; /consent adds
+      iss to its redirects itself.
+
+    `issuer` must be the metadata's issuer exactly (PUBLIC_URL; build() checks the SDK keeps it).
+    """
+
+    def __init__(self, app: Any, *, issuer: str, consent_url: str) -> None:
+        self.app = app
+        self.issuer = issuer
+        self.consent_url = consent_url
+        self._iss = ("iss=" + quote(issuer, safe="")).encode("ascii")
+
+    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path, method = scope.get("path"), scope.get("method")
+        if path == METADATA_PATH and method == "GET":
+            await self.app(scope, receive, self._metadata_sender(send))
+        elif path == "/authorize":
+            await self.app(scope, receive, self._authorize_sender(send))
+        else:
+            await self.app(scope, receive, send)
+
+    def _authorize_sender(self, send: Callable) -> Callable:
+        async def sender(message: dict) -> None:
+            if message.get("type") == "http.response.start" and message.get("status") in (302, 303):
+                headers = [(name, self._with_iss(value) if name.lower() == b"location" else value)
+                           for name, value in message.get("headers", [])]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return sender
+
+    def _with_iss(self, location: bytes) -> bytes:
+        text = location.decode("latin-1")
+        if text.startswith(self.consent_url + "?") or "#" in text:
+            return location
+        query = urlsplit(text).query
+        if any(part.split("=", 1)[0] == "iss" for part in query.split("&")):
+            return location
+        return location + (b"&" if query else b"?") + self._iss
+
+    def _metadata_sender(self, send: Callable) -> Callable:
+        start: Optional[dict] = None
+        body = bytearray()
+
+        async def sender(message: dict) -> None:
+            nonlocal start
+            kind = message.get("type")
+            if kind == "http.response.start" and message.get("status") == 200:
+                start = message   # held until the body is complete
+                return
+            if kind == "http.response.body" and start is not None:
+                body.extend(message.get("body", b""))
+                if message.get("more_body", False):
+                    return
+                new_body = self._add_flag(bytes(body))
+                headers = [(name, value) for name, value in start.get("headers", [])
+                           if name.lower() != b"content-length"]
+                headers.append((b"content-length", str(len(new_body)).encode("ascii")))
+                await send({**start, "headers": headers})
+                await send({"type": "http.response.body", "body": new_body})
+                return
+            await send(message)
+
+        return sender
+
+    def _add_flag(self, body: bytes) -> bytes:
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except ValueError:
+            return body
+        if not isinstance(data, dict):
+            return body
+        data[ISS_SUPPORTED] = True
+        return json.dumps(data, separators=(",", ":")).encode("utf-8")
 
 
 # --- build-time check ----------------------------------------------------------------------------

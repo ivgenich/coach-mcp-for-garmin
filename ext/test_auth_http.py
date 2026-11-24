@@ -102,7 +102,7 @@ class Case(unittest.TestCase):
 
 
 class ClientIp(unittest.TestCase):
-    """F19: X-Client-IP counts only from a loopback peer (Caddy)."""
+    """X-Client-IP counts only from a loopback peer (Caddy)."""
 
     def test_header_from_a_loopback_peer(self):
         for peer in ("127.0.0.1", "127.8.9.10", "::1", "::ffff:127.0.0.1"):
@@ -171,7 +171,7 @@ class DefaultRules(Case):
         self.assertEqual(auth_http.ANTHROPIC_EGRESS, ("160.79.104.0/21", "153.61.208.0/20"))
 
     def test_no_rule_is_global(self):
-        # F1: a total budget would let any stranger lock the owner out.
+        # A total budget would let any stranger lock the owner out.
         self.assertTrue(all(rule.per_ip for rule in auth_http.DEFAULT_RULES))
 
     def test_consent_post_20_per_10_minutes_per_ip(self):

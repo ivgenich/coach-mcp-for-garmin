@@ -92,7 +92,7 @@ def grade_run(run_dir, cases, client=None, judge_model=DEFAULT_JUDGE_MODEL, writ
             except cost_mod.BudgetExceeded as e:  # keep the verdicts already paid for; no judge after this
                 judge_error = scrub(f"{type(e).__name__}: {e}")
                 client = None
-            except Exception as e:  # one failed judge call must not lose the run's grades
+            except Exception as e:  # noqa: BLE001 - one failed judge call must not lose the run's grades
                 judge_error = scrub(f"{type(e).__name__}: {e}")
         tg = grade(case, transcript, judge_checks)
         row = tg.to_dict()

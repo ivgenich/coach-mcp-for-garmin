@@ -27,14 +27,26 @@ Claude Code, cloud routine ------+  HTTPS + OAuth access token
 
 | Piece | Runs | Secrets it sees | Does |
 |---|---|---|---|
-| Caddy | container, PID 1, public `$PORT` | none | Proxies every request to garmin-mcp, passing tokens through; answers `410` for the removed token-in-URL form; caps sign-in request bodies; access log without query strings or credentials |
-| garmin-mcp (`ext/launch.py`) | container, `127.0.0.1:8000` | `OWNER_SECRET`, the optional `MCP_BEARER_TOKEN`; sign-ins in `/data/auth.sqlite`; Garmin tokens on `/data/tokens`; in `key` mode `GARMIN_PERSONAL_API_KEY` and its access token on `/data/garmin-key` | The sign-in (OAuth 2.1 for one owner) and the token check on `/mcp`; upstream's tools plus this repo's |
+| Caddy | container, PID 1, public `$PORT`, user `caddy` | none | Proxies every request to garmin-mcp, passing tokens through; answers `410` for the removed token-in-URL form; caps sign-in request bodies; access log without query strings or credentials |
+| garmin-mcp (`ext/launch.py`) | container, `127.0.0.1:8000`, user `app` | `OWNER_SECRET`, the optional `MCP_BEARER_TOKEN`; sign-ins in `/data/auth.sqlite`; Garmin tokens on `/data/tokens`; in `key` mode `GARMIN_PERSONAL_API_KEY` and its access token on `/data/garmin-key` | The sign-in (OAuth 2.1 for one owner) and the token check on `/mcp`; upstream's tools plus this repo's |
 | Cloud routine, optional (`recipes/claude-ai-morning-report/`) | claude.ai's cloud, on a schedule | your claude.ai connectors | Stores the report in the report page's database |
 
 The split keeps each secret out of the programs that don't use it, and so out of their
-logs and tool output. It is not a sandbox: everything in the container runs as root.
-With Docker, the separate cloudflared container runs as a non-root user. In `key` mode,
-the key goes to the server's Python only; Caddy gets no secret.
+logs and tool output. Each runs as its own unprivileged user, so Caddy cannot read the
+server's environment or files. Only the start script (`entrypoint.sh`) runs as root: on
+every start of the server it gives the user `app` whatever on `/data` is not its own yet (a
+volume from an older version, or Garmin tokens that `garmin-mcp-auth` wrote over
+`railway ssh` or `docker compose exec`, which run as root), then starts each program as its
+user. So after a login, the restart the login steps describe is enough; nothing needs `chown`
+by hand. `AUTH_DB` and `GARMINTOKENS` set to a folder outside `/data` must be writable by the
+user `app` (uid 10001). It is still not a sandbox against someone who can run commands in
+the container. With Docker, the separate cloudflared container runs as a non-root user. In
+`key` mode, the key goes to the server's Python only; Caddy gets no secret.
+
+If the server process exits, the start script starts it again, waiting 2 s, then twice as long
+after each quick exit, up to 60 s; a run of 5 minutes resets the wait. After 8 quick exits in a
+row it stops the container (exit status 2), so Railway or Docker restarts it, and the server log
+shows why.
 
 ## Security
 
@@ -76,8 +88,21 @@ says what to do if it leaked).
 
 Caddy still passes a caller's own `X-Forwarded-Proto` and `X-Forwarded-Host` through, so
 nothing in the server may build a URL or make a security decision from the request's
-scheme, `Host` or `X-Forwarded-*` headers (a future Host or Origin check included). The
-server's own URL comes only from `PUBLIC_URL` or the Railway domain.
+scheme, `Host` or `X-Forwarded-*` headers. The server's own URL comes only from `PUBLIC_URL`
+or the Railway domain.
+
+Browsers name the page that sends a request in its `Origin` header. On `/mcp`, the server
+answers `403` to a request whose `Origin` is not its own (`PUBLIC_URL`), `https://claude.ai`,
+`https://claude.com`, or one listed in `ALLOWED_ORIGINS` (comma-separated, such as
+`http://localhost:6274` for a local MCP inspector), as the MCP specification asks. Requests with
+no `Origin` (Claude's servers, Claude Code, scripts) pass. `ORIGIN_CHECK=off` turns the check off;
+the sign-in and the token check still apply. The OAuth endpoints are meant to be called from
+other sites and are not checked; the owner-secret page refuses a form posted from another site.
+
+Refresh tokens rotate on every use, and a used one that comes back revokes its sign-in, except
+when the same client repeats it within 30 seconds (a retry): then it gets the same new tokens
+again. That window lives in memory, so after a restart a repeated refresh token revokes the
+sign-in and the client signs in again ([Security policy](../SECURITY.md#how-the-sign-in-behaves)).
 
 ## The Garmin call guard
 

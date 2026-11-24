@@ -75,11 +75,47 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 - `GARMIN_AUTH` is required (`full` or `key`, no default). Copies from before 1.0.0: set
   `GARMIN_AUTH=full` before you update, or the server does not start.
+- The status reports share one limit of 6 concurrent Garmin calls per server, and a Garmin rate
+  limit or login failure on any report source starts the call guard's cooldown; a partial answer
+  no longer ends a login cooldown. Both reports format numbers the same way and escape `~`.
+- History backfill stops only after 14 days on which Garmin answered with no data; that stop is
+  re-checked later, and failed days never count. Garmin 5xx and network failures are retried
+  (a 403 is not, and does not keep a day open), Garmin's "no data" is stored as an answer,
+  days left open are fetched again later, and `index.complete` counts them as missing. A recheck
+  stores a source's empty answer instead of keeping old values. The history worker calls Garmin
+  outside its database transaction, and every history connection has statement, lock and idle
+  timeouts. Deploy the app, worker and scheduler from the same commit.
+- `deploy.sh` prints the linked Railway project and service and stops when the folder's link
+  belongs to another service or comes from a parent folder; every change names the service. It
+  asks for `GARMIN_AUTH` and `REPORT_TZ` in a terminal, creates nothing until they are valid,
+  offers to run the full-mode Garmin login over `railway ssh`, and now needs `python3`.
+- The refresh-token retry window is 30 s (was 120 s).
+- A manual reload (`kill "$(cat /tmp/garmin-mcp.pid)"`) or any exit with status 0 no longer counts
+  toward the quick exits that stop the container.
+- The container runs Python as the user `app` and Caddy as `caddy`; `/data` is given to `app`
+  at each start. The server's restart loop backs off up to 60 s and stops the container after 8
+  quick exits in a row.
+- The release check looks at time zone offsets only on commits after the previous release tag.
+- Docs: the history worker and scheduler deploy with `railway up` from the same checkout, the
+  scheduler needs no Garmin settings, and history search is Railway-only for now. The README
+  has a quickstart block, complete key-mode lists and a note on other MCP clients. `LICENSE` is
+  plain MIT; the third-party note is in `NOTICE`. Added `CONTRIBUTING.md` and an issue form.
+- Dependabot keeps GitHub Actions, Python pins and the Docker base images up to date. `railway up`
+  and the Docker build leave out the eval data, dashboards and recipes.
 
 ### Removed
 
 - The token-in-URL form `https://<host>/<token>/mcp` of earlier, unreleased copies: it now
   answers `410 Gone`. Use `https://<host>/mcp` and sign in.
+
+### Fixed
+
+- Workout names such as "Post-race recovery jog", "Pre-race shakeout" or "Easy run, not hard" no
+  longer count as hard.
+- The daily report reads further activity pages when a day fills the first page.
+- Course profiles no longer lose distance at a point without coordinates.
+- Every text block of a tool answer is cleaned, not only the first.
+- History tools answer "the database did not answer" for every database failure.
 
 ### Security
 
@@ -98,3 +134,18 @@ and so what a MAJOR, MINOR or PATCH release may change:
   `download_*` take no `data`, `json`, `files`, `headers` or `method`, and the wrapped client is not
   reachable through its private names. With `GARMIN_AUTH=key` the app deletes a stored full-mode
   Garmin token at start; an image without the database driver says it could not check.
+- `/mcp` refuses a request whose `Origin` is not this server's, Claude's or listed in
+  `ALLOWED_ORIGINS` (403); `ORIGIN_CHECK=off` turns this off.
+- Sign-in redirects carry `iss` (RFC 9207), and the server metadata advertises it.
+- The core Python packages are installed by hash, and the base images are pinned by digest.
+- The Garmin token file is written atomically with mode 0600.
+- `OWNER_SECRET` and `MCP_BEARER_TOKEN` values are hidden in every log line.
+- An image build check fails if the Garmin library drops the internal names full mode uses; the
+  worker logs a warning while its jobs wait for a fresh Garmin token. The unused token digest
+  is no longer written; its column stays, now nullable, so a rolling deploy or a rollback keeps
+  working (a later release drops it).
+- The container stops leftover `app` processes before giving `/data` to `app`, never follows a
+  link while doing it, and creates the Garmin token folder as `app`.
+- The image installs its build tools by hash, so no unhashed package is fetched during the build;
+  CI installs in the same order.
+- `ALLOWED_ORIGINS` accepts `http://` only for loopback hosts, and never on Railway.

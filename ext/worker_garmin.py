@@ -1,4 +1,4 @@
-"""The worker's Garmin client (plan section 5b, "Garmin credentials for the worker").
+"""The worker's Garmin client: its Garmin credentials and the guard around every call.
 
 Railway volumes attach to one service, so the worker cannot read the app's /data/tokens.
 
@@ -58,19 +58,33 @@ ERR_TOKEN_KEY = ("HISTORY_TOKEN_KEY must be 32 random bytes in base64 (make one 
                  "python3 -c \"import os,base64;print(base64.b64encode(os.urandom(32)).decode())\"); "
                  "the value set is not that (it is not shown)")
 
+# The token table's migrations are this idempotent DDL (both the app and the worker run it at start). Earlier
+# builds also wrote an unkeyed digest of the token that nothing read (NOT NULL). This build no longer writes it
+# but keeps the column, now nullable, so an older app or worker still running during a rolling deploy, or a
+# rollback to one, can keep writing it. The DO block takes the table lock only while the column is still NOT
+# NULL and does nothing when the column is absent. Drop the column in a later release, once no older build runs.
 TOKEN_DDL = """
 CREATE SCHEMA IF NOT EXISTS history;
 CREATE TABLE IF NOT EXISTS history.garmin_token (
     id          smallint PRIMARY KEY CHECK (id = 1),
     nonce       bytea NOT NULL,
     sealed      bytea NOT NULL,
-    digest      text NOT NULL,
+    digest      text,
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'history' AND table_name = 'garmin_token'
+                 AND column_name = 'digest' AND is_nullable = 'NO') THEN
+        ALTER TABLE history.garmin_token ALTER COLUMN digest DROP NOT NULL;
+    END IF;
+END
+$$;
 """
-_SQL_PUT = ("INSERT INTO history.garmin_token (id, nonce, sealed, digest, updated_at) "
-            "VALUES (1, %(n)s, %(s)s, %(d)s, now()) ON CONFLICT (id) DO UPDATE SET nonce = EXCLUDED.nonce, "
-            "sealed = EXCLUDED.sealed, digest = EXCLUDED.digest, updated_at = now()")
+_SQL_PUT = ("INSERT INTO history.garmin_token (id, nonce, sealed, updated_at) "
+            "VALUES (1, %(n)s, %(s)s, now()) ON CONFLICT (id) DO UPDATE SET nonce = EXCLUDED.nonce, "
+            "sealed = EXCLUDED.sealed, updated_at = now()")
 _SQL_GET = "SELECT nonce, sealed FROM history.garmin_token WHERE id = 1"
 _SQL_TOKEN_TABLE = "SELECT to_regclass('history.garmin_token')"
 _SQL_DELETE = "DELETE FROM history.garmin_token WHERE id = 1"
@@ -173,10 +187,8 @@ class PgTokenStore:
         self._run(ddl)
 
     def put(self, token_text: str) -> None:
-        data = token_text.encode()
-        nonce, sealed = seal(self._key, data)
-        digest = hashlib.sha256(data).hexdigest()[:16]
-        self._run(lambda c: c.execute(_SQL_PUT, {"n": nonce, "s": sealed, "d": digest}))
+        nonce, sealed = seal(self._key, token_text.encode())
+        self._run(lambda c: c.execute(_SQL_PUT, {"n": nonce, "s": sealed}))
 
     def get(self) -> Optional[str]:
         row = self._run(lambda c: c.execute(_SQL_GET).fetchone())
@@ -282,6 +294,9 @@ class TokenPublisher:
 
 # --- worker side: full mode -----------------------------------------------------------------------------------------
 
+_WARNED: dict = {}      # one-time warnings already logged
+
+
 def _no_refresh():
     raise TokenStale()
 
@@ -311,8 +326,16 @@ class StoredTokenGarmin:
         return "StoredTokenGarmin(<hidden>)"
 
     def _expiring(self, garmin) -> bool:
+        check = getattr(garmin.client, "_token_expires_soon", None)
+        if not callable(check):
+            # garminconnect renamed its private expiry check (selfcheck() fails the image build for this).
+            if not _WARNED.get("no_expiry_check"):
+                _WARNED["no_expiry_check"] = True
+                log.warning("worker garmin: garminconnect has no Client._token_expires_soon; the stored token "
+                            "cannot be used")
+            return True
         try:
-            return bool(garmin.client._token_expires_soon())
+            return bool(check())
         except Exception:  # noqa: BLE001 - an unreadable token counts as expiring
             return True
 
@@ -367,6 +390,26 @@ class StoredTokenGarmin:
         if not getattr(garmin, "display_name", None):
             raise ProfileMissing()   # never call with display_name None (URLs would read .../None)
         return getattr(garmin, name)(*args, **kwargs)
+
+
+_SELFCHECK = "worker_garmin: garminconnect changed: Client has no {name}()"
+# The private garminconnect.Client names full mode relies on: the expiry check (this worker, and the app's
+# token refresh in launch.py) and the refresh itself (blocked here; serialised by garmin_guard in the app).
+CLIENT_NAMES = ("_token_expires_soon", "_refresh_session", "loads", "dumps", "connectapi")
+
+
+def selfcheck() -> None:
+    """Raise RuntimeError unless garminconnect's Client still has the private and public names full mode uses
+    (CLIENT_NAMES), so a garminconnect upgrade that renames them fails the image build instead of every
+    worker job waiting for a token for ever. No network."""
+    try:
+        from garminconnect import client as gc_client
+    except ImportError:
+        raise RuntimeError("worker_garmin: garminconnect does not import") from None
+    cls = getattr(gc_client, "Client", None)
+    for name in CLIENT_NAMES:
+        if not callable(getattr(cls, name, None)):
+            raise RuntimeError(_SELFCHECK.format(name=name))
 
 
 # --- the guard around every call ------------------------------------------------------------------------------------

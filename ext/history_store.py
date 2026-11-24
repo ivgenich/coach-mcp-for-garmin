@@ -4,9 +4,10 @@ HistoryStore is the interface; MemoryHistoryStore backs the unit tests and
 PgHistoryStore(dsn) is the real one (psycopg 3, imported only when it is
 created, so a server with history off never loads it). Every write is an
 idempotent upsert keyed by (account fingerprint, date): running a job twice
-writes the same rows. A day written again is merged (merge_day): a field the
-new fetch lacks keeps its stored value, so a source that failed on the Monday
-recheck never wipes it. Every numbers dict goes through
+writes the same rows. A day written again is merged (merge_day): the fields of
+a source that answered take the new values (a null too), and the fields of a
+source that failed this time keep their stored values, so a failed recheck
+never wipes them. Every numbers dict goes through
 history_extract.check_numbers (the field allowlist) before it is stored.
 
 Migrations are plain versioned SQL files in history_sql/ (NNN_name.sql,
@@ -27,6 +28,8 @@ langchain_pg_* collection "coach_history" if an older build left one, then
 runs VACUUM. retention() deletes old days and weeks and their rows in
 history.doc_vectors. Logs carry counts and fixed texts only, never values or the
 database URL. psycopg errors are raised as StoreError with a fixed text.
+Connections carry the shared statement, lock and idle-in-transaction timeouts
+(jobqueue.pg_options).
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ import threading
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol
 
 import history_extract as hx
+import jobqueue
 
 LOG = logging.getLogger("garmin_ext.history")
 
@@ -90,6 +94,8 @@ class HistoryStore(Protocol):
     def weeks(self, account_fp: str, date_from: dt.date, date_to: dt.date, *, conn: Any = None) -> List[dict]: ...
     def missing_days(self, account_fp: str, date_from: dt.date, date_to: dt.date, *,
                      conn: Any = None) -> List[dt.date]: ...
+    def open_days(self, account_fp: str, date_from: dt.date, date_to: dt.date, *,
+                  conn: Any = None) -> List[dt.date]: ...
     def meta_get(self, key: str, default: Optional[str] = None, *, conn: Any = None) -> Optional[str]: ...
     def meta_set(self, key: str, value: str, *, conn: Any = None) -> None: ...
     def meta_setdefault(self, key: str, value: str, *, conn: Any = None) -> str: ...
@@ -172,14 +178,20 @@ def doc_ids_for(kind: str, starts: List[dt.date]) -> List[str]:
 
 
 def merge_day(old: Optional[Mapping[str, Any]], new: Mapping[str, Any]) -> Dict[str, Any]:
-    """The numbers to store when a day already has a row: a field keeps its stored value where the new fetch
-    has none (a source that failed on a recheck must not wipe it), and a new non-null value wins. A source
-    stays in "missing" only when both fetches missed it."""
+    """The numbers to store when a day already has a row. A field of a source that answered this time (not in
+    the new "missing") takes the new value, null included: Garmin's answer now is the truth. A field of a source
+    that failed this time keeps its stored value (a failed recheck must not wipe it). A field with no source
+    (mode), a field the new numbers leave out, or any field when they carry no "missing", keeps the old value
+    only where the new one is null. A source stays in "missing" only when both fetches missed it."""
     if not old:
         return dict(new)
     out = dict(new)
+    failed = set(new.get("missing") or []) if "missing" in new else None
     for key, value in old.items():
         if key == "missing":
+            continue
+        source = hx.FIELD_SOURCE.get(key)
+        if failed is not None and source is not None and source not in failed and key in new:
             continue
         if out.get(key) is None and value is not None:
             out[key] = value
@@ -286,6 +298,13 @@ class MemoryHistoryStore:
             have = {d for (fp, d) in self._days if fp == account_fp}
         return [d for d in _date_range(a, b) if d not in have]
 
+    def open_days(self, account_fp, date_from, date_to, *, conn=None) -> List[dt.date]:
+        """Days in date_from .. date_to that have a row that is not final, oldest first."""
+        a, b = _date(date_from), _date(date_to)
+        with self._lock:
+            return sorted(d for (fp, d), r in self._days.items() if fp == account_fp and a <= d <= b
+                          and not r["final"])
+
     def meta_get(self, key, default=None, *, conn=None):
         with self._lock:
             return self._meta.get(_meta_key(key), default)
@@ -368,9 +387,10 @@ class PgHistoryStore:
     def __repr__(self) -> str:  # never the URL
         return "PgHistoryStore()"
 
-    def _connect(self, autocommit: bool = False):
+    def _connect(self, autocommit: bool = False, statement_timeout_ms: int = jobqueue.STATEMENT_TIMEOUT_MS):
         try:
-            return self._psycopg.connect(self._dsn, autocommit=autocommit, connect_timeout=self._timeout)
+            return self._psycopg.connect(self._dsn, autocommit=autocommit, connect_timeout=self._timeout,
+                                         options=jobqueue.pg_options(statement_timeout_ms))
         except self._psycopg.Error:
             raise StoreError("history: cannot connect to the database") from None
 
@@ -407,6 +427,10 @@ class PgHistoryStore:
     def migrate(self) -> List[int]:
         applied: List[int] = []
         with self.transaction() as conn:
+            # Migrations are rare and may build indexes, and a second service waits here for the first one:
+            # longer limits than the per-connection defaults, for this transaction only.
+            self._rows(conn, "SET LOCAL statement_timeout = '300s'")
+            self._rows(conn, "SET LOCAL lock_timeout = '120s'")
             self._rows(conn, "SELECT pg_advisory_xact_lock(%s)", (MIGRATE_LOCK_ID,))
             self._rows(conn, f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
             self._rows(conn, f"CREATE TABLE IF NOT EXISTS {SCHEMA}.schema_migrations ("
@@ -494,6 +518,12 @@ class PgHistoryStore:
         with self._use(conn) as c:
             return [r[0] for r in self._rows(c, sql, (_date(date_from), _date(date_to), account_fp))]
 
+    def open_days(self, account_fp, date_from, date_to, *, conn=None) -> List[dt.date]:
+        sql = (f"SELECT day FROM {SCHEMA}.days WHERE account_fp = %s AND day BETWEEN %s AND %s AND NOT final "
+               "ORDER BY day")
+        with self._use(conn) as c:
+            return [r[0] for r in self._rows(c, sql, (account_fp, _date(date_from), _date(date_to)))]
+
     def meta_get(self, key, default=None, *, conn=None):
         with self._use(conn) as c:
             rows = self._rows(c, f"SELECT value FROM {SCHEMA}.meta WHERE key = %s", (_meta_key(key),))
@@ -580,7 +610,7 @@ class PgHistoryStore:
                        "(SELECT uuid FROM langchain_pg_collection WHERE name = %s) RETURNING 1) "
                        "SELECT count(*) FROM gone", (COLLECTION_NAME,))[0][0]
                 self._rows(c, "DELETE FROM langchain_pg_collection WHERE name = %s", (COLLECTION_NAME,))
-        conn = self._connect(autocommit=True)
+        conn = self._connect(autocommit=True, statement_timeout_ms=0)    # VACUUM may take a while: no limit
         try:
             self._rows(conn, "VACUUM")
             out["vacuum"] = True

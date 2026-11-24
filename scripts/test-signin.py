@@ -18,8 +18,7 @@ the environment (scripts/e2e-local.py passes it that way), never as an
 argument. MCP_BEARER_TOKEN is optional and comes only from the environment;
 S33 needs it.
 
-Every check prints one line: PASS, FAIL or INFO, the check ID (S1-S46, as in
-the build contract, plus S47 and S48, added after review), and a short
+Every check prints one line: PASS, FAIL or INFO, the check ID (S1-S48), and a short
 detail with status codes and yes/no only.
 The script never prints a secret, a token, a code, a state or a page link.
 Exit status 0 means no FAIL.
@@ -53,17 +52,21 @@ Exit status 0 means no FAIL.
 
 Every request carries X-Real-IP and X-Client-IP with a documentation address
 (203.0.113.n), a new one for each check, so the sign-in rate limits that one
-check fills never touch another. Checks run in the contract's order: S1-S35,
+check fills never touch another. Checks run in this order: S1-S35,
 then S47 and S48, then S40-S46, then the rate-limit checks S36-S39 last (S38
 fills the client table).
 
+  S4   the authorization server metadata (10 items) includes
+       authorization_response_iss_parameter_supported: true (RFC 9207).
+  S14  the approved consent redirect carries iss, exactly <base>, the
+       metadata's issuer (RFC 9207).
   S47  (local only) callers behind one edge hop keep their own rate-limit
        buckets: 21 callers whose POST /consent carries X-Forwarded-For with
        one shared address get no 429; one caller doing it 21 times does.
   S48  (local only) HEAD /authorize and OPTIONS on /register, /token and
        /revoke get 405 with an Allow header; a CORS preflight OPTIONS
-       /register gets the SDK's 200 direct and 405 through Caddy (which
-       drops Origin), and registers nothing either way.
+       /register gets the SDK's 200, direct and through Caddy, and registers
+       nothing either way.
 """
 
 from __future__ import annotations
@@ -95,7 +98,7 @@ JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 GRANTS = ["authorization_code", "refresh_token"]
 SCOPE = "offline_access"
 AUTH_METHODS = ["client_secret_post", "client_secret_basic"]
-# The consent page's Content-Security-Policy, as a set of directives (F3: no form-action).
+# The consent page's Content-Security-Policy, as a set of directives (no form-action).
 CONSENT_CSP = {"default-src 'none'", "style-src 'unsafe-inline'", "base-uri 'none'", "frame-ancestors 'none'"}
 CONSENT_HEADERS = {
     "pragma": "no-cache",
@@ -116,7 +119,7 @@ EDGE_HOP = "100.64.0.7"  # S47: stands in for Railway's edge, the last X-Forward
 REGISTER_LIMIT, CONSENT_LIMIT, AUTHORIZE_LIMIT, WIDE_REGISTER = 20, 20, 30, 25
 BULK_CLIENTS, BULK_PER_IP = 205, 10
 TOOL_CALL_BUDGET = 20.0  # seconds, S45
-LOGIN_PREFIX = "Error: Garmin login missing or expired."  # S45: the start of step 1.3's fixed login text
+LOGIN_PREFIX = "Error: Garmin login missing or expired."  # S45: the start of the server's fixed login-error text
 
 ORDER = (
     "S1 S2 S3 S4 S5 S5b S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 "
@@ -540,8 +543,8 @@ class SignInCheck:
             ("code_challenge_methods_supported", j.get("code_challenge_methods_supported") == ["S256"]),
             ("scopes_supported", j.get("scopes_supported") == [SCOPE]),
             ("no client_id_metadata_document_supported", "client_id_metadata_document_supported" not in j),
-            ("no authorization_response_iss_parameter_supported",
-             "authorization_response_iss_parameter_supported" not in j),
+            ("authorization_response_iss_parameter_supported",
+             j.get("authorization_response_iss_parameter_supported") is True),
             ("token_endpoint_auth_methods_supported", j.get("token_endpoint_auth_methods_supported") == AUTH_METHODS),
         ) if not ok]
         detail = f"HTTP {r.status}; " + ("all 10 items as expected" if not problems else "wrong: " + ", ".join(problems))
@@ -691,9 +694,10 @@ class SignInCheck:
         nostore = "no-store" in r.header("cache-control").lower()
         if to_cb and q.get("code"):
             self.main_code = q["code"]
-        ok = r.status == 303 and to_cb and bool(q.get("code")) and state_ok and "iss" not in q and nostore
+        iss_ok = q.get("iss") == self.base  # RFC 9207: exactly the metadata's issuer
+        ok = r.status == 303 and to_cb and bool(q.get("code")) and state_ok and iss_ok and nostore
         return ok, (f"HTTP {r.status}; to the claude.ai callback: {yn(to_cb)}; code: {yn(q.get('code'))}; "
-                    f"state matches: {yn(state_ok)}; iss: {yn('iss' in q)}; no-store: {yn(nostore)}")
+                    f"state matches: {yn(state_ok)}; iss is <base>: {yn(iss_ok)}; no-store: {yn(nostore)}")
 
     def s15(self):
         p = self.need(self.main, "S10's consent link")
@@ -766,7 +770,7 @@ class SignInCheck:
         back = r.status == 303 and loc.startswith(LOOPBACK_USED + "?") and bool(q.get("code")) \
             and q.get("state") == p.state
         t = None
-        if q.get("code"):  # Claude Code's next step (contract 5.3): the code for tokens, no client secret
+        if q.get("code"):  # Claude Code's next step: the code for tokens, no client secret
             t = self.exchange(client, p, q["code"], ip)
         tok_ok = t is not None and t.status == 200 and bool(t.obj().get("access_token"))
         ok = page.status == 200 and not problems and back and tok_ok
@@ -964,11 +968,11 @@ class SignInCheck:
             seen.append(f"{method} {path}: HTTP {r.status}, Allow {'as expected' if r.header('allow') == allow else 'wrong'}")
         pre = self.http("OPTIONS", "/register", ip=ip,
                         headers={"Origin": "https://app.example.com", "Access-Control-Request-Method": "POST"})
-        want = 405 if self.args.via_caddy else 200
+        want = 200
         registered = bool(pre.obj().get("client_id"))
         ok = ok and pre.status == want and not registered
-        seen.append(f"CORS preflight OPTIONS /register: HTTP {pre.status} (expected {want}"
-                    f"{', Caddy drops Origin' if self.args.via_caddy else ''}), client registered: {yn(registered)}")
+        seen.append(f"CORS preflight OPTIONS /register: HTTP {pre.status} (expected {want}), "
+                    f"client registered: {yn(registered)}")
         return ok, "; ".join(seen)
 
     def s40(self):

@@ -25,7 +25,8 @@ Parity with FastMCP 1.x that matters here:
   one, which is what a slow Garmin call behind Caddy needs.
 - host is forwarded, so binding 127.0.0.1 turns on the same DNS-rebinding
   protection as 1.x (Host must be 127.0.0.1:*/localhost:*/[::1]:*, no foreign
-  Origin). Caddy already rewrites Host to 127.0.0.1:8000 and drops Origin.
+  Origin). Caddy rewrites Host to 127.0.0.1:8000; owner_auth.OriginCheck checks
+  Origin on /mcp itself and removes it before this guard sees it.
 - serverInfo.version defaults to the installed mcp version, as 1.x did
   (2.x would report an empty string), for a caller that sets no version.
 - set_server_overrides() sets constructor arguments that win over the caller's.
@@ -279,10 +280,10 @@ def _submit_to_tool_loop(coro, result):
     """Schedule `coro` on the tool loop; the run_coroutine_threadsafe future
     of its task. `result` is the concurrent.futures.Future the caller awaits:
     it goes into the loop's pending set, so a call the loop strands when it
-    stops fails instead of hanging (F9).
+    stops fails instead of hanging.
 
     Starts the loop on first use, and replaces it first when its thread died
-    or it stopped (F9), all under the lock.
+    or it stopped, all under the lock.
     """
     import asyncio
 
@@ -300,7 +301,7 @@ def _submit_to_tool_loop(coro, result):
 
 def _publish(result, value=None, exception=None):
     """Finish `result` with a value or an exception; a no-op once it is done
-    (the caller cancelled it, or F9 failed it because the loop stopped)."""
+    (the caller cancelled it, or it was failed because the loop stopped)."""
     from concurrent.futures import InvalidStateError
 
     try:
@@ -334,7 +335,7 @@ async def _guarded(awaitable, result):
 
     A SystemExit, KeyboardInterrupt or other BaseException that is not an
     Exception would escape run_forever() and stop the loop: it is published
-    as RuntimeError instead (F9). Nothing is raised again after publishing;
+    as RuntimeError instead. Nothing is raised again after publishing;
     the caller's thread raises it, and raising the same exception here too
     would change its traceback from two threads. CancelledError (cancelling
     the caller cancels the tool) and GeneratorExit (closing the coroutine)
@@ -345,9 +346,9 @@ async def _guarded(awaitable, result):
         value = await awaitable
     except (asyncio.CancelledError, GeneratorExit):
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - handed to the caller's thread, which raises it
         _publish(result, exception=exc)
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 - must not stop the loop; published as RuntimeError
         text = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
         error = RuntimeError(text)
         error.__cause__ = exc

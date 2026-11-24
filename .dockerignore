@@ -4,6 +4,11 @@
 # the image (the read-only tool list launch.py enforces).
 scripts/
 recipes/
+# Maintainer-only folders the image never copies: the eval suite and its runs
+# (evals/runs/ too), the Grafana dashboards, and ruff's cache.
+evals/
+dashboards/
+.ruff_cache/
 README.md
 .git
 .gitignore

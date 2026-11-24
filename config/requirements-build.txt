@@ -1,0 +1,29 @@
+# The build backends the image needs for its two source builds, hash-pinned:
+# upstream garmin-mcp's tarball (hatchling, its pyproject's build-system at the
+# Dockerfile's GARMIN_MCP_REF) and fitparse's sdist (setuptools; it has no
+# wheel). The Dockerfile installs this file first:
+#   pip install --require-hashes --no-deps -r /tmp/requirements-build.txt
+# then builds both with --no-build-isolation, so pip fetches no build backend
+# from the index without a hash, and uninstalls these packages again before
+# the offline re-check (they are not in constraints.txt and not in the image).
+# GENERATED, never edit by hand. Generated 24 Nov 2026 on python 3.12 by a real resolve:
+#   pip install --dry-run --ignore-installed --report r.json hatchling setuptools wheel
+# then the sha256 of each pin's py3-none-any wheel (PyPI JSON API; every one is
+# pure Python). Regenerate when bumping GARMIN_MCP_REF if upstream's
+# build-system changes.
+hatchling==1.33.0 \
+    --hash=sha256:415290b84f464d2884303fca8974d38e7b85579069fab02a15db0828fbb1446d
+packaging==26.4 \
+    --hash=sha256:81383611a09c1bc0b08b76e0fd5829d7c6824c65b27a6aee339da133f4233ea2
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+pluggy==1.7.0 \
+    --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec
+setuptools==84.2.1 \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+tomlkit==0.15.3 \
+    --hash=sha256:a83ce6de3b648e68dd9b50aabadad749ba823eb58b1d026f3c0a283c4767a9c1
+trove-classifiers==2026.9.21.13 \
+    --hash=sha256:8b1ff4f9c191b1040b71c37f1e445ab99732911e3cd91de52838453a854d7a17
+wheel==0.48.0 \
+    --hash=sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab

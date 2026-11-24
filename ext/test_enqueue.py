@@ -98,7 +98,7 @@ class Main(unittest.TestCase):
             self.assertEqual(enqueue.main(environ=env), 0)
 
     def test_main_block_runs_the_importable_module_without_tracing_when_off(self):
-        """Review fixes: `python enqueue.py` runs the importable module's main() (one module object); with
+        """`python enqueue.py` runs the importable module's main() (one module object); with
         tracing off no telemetry module is used; the secrets are registered and taken out of the environment."""
         import os
         import runpy

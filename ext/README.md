@@ -56,6 +56,7 @@ a climb ends after 300 m below the threshold.
 | `auth_store.py` | The sign-in database (sqlite, default `/data/auth.sqlite`, mode 0600): clients, pending sign-ins, codes, grants and tokens. Codes, tokens and pending ids are stored as SHA-256 hashes. A fingerprint of `OWNER_SECRET` revokes every sign-in when the secret changes. Standard library only |
 | `owner_auth.py` | The single-owner OAuth 2.1 server on mcp 2.x's `mcp.server.auth`: the provider, the `/consent` page that asks for the owner secret, the root protected-resource metadata, the filter that narrows what a client registers, the optional static bearer, and `selfcheck()` for the build |
 | `auth_http.py` | ASGI pieces in front of the app: per-address rate limits on `/consent`, `/authorize` and `/register` (the address is Caddy's `X-Client-IP`, trusted only from 127.0.0.1; `launch.py` keeps uvicorn from replacing that peer with an `X-Forwarded-For` address), a 405 for methods no client needs (`HEAD /authorize`, and `OPTIONS` on `/register`, `/token` and `/revoke` unless it is a CORS preflight), and the uvicorn access-log filter that drops query strings. Standard library only |
+| `own_data.py` | Run as root by `entrypoint.sh` before each server start: stops every leftover process of the user `app`, then gives `app` what is not its own on `/data`, without following a link or leaving the file system. Standard library only |
 | `tool_errors.py` | Failure groups (below): sorts a failure text or exception into a group, and builds the fixed client texts, the status tools' source phrases, the refs of internal errors and the redacted log text. Standard library only |
 | `log_privacy.py` | Log privacy for the app, the history worker and the scheduler: the Garmin client libraries' own log records (a failed call quotes the display name and Garmin's answer) become one fixed line, and registered secrets are redacted on the root handlers. Standard library only |
 | `text_hygiene.py` | The free-text filter (below): drops invisible, control and bidi characters but keeps every script and emoji sequence readable, caps length without cutting a visible unit, replaces links and HTML tags, and cleans upstream's JSON answers (`clean_tool_answer`). Never raises. Standard library only |
@@ -68,7 +69,6 @@ a climb ends after 300 m below the threshold.
 | `history_store.py` | History search: `HistoryStore` with `MemoryHistoryStore` (tests) and `PgHistoryStore` (Postgres schema `history`, psycopg 3 imported only there); idempotent upserts, versioned SQL migrations in `history_sql/`, the account fingerprint (HMAC of the Garmin profile id with a stored salt), retention, and `forget_all` (drops the schema and the LangChain collection, then `VACUUM`) |
 | `history_docs.py` | History search: the fixed-template English text, tags and metadata of each day and week document LangChain indexes; no model writes any of it. Standard library only (LangChain only in `to_langchain`) |
 | `history_jobs.py` | History search: the worker's job handlers `index_day`, `build_week`, `sweep` and `rebuild` (`register_jobs`), and `scheduled_jobs` for the daily scheduler |
-| `phrasing.py` | Checks for English text written from a status; nothing calls them yet. Each returns every problem it finds, an empty list when the text passes. `check_text` is the numbers check: every number must trace back to the status (a threshold only inside its flag label or the template's own wording), within the word limit, with no tag but `<b>`. `check_all(text, status, kind="daily")` (or `"weekly"`) adds the rules a full report message must meet: the level word, every flag label and the recommendation verbatim, no other level, no Markdown, links, @mentions or /commands, no emoji but the level marker, no number words. A one- or two-sentence summary such as the page's `summary_en` fails `check_all` by design; check it with `check_text`, `check_style` and `check_number_words`. |
 | `feature_config.py` | The optional features' settings (`TRACING`, `HISTORY_SEARCH`, `ROLE`, `DATABASE_URL`, `HISTORY_FORGET`, `HISTORY_TOKEN_KEY`, `WORKER_CONCURRENCY`, the `OTEL_...` ones) and their `ERR_T*` / `ERR_H*` lines for `--check-config`; both features off by default; no line ever holds a value. Standard library only |
 | `garmin_guard.py` | The Garmin call guard, on in every install: a `rate_limited` outcome refuses live tool calls for 15 minutes in code (and pauses workers 6 h, `login` 24 h), live calls go before the worker, one token bucket and a 12:00-22:00 window for workers, and the lock around full mode's token refresh. In-memory state here; `garmin_guard_pg.py` shares it through Postgres. Standard library only |
 | `telemetry.py` | Tracing (`TRACING=on`, off by default): OpenTelemetry spans and metrics over OTLP/HTTP, rebuilt from an attribute allowlist before export so no health value, name, id or token leaves; no-op without the SDK ([Tracing](../docs/tracing.md)) |
@@ -194,15 +194,19 @@ and text from Garmin" above). It raises `ShimError` unless mcp is 2.x with the e
 
 Tests (standard library only; the ones that need upstream garmin_mcp or mcp 2.x are
 skipped without them, and `test_edge_files.py` runs `caddy validate` only where a caddy
-binary is found; each test sets its own time zone): `python3 -m unittest discover -s ext -v`
+binary is found; each test sets its own time zone). A quick run of this folder's tests
+only: `cd ext && python3 -m unittest`
 
-CI runs the same tests on two legs, and `scripts/ci-local.sh` runs every CI step but the
-container test on your computer (it needs `python3.10` and `python3.12`):
+CI runs `scripts/ci-unittest.py` on two legs: it runs these tests and `scripts/tests/`,
+and fails on any skip the leg does not allow. `scripts/ci-local.sh` runs every CI step but
+the container test on your computer (it needs `python3.10` and `python3.12`). It keeps its
+venvs and tools in `CI_CACHE`, by default `${XDG_CACHE_HOME:-$HOME/.cache}/coach-mcp-ci`:
 
 ```sh
 scripts/ci-local.sh --setup     # once, and after a pin changes (about 1 minute)
 scripts/ci-local.sh             # every CI step except the container test
-python3.10 -B scripts/ci-unittest.py                                                       # stdlib leg
-REQUIRE_UPSTREAM=1 ~/.cache/coach-mcp-ci/venv-full/bin/python -B scripts/ci-unittest.py    # full leg
-SMOKE_PYTHON=~/.cache/coach-mcp-ci/venv-full/bin/python scripts/ci-smoke.sh                # needs Docker
+CACHE="${CI_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/coach-mcp-ci}"
+python3.10 -B scripts/ci-unittest.py                                              # stdlib leg
+PATH="$CACHE/bin:$PATH" REQUIRE_UPSTREAM=1 "$CACHE/venv-full/bin/python" -B scripts/ci-unittest.py  # full leg
+SMOKE_PYTHON="$CACHE/venv-full/bin/python" scripts/ci-smoke.sh                    # needs Docker
 ```

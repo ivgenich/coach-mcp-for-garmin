@@ -50,7 +50,7 @@ VERSION_PY = os.path.join(HERE, "version.py")
 KEY_MODE_PY = os.path.join(HERE, "key_mode.py")
 TOOLS_FULL = os.path.join(ROOT, "config", "enabled-tools.txt")
 TOOLS_KEY = os.path.join(ROOT, "config", "enabled-tools-key.txt")
-# The sixteen pages of docs/ (DOCS contract D2, plus evals and the optional features); README links each.
+# The sixteen pages of docs/ (with evals and the optional features); README links each.
 DOC_PAGES = ("deploy-railway", "deploy-docker", "garmin-login", "connect-claude", "tools", "daily-status",
              "weekly-status", "maintenance", "updates", "protocol", "how-it-works", "troubleshooting", "evals",
              "tracing", "history-search", "history-worker")
@@ -60,7 +60,7 @@ BASH = shutil.which("bash") or "/bin/bash"
 ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 SECRET_SHAPE = re.compile(r"[2-9a-hjkmnp-z]{5}(?:-[2-9a-hjkmnp-z]{5}){5}")
 # The one line of deploy.sh that may expand the new owner secret.
-SECRET_PIPE = """printf '%s' "$SECRET" | railway variable set OWNER_SECRET --stdin --skip-deploys >/dev/null"""
+SECRET_PIPE = """printf '%s' "$SECRET" | railway variable set OWNER_SECRET --stdin --skip-deploys --service "$SERVICE" >/dev/null"""
 REAL_ROUTES = (
     "/mcp", "/mcp/", "/healthz", "/readyz", "/authorize", "/consent", "/register", "/token", "/revoke",
     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp",
@@ -170,11 +170,13 @@ class Caddyfile(unittest.TestCase):
 
     def test_proxy_target_and_headers(self):
         proxy = caddy_block(self.code, "reverse_proxy 127.0.0.1:{$GARMIN_MCP_PORT:8000}")
-        for line in ("header_up Host {upstream_hostport}", "header_up -Origin",
+        for line in ("header_up Host {upstream_hostport}",
                      "header_up X-Client-IP {client_ip}", "header_up -X-Forwarded-For",
                      "header_down -Server", "flush_interval -1"):
             with self.subTest(line=line):
                 self.assertIn(line, proxy)
+        # Origin reaches Python, which checks it on /mcp (owner_auth.OriginCheck).
+        self.assertFalse(any("Origin" in line for line in proxy), proxy)
         servers = caddy_block(self.code, "servers")
         # The caller-address header: X-Real-IP on Railway, CF-Connecting-IP behind a
         # Cloudflare Tunnel (compose.yaml sets EDGE_CLIENT_IP_HEADER; launch.py checks it).
@@ -226,8 +228,8 @@ class CaddyBinary(unittest.TestCase):
         for proxy in proxies:
             self.assertEqual(proxy["upstreams"], [{"dial": "127.0.0.1:8456"}])
             request = proxy["headers"]["request"]
-            # V1-1: no X-Forwarded-For reaches Python; X-Client-Ip is the caller.
-            self.assertEqual(request["delete"], ["Origin", "X-Forwarded-For"])
+            # No X-Forwarded-For reaches Python; X-Client-Ip is the caller. Origin passes through.
+            self.assertEqual(request["delete"], ["X-Forwarded-For"])
             self.assertEqual(request["set"], {"Host": ["{http.reverse_proxy.upstream.hostport}"],
                                               "X-Client-Ip": ["{http.vars.client_ip}"]})
             self.assertNotIn("Authorization", json.dumps(proxy))  # passed through untouched
@@ -322,7 +324,7 @@ class DeployScript(unittest.TestCase):
     def test_domain_step_runs_before_the_build(self):
         build = self.index(r"^\s*railway up\b")
         self.assertLess(self.index(r'^say "Public domain"'), build)
-        self.assertLess(self.index(r"railway domain 2>&1"), build)
+        self.assertLess(self.index(r"railway domain --service \"\$SERVICE\" --json 2>&1"), build)
         self.assertLess(self.index(r"PUBLIC_URL on Railway must be"), build)
         self.assertIn("create one in the dashboard (Settings > Networking > Generate Domain) or set PUBLIC_URL, "
                       "then re-run. Nothing was deployed.", self.text)
@@ -386,8 +388,9 @@ class DeployScript(unittest.TestCase):
         'GARMIN_KEY="${GARMIN_KEY#"${GARMIN_KEY%%[![:space:]]*}"}"',
         'GARMIN_KEY="${GARMIN_KEY%"${GARMIN_KEY##*[![:space:]]}"}"',
         "if [[ -z $GARMIN_KEY || $GARMIN_KEY =~ [[:space:]] || ${#GARMIN_KEY} -gt 512 ]]; then",
-        "printf '%s' \"$GARMIN_KEY\" | railway variable set GARMIN_PERSONAL_API_KEY --stdin --skip-deploys >/dev/null",
-        # The too-short check (live test B1) reads only the key's length.
+        "printf '%s' \"$GARMIN_KEY\" | railway variable set GARMIN_PERSONAL_API_KEY --stdin --skip-deploys "
+        "--service \"$SERVICE\" >/dev/null",
+        # The too-short check reads only the key's length.
         "if [[ ${#GARMIN_KEY} -lt 20 ]]; then",
         "KEY_LEN=${#GARMIN_KEY}",
     )
@@ -711,7 +714,9 @@ class EntrypointFeatures(unittest.TestCase):
             env = {"PATH": tmp + os.pathsep + os.environ.get("PATH", "")}
             if role is not None:
                 env["ROLE"] = role
-            script = 'set -eu\nlog() { echo "entrypoint: $*" >&2; }\n' + block + '\necho "went on"\n'
+            # run_as (tested on its own below) without setpriv: drop the user, exec the rest.
+            script = ('set -eu\nlog() { echo "entrypoint: $*" >&2; }\nrun_as() { shift; exec "$@"; }\n' + block
+                      + '\necho "went on"\n')
             return subprocess.run([shell, "-c", script], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                   text=True, timeout=30)
 
@@ -736,6 +741,132 @@ class EntrypointFeatures(unittest.TestCase):
                 self.assertLess(role, first(later))
 
 
+@unittest.skipUnless(SHELLS, "needs sh on PATH")
+class EntrypointUsers(unittest.TestCase):
+    """The server runs as app and Caddy as caddy; the script stays root only to give app the /data volume."""
+
+    def setUp(self):
+        self.text = read(os.path.join(ROOT, "entrypoint.sh"))
+        self.code = [line.strip() for line in self.text.splitlines() if not line.lstrip().startswith("#")]
+
+    def test_run_as_drops_to_the_user_with_setpriv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = os.path.join(tmp, "setpriv")
+            with open(stub, "w", encoding="utf-8") as f:
+                f.write('#!/bin/sh\necho "HOME=$HOME"\nfor a in "$@"; do echo "$a"; done\n')
+            os.chmod(stub, 0o755)
+            script = shell_function(self.text, "run_as") + 'run_as app python /opt/x.py --flag\necho "not replaced"\n'
+            for shell in SHELLS:
+                with self.subTest(shell=shell):
+                    proc = subprocess.run([shell, "-c", script], env={"PATH": tmp + os.pathsep + "/usr/bin:/bin"},
+                                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertEqual(proc.stdout.splitlines(), [
+                        "HOME=/home/app", "--reuid=app", "--regid=app", "--init-groups", "--no-new-privs", "--",
+                        "python", "/opt/x.py", "--flag"])
+
+    def test_every_program_runs_unprivileged(self):
+        # own_data's helper is the one program that runs as root (it gives app the /data volume).
+        root = [line for line in self.code if "/opt/garmin-ext/own_data.py" in line]
+        self.assertEqual(root, ["python -I /opt/garmin-ext/own_data.py </dev/null ||"])
+        runs = [line for line in self.code if "/opt/garmin-ext/" in line and line not in root]
+        self.assertEqual(len(runs), 4, runs)   # --check-config, worker, enqueue, the server
+        for line in runs:
+            self.assertRegex(line, r"^\(?run_as app python /opt/garmin-ext/\w+\.py\b", line)
+        (caddy,) = [line for line in self.code if "caddy run" in line]
+        self.assertIn(" HOME=/home/caddy setpriv --reuid=caddy --regid=caddy --init-groups --no-new-privs -- "
+                      "caddy run ", caddy)
+        self.assertTrue(caddy.startswith("exec env -u "), caddy)
+
+    def test_data_is_given_to_app_before_the_check_and_before_each_start(self):
+        def first(needle):
+            return next(i for i, line in enumerate(self.code) if needle in line)
+
+        self.assertLess(self.code.index("own_data"), first("launch.py --check-config"))
+        loop = first("while :")
+        start = next(i for i, line in enumerate(self.code) if i > loop and "launch.py </dev/null &" in line)
+        self.assertIn("own_data", self.code[loop:start])
+
+    def test_own_data_runs_the_helper_and_a_failure_only_warns(self):
+        # The walk itself is tested in test_own_data.py.
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = os.path.join(tmp, "python")
+            with open(stub, "w", encoding="utf-8") as f:
+                f.write('#!/bin/sh\necho "ran $*"\nexit 1\n')
+            os.chmod(stub, 0o755)
+            script = ('set -eu\nlog() { echo "entrypoint: $*" >&2; }\n' + shell_function(self.text, "own_data")
+                      + "own_data\necho done\n")
+            proc = subprocess.run(["sh", "-c", script], env={"PATH": tmp + os.pathsep + "/usr/bin:/bin"},
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertEqual((proc.returncode, proc.stdout), (0, "ran -I /opt/garmin-ext/own_data.py\ndone\n"))
+        self.assertIn("WARNING: could not give /data to the user app", proc.stderr)
+
+    def test_the_token_folder_is_made_by_app_and_never_through_a_link(self):
+        start = self.text.index('# As app, never as root')
+        block = self.text[start:self.text.index("has_tokens ||", start)]
+        self.assertIn('(run_as app mkdir -p -- "$GARMINTOKENS" </dev/null)', block)
+        self.assertIn('(run_as app chmod -- 700 "$GARMINTOKENS" </dev/null)', block)
+        with tempfile.TemporaryDirectory() as tmp:
+            link = os.path.join(tmp, "tokens")
+            os.symlink(tmp, link)
+            script = ('set -eu\nlog() { echo "entrypoint: $*" >&2; }\ndie() { log "FATAL: $*"; exit 1; }\n'
+                      'run_as() { shift; exec "$@"; }\nGARMINTOKENS="%s"\n' % link + block + "echo done\n")
+            proc = subprocess.run(["sh", "-c", script], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                  timeout=30)
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("is a symbolic link", proc.stderr)
+            real = os.path.join(tmp, "real", "tokens")
+            proc = subprocess.run(["sh", "-c", script.replace(link, real)], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual((proc.returncode, proc.stdout), (0, "done\n"), proc.stderr)
+            self.assertEqual(os.stat(real).st_mode & 0o777, 0o700)
+
+
+@unittest.skipUnless(SHELLS, "needs sh on PATH")
+class EntrypointBackoff(unittest.TestCase):
+    """The supervisor waits longer after each quick exit and stops the container after 8 in a row."""
+
+    def setUp(self):
+        text = read(os.path.join(ROOT, "entrypoint.sh"))
+        self.block = text[text.index("HEALTHY_RUN=300"):text.index("# $$ is this script's PID")]
+        self.assertIn("after_exit() {", self.block)
+
+    def run_exits(self, exits):
+        """[(status, seconds run), ...] -> ["delay quick" after each, or "stop"]."""
+        calls = "".join('if after_exit %d %d; then echo "$delay $quick"; else echo stop; fi\n' % e for e in exits)
+        out = {}
+        for shell in SHELLS:
+            proc = subprocess.run([shell, "-c", "set -eu\n" + self.block + calls], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            out[shell] = proc.stdout.splitlines()
+        self.assertEqual(len(set(map(tuple, out.values()))), 1, out)
+        return out[SHELLS[0]]
+
+    def test_quick_exits_double_the_wait_up_to_60_s_then_stop(self):
+        self.assertEqual(self.run_exits([(1, 5)] * 8),
+                         ["2 1", "4 2", "8 3", "16 4", "32 5", "60 6", "60 7", "stop"])
+
+    def test_a_healthy_run_resets(self):
+        self.assertEqual(self.run_exits([(1, 5), (1, 5), (1, 5), (1, 300), (1, 5)]),
+                         ["2 1", "4 2", "8 3", "2 0", "2 1"])
+
+    def test_sigterm_restarts_at_once_and_counts_nothing(self):
+        self.assertEqual(self.run_exits([(1, 5), (143, 5), (1, 5), (143, 900)]), ["2 1", "1 1", "4 2", "1 0"])
+
+    def test_exit_0_is_a_requested_restart_too(self):
+        # uvicorn usually exits 0 after the documented manual reload (a SIGTERM): it never stops the container.
+        self.assertEqual(self.run_exits([(0, 5)] * 10), ["1 0"] * 10)
+        self.assertEqual(self.run_exits([(1, 5), (0, 5), (1, 5)]), ["2 1", "1 1", "4 2"])
+
+    def test_the_supervisor_stops_caddy_with_sigquit(self):
+        text = read(os.path.join(ROOT, "entrypoint.sh"))
+        self.assertIn("caddy_pid=$$", text)
+        self.assertIn('kill -QUIT "$caddy_pid"', text)
+        self.assertIn('if ! after_exit "$rc" $(($(date +%s) - started)); then', text)
+        self.assertNotIn("sleep 3\n", text)
+
+
 class DockerfileFeatures(unittest.TestCase):
     """The tracing pins always install; the history pins only with the build argument HISTORY=1."""
 
@@ -749,6 +880,75 @@ class DockerfileFeatures(unittest.TestCase):
         for name in ("requirements-telemetry.txt", "requirements-history.txt"):
             with self.subTest(name=name):
                 self.assertIn(f"COPY config/{name} /tmp/{name}", text)
+
+    def test_core_packages_install_by_hash_then_the_list_is_checked_offline(self):
+        text = read(os.path.join(ROOT, "Dockerfile"))
+        self.assertIn("COPY config/requirements-core.txt /tmp/requirements-core.txt", text)
+        joined = text.replace("\\\n", " ")
+        (run,) = [line for line in joined.splitlines() if "requirements-core.txt" in line and line.startswith("RUN ")]
+        steps = [" ".join(step.split()) for step in run[4:].split("&&")]
+        # The build backends by hash first; both source builds (upstream, fitparse) without build isolation, so
+        # pip fetches no unhashed backend; the backends leave again before the offline re-check.
+        self.assertIn("COPY config/requirements-build.txt /tmp/requirements-build.txt", text)
+        self.assertEqual(steps[0], "pip install --require-hashes --no-deps -r /tmp/requirements-build.txt")
+        self.assertTrue(steps[1].startswith("pip install --no-deps --no-build-isolation \"garmin-mcp @ "), steps[1])
+        self.assertEqual(steps[2:6], [
+            "pip install --require-hashes --no-deps --no-build-isolation -r /tmp/requirements-core.txt",
+            "pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt",
+            "pip uninstall --yes -r /tmp/requirements-build.txt",
+            "export PIP_NO_INDEX=1"])
+        self.assertTrue(steps[6].startswith("pip install -c /tmp/constraints.txt "), steps[6])
+        self.assertEqual(len(steps), 7)
+
+    def test_core_lock_matches_constraints(self):
+        pins = {}
+        for line in read(os.path.join(ROOT, "constraints.txt")).splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                name, version = line.split("==")
+                pins[name.lower().replace("_", "-")] = version
+        locked = {}
+        text = read(os.path.join(ROOT, "config", "requirements-core.txt")).replace("\\\n", " ")
+        for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            words = line.split()
+            name, version = words[0].split("==")
+            self.assertTrue(words[1:] and all(re.fullmatch(r"--hash=sha256:[0-9a-f]{64}", w) for w in words[1:]),
+                            words[0])
+            locked[name] = version
+        self.assertEqual(len(locked), 41)
+        for name, version in locked.items():
+            with self.subTest(name=name):
+                self.assertEqual(pins.get(name), version)
+        others = set(tool_names_of(os.path.join(ROOT, "config", "requirements-telemetry.txt")))
+        others.add("garmin-connect-personal-api-python")
+        self.assertEqual(set(pins) - set(locked), others)
+
+    def test_base_images_are_pinned_by_digest(self):
+        froms = [line for line in read(os.path.join(ROOT, "Dockerfile")).splitlines() if line.startswith("FROM ")]
+        self.assertEqual(len(froms), 2)
+        self.assertRegex(froms[0], r"^FROM caddy:\d+\.\d+\.\d+@sha256:[0-9a-f]{64} AS caddy$")
+        self.assertRegex(froms[1], r"^FROM python:\d+\.\d+\.\d+-slim@sha256:[0-9a-f]{64}$")
+
+    def test_users_and_the_data_folder(self):
+        text = read(os.path.join(ROOT, "Dockerfile"))
+        for needle in ("useradd --system --uid 10001 --gid app", "useradd --system --uid 10002 --gid caddy",
+                       "install -d -o app -g app -m 0700 /data",
+                       "setpriv --reuid=app --regid=app --init-groups --no-new-privs -- true"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        # The container itself starts as root: entrypoint.sh drops to app and caddy per program.
+        self.assertNotRegex(text, r"(?m)^USER ")
+
+
+def tool_names_of(path):
+    """The package names of a hashed requirements file."""
+    names = []
+    for line in read(path).replace("\\\n", " ").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            names.append(line.split()[0].split("==")[0].lower())
+    return names
 
 
 def flat(text):
@@ -811,7 +1011,7 @@ def section(text, heading):
     return rest[:end.start()] if end else rest
 
 
-# The link and anchor checker (DOCS contract T-LINK, T-HEAD): GitHub's rules, standard library only.
+# The link and anchor checker: GitHub's rules, standard library only.
 FENCE = re.compile(r"(?ms)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[ \t]*$")
 INLINE_CODE = re.compile(r"(`+)(?:(?!\1).)+?\1", re.S)
 HTML_COMMENT = re.compile(r"(?s)<!--.*?-->")
@@ -820,6 +1020,8 @@ LINK = re.compile(r"!?\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\]\(\s*(<[^>\n]*>|[^\s()]+)
 REF_DEF = re.compile(r"(?m)^ {0,3}\[[^\]\n]+\]:\s*(<[^>\n]*>|\S+)")
 HEADING = re.compile(r"(?m)^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+# The README's CI status badge and its link: GitHub serves them only by absolute URL.
+CI_BADGE = re.compile(r"^https://github\.com/[^/]+/coach-mcp-for-garmin/actions/workflows/[a-z0-9_-]+\.yml(/badge\.svg)?$")
 
 
 def strip_code(text):
@@ -865,7 +1067,7 @@ def link_problems(paths, root=ROOT):
             if SCHEME.match(target):
                 if not target.lower().startswith(("https://", "mailto:")):
                     problems.append("%s: link is not https: %s" % (name, target))
-                elif "coach-mcp-for-garmin" in target.lower():
+                elif "coach-mcp-for-garmin" in target.lower() and not CI_BADGE.search(target):
                     problems.append("%s: absolute link to this repository (use a relative link): %s" % (name, target))
                 continue
             part, _, anchor = target.partition("#")
@@ -887,7 +1089,7 @@ def link_problems(paths, root=ROOT):
 
 
 class Docs(unittest.TestCase):
-    """The step 1.3 pins, read from the pages the texts moved to."""
+    """Texts pinned in the docs, read from the pages they live on."""
 
     def test_maintenance_says_a_new_owner_secret_leaves_the_static_bearer_alone(self):
         rotation = [p for p in paragraphs(read(doc("maintenance")))
@@ -943,12 +1145,14 @@ class Docs(unittest.TestCase):
                 self.assertIn(needed, flat(switch))
 
     def test_deploy_stop_wording_matches_the_script_order(self):
-        # UX-V4: deploy.sh may run railway init/add before it checks GARMIN_AUTH.
+        # A first deploy checks GARMIN_AUTH and REPORT_TZ before railway init/add creates anything.
         text = flat(read(doc("deploy-railway")))
-        self.assertNotIn("deploy.sh stops before changing anything", text)
-        self.assertIn("may already have created the empty project and service", text)
+        self.assertNotIn("may already have created the empty project and service", text)
+        self.assertIn("checks `GARMIN_AUTH` and `REPORT_TZ` before it creates anything", text)
         code = read(DEPLOY)
-        self.assertLess(code.index('railway init "${INIT_ARGS[@]}"'), code.index("if [[ -z $AUTH_MODE ]]; then"))
+        first_deploy = code.index("if [[ $FRESH == true ]]; then")
+        self.assertLess(first_deploy, code.index('railway init "${INIT_ARGS[@]}"'))
+        self.assertLess(first_deploy, code.index('railway add --service "$SERVICE"'))
 
     def test_ext_readme_lists_the_sign_in_modules(self):
         text = read(EXT_README)
@@ -1061,11 +1265,11 @@ PIN_LINES = {
     doc("updates"): ("## The public API",),
     SECURITY_MD: ("## Supported versions", "## Scope"),
 }
-# DOCS contract T-BAN: texts of the token-only and pre-sign-in versions, the SDK's error text and the
+# Banned texts: texts of the token-only and pre-sign-in versions, the SDK's error text and the
 # Railway template placeholder (DEPLOY N8).
 BANNED = ("Sign-in is being reworked", "No sign-in", "No sign in", "Request headers", "TEMPLATE_CODE")
 MARKER = re.compile(r"TODO\((?:KEY|DEPLOY|LIVE|CI|DOCS)\)")
-# CI's text-scan (CI D17): no control, format, separator, private-use or surrogate character but tab and newline.
+# CI's text-scan: no control, format, separator, private-use or surrogate character but tab and newline.
 HIDDEN_CATEGORIES = ("Cc", "Cf", "Zl", "Zp", "Co", "Cs")
 
 
@@ -1132,8 +1336,8 @@ class DocBans(unittest.TestCase):
                         self.fail("%s:%d has U+%04X" % (rel(path), number, ord(ch)))
 
     def test_key_mode_texts_stay_as_key_mode_words_them(self):
-        # KEY's internal cache variable is never offered as a setting (KEY DOCS-K3), and the docs quote
-        # "Personal API" capitalized, as Garmin and KEY's texts do (DOCS-K9).
+        # KEY's internal cache variable is never offered as a setting, and the docs quote
+        # "Personal API" capitalized, as Garmin and key mode's texts do.
         for path in [README] + sorted(glob.glob(os.path.join(DOCS_DIR, "*.md"))):
             with self.subTest(file=rel(path)):
                 self.assertNotIn("GARMIN_KEY_TOKEN_CACHE", read(path))
@@ -1258,7 +1462,7 @@ def code_version():
 
 
 def changelog_problems(text):
-    """T-CL: Keep a Changelog 1.1.0 as this project writes it (DOCS contract D7)."""
+    """Keep a Changelog 1.1.0 as this project writes it."""
     import datetime
 
     problems = []
@@ -1288,7 +1492,7 @@ def changelog_problems(text):
         if heading not in CHANGELOG_TYPES:
             problems.append("not a Keep a Changelog type: ### " + heading)
     if re.search(r"(?m)^ {0,3}\[[^\]\n]+\]:\s", text):
-        problems.append("link reference definitions (D7: none)")
+        problems.append("link reference definitions (none allowed)")
     return problems
 
 
@@ -1315,7 +1519,7 @@ class ChangelogFile(unittest.TestCase):
         self.assertEqual(problems, [], "\n".join(problems))
 
     def test_the_release_step_keeps_both_checks_green(self):
-        # The release step inserts the dated heading under [Unreleased] (DOCS contract 4.6, LIVE R2).
+        # The release step inserts the dated heading under [Unreleased].
         text = read(CHANGELOG).replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] - 2026-11-18\n"
                                        % ".".join(map(str, code_version())), 1)
         self.assertEqual(changelog_problems(text) + version_problems(text, code_version()), [])
@@ -1427,6 +1631,12 @@ class IgnoreFiles(unittest.TestCase):
                 self.assertIn(needed, lines)
         self.assertTrue(dockerignore_hides(lines, "compose.yaml"))
         self.assertTrue(dockerignore_hides(lines, "data/garmin-key/token.json"))
+        for hidden in ("evals/runs/x.json", "evals/README.md", "dashboards/grafana/x.json", ".ruff_cache/x"):
+            with self.subTest(hidden=hidden):
+                self.assertTrue(dockerignore_hides(lines, hidden))
+        for shipped in ("config/requirements-core.txt", "config/enabled-tools.txt", "Caddyfile", "entrypoint.sh"):
+            with self.subTest(shipped=shipped):
+                self.assertFalse(dockerignore_hides(lines, shipped))
         for shipped in ("ext/key_mode.py", "ext/version.py"):
             with self.subTest(shipped=shipped):
                 self.assertFalse(dockerignore_hides(lines, shipped))

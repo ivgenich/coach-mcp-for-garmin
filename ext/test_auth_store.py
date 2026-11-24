@@ -3,8 +3,8 @@
     python -m unittest discover -s ext -p "test_auth_store*.py" -v
 
 Standard library only; runs on Python 3.10+. Files go to a temporary
-directory (TMPDIR). Fake clocks start at time.time() and only move forward
-(F22). The F4 refresh replay window lives in owner_auth, not here: see
+directory (TMPDIR). Fake clocks start at time.time() and only move forward.
+The refresh replay window lives in owner_auth, not here: see
 test_owner_auth.
 """
 

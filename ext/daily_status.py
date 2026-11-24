@@ -80,6 +80,9 @@ CALL_TIMEOUT_S = sc.DEFAULT_CALL_TIMEOUT_S
 DEADLINE_S = sc.DEFAULT_DEADLINE_S
 # Scheduled workouts of today and tomorrow whose steps are fetched, at most.
 MAX_WORKOUT_DETAILS = 4
+# The activity search of one day reads pages of ACTIVITY_PAGE, at most ACTIVITY_PAGES of them.
+ACTIVITY_PAGE = 20
+ACTIVITY_PAGES = 5
 # Daily text budget (principle 3: readable on a phone in under a minute).
 MAX_WORDS = 150
 TEXT_FORMATS = ("markdown",)
@@ -166,6 +169,16 @@ _HARD_NAME_RE = re.compile(
     r"\binterval|\btempo|\bthreshold|\bvo2|\brac(?:e|es|ing)\b|\bhard\b|\bbrick",
     re.IGNORECASE,
 )
+# Phrases whose keyword says the opposite, removed before the keyword match: "pre-race" / "post-race" (the run
+# before or after a race), "not hard" / "no hard" / "non-hard", and a keyword negated with "-free"
+# ("tempo-free"). Other keywords in the name still count: "Intervals with recovery jogs" stays hard.
+_SOFT_NAME_RE = re.compile(
+    r"\b(?:pre|post)[- ]?rac(?:e|es|ing)\b|\b(?:not|no|non)[- ]hard\b|\b[a-z0-9]+-free\b",
+    re.IGNORECASE,
+)
+# A shakeout is the easy jog around a race: in its name, "race" names the race, not the workout.
+_SHAKEOUT_RE = re.compile(r"\bshake[- ]?out", re.IGNORECASE)
+_RACE_WORD_RE = re.compile(r"\brac(?:e|es|ing)\b", re.IGNORECASE)
 
 _SPORT_EN = {"run": "run", "bike": "bike", "swim": "swim", "other": "other"}
 _OTHER_TYPE_EN = {
@@ -179,7 +192,6 @@ _ACWR_STATUS_EN = {"LOW": "low", "OPTIMAL": "optimal", "HIGH": "high", "VERY_HIG
 
 _TS_RE = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?")
 _ID_SEGMENT_RE = re.compile(r"^(?:\d{3,}|[0-9a-fA-F]{8}-[0-9a-fA-F-]{8,})$")
-_MD_SPECIAL_RE = re.compile(r"([\\`*_\[\]<>#|~])")
 
 
 # --- small helpers ------------------------------------------------------------
@@ -874,7 +886,10 @@ def hard_from_steps(
 
 
 def hard_from_name(name: Optional[str]) -> Tuple[bool, str]:
-    match = _HARD_NAME_RE.search(name or "")
+    text = _SOFT_NAME_RE.sub(" ", name or "")
+    if _SHAKEOUT_RE.search(text):
+        text = _RACE_WORD_RE.sub(" ", text)
+    match = _HARD_NAME_RE.search(text)
     if match:
         return True, f"name keyword '{match.group(0)}'"
     return False, "no hard keyword in the name"
@@ -1374,38 +1389,39 @@ def _debug_entry(name: str, raw: Any, curated: Any = None) -> Dict[str, Any]:
 
 # --- Garmin calls (the adapter) -----------------------------------------------
 
-def _method(client: Any, name: str) -> Callable[..., Any]:
-    """client.<name>(...) resolved inside the worker thread.
+def _day_activities_call(client: Any) -> Callable[[str], Any]:
+    """The activity search of one local day, page by page: a full page of ACTIVITY_PAGE asks for the next
+    one, up to ACTIVITY_PAGES pages, so a busy day is never cut silently at the first page. One source,
+    one worker thread: the pages share its timeout."""
+    search = sc.activities_call(client)
 
-    Looking the attribute up blocks (or raises) while upstream's background
-    login is pending or failed, so it must not happen on the event loop.
-    """
-    def invoke(*args: Any, **kwargs: Any) -> Any:
-        return getattr(client, name)(*args, **kwargs)
-    invoke.__name__ = name
-    return invoke
-
-
-def _activities_call(client: Any) -> Callable[[str], Any]:
     def invoke(day: str) -> Any:
-        return client.connectapi(
-            client.garmin_connect_activities,
-            params={"startDate": day, "endDate": day, "start": "0", "limit": "20"},
-        )
+        out: List[Any] = []
+        for page in range(ACTIVITY_PAGES):
+            raw = search(params={"startDate": day, "endDate": day, "start": str(page * ACTIVITY_PAGE),
+                                 "limit": str(ACTIVITY_PAGE)})
+            if not isinstance(raw, list):
+                return raw if page == 0 else out   # not a list (an empty 204 answer is {}): nothing more
+            out.extend(raw)
+            if len(raw) < ACTIVITY_PAGE:
+                break
+        return out
+
+    invoke.__name__ = "connectapi"
     return invoke
 
 
 def _workout_call(client: Any, entry: Dict[str, Any]) -> Optional[sc.Call]:
     workout_id = entry.get("workoutId")
     if isinstance(workout_id, int) and not isinstance(workout_id, bool) and workout_id > 0:
-        return sc.call(_method(client, "get_workout_by_id"), workout_id)
+        return sc.call(sc.client_method(client, "get_workout_by_id"), workout_id)
     if isinstance(workout_id, str) and workout_id.isdigit():
-        return sc.call(_method(client, "get_workout_by_id"), int(workout_id))
+        return sc.call(sc.client_method(client, "get_workout_by_id"), int(workout_id))
     uuid = _text(entry.get("workoutUuid"))
     if uuid:
         # Garmin Coach workouts have only a uuid; upstream's get_workout_by_id
         # reads them from this endpoint.
-        return sc.call(_method(client, "connectapi"), f"workout-service/fbt-adaptive/{uuid}")
+        return sc.call(sc.client_method(client, "connectapi"), f"workout-service/fbt-adaptive/{uuid}")
     return None
 
 
@@ -1415,25 +1431,10 @@ def _zone(name: Optional[str]) -> ZoneInfo:
     return sc.zone(name)
 
 
-def _aware(now: Optional[dt.datetime], zone: ZoneInfo) -> dt.datetime:
-    if now is None:
-        return sc.now_local(zone)
-    if now.tzinfo is None:
-        return now.replace(tzinfo=zone)
-    return now.astimezone(zone)
-
-
 def _report_day(date: Any, zone: ZoneInfo, now: dt.datetime) -> dt.date:
     if date is None or not str(date).strip():
         return now.date()
     return sc.parse_date(str(date), zone)
-
-
-def _check_format(text_format: Any) -> str:
-    fmt = (text_format or "").strip().lower() if isinstance(text_format, str) else text_format
-    if fmt and fmt not in TEXT_FORMATS:
-        raise sc.BadArgument(f"text_format must be '' or 'markdown', got {text_format!r}")
-    return fmt or ""
 
 
 # Key mode (GARMIN_AUTH=key): the sources Garmin's Personal API does not serve. They are never called; each
@@ -1447,8 +1448,8 @@ KEY_MODE_SKIPS_FULL = frozenset({"readiness", "training_status", "schedule"})
 async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, key_mode: bool = False):
     d0 = day.isoformat()
     calls = {
-        "sleep": sc.call(_method(client, "get_sleep_data"), d0),
-        "readiness": sc.call(_method(client, "get_training_readiness"), d0),
+        "sleep": sc.call(sc.client_method(client, "get_sleep_data"), d0),
+        "readiness": sc.call(sc.client_method(client, "get_training_readiness"), d0),
     }
     skip = KEY_MODE_SKIPS_PROBE if key_mode else frozenset()
     results = await sc.fetch_all(calls, first="sleep", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S, skip=skip)
@@ -1480,20 +1481,20 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
     d_prev = (day - dt.timedelta(days=1)).isoformat()
     d_next = (day + dt.timedelta(days=1)).isoformat()
     calls: Dict[str, sc.Call] = {
-        "stats": sc.call(_method(client, "get_stats"), d0),
-        "sleep": sc.call(_method(client, "get_sleep_data"), d0),
+        "stats": sc.call(sc.client_method(client, "get_stats"), d0),
+        "sleep": sc.call(sc.client_method(client, "get_sleep_data"), d0),
         # Sleep is filed under the wake date: the night before is D-1's.
-        "sleep_prev": sc.call(_method(client, "get_sleep_data"), d_prev),
-        "readiness": sc.call(_method(client, "get_training_readiness"), d0),
-        "hrv": sc.call(_method(client, "get_hrv_data"), d0),
+        "sleep_prev": sc.call(sc.client_method(client, "get_sleep_data"), d_prev),
+        "readiness": sc.call(sc.client_method(client, "get_training_readiness"), d0),
+        "hrv": sc.call(sc.client_method(client, "get_hrv_data"), d0),
     }
     for i in range(1, int(THRESHOLDS["hrv_trend_days"])):
-        calls[f"hrv_d{i}"] = sc.call(_method(client, "get_hrv_data"), (day - dt.timedelta(days=i)).isoformat())
-    calls["training_status"] = sc.call(_method(client, "get_training_status"), d0)
-    calls["schedule"] = sc.call(_method(client, "query_garmin_graphql"), schedule_query(d0, d_next))
-    calls["activities_prev"] = sc.call(_activities_call(client), d_prev)
+        calls[f"hrv_d{i}"] = sc.call(sc.client_method(client, "get_hrv_data"), (day - dt.timedelta(days=i)).isoformat())
+    calls["training_status"] = sc.call(sc.client_method(client, "get_training_status"), d0)
+    calls["schedule"] = sc.call(sc.client_method(client, "query_garmin_graphql"), schedule_query(d0, d_next))
+    calls["activities_prev"] = sc.call(_day_activities_call(client), d_prev)
     # Today's finished activities mark planned workouts as done.
-    calls["activities_today"] = sc.call(_activities_call(client), d0)
+    calls["activities_today"] = sc.call(_day_activities_call(client), d0)
 
     skip = KEY_MODE_SKIPS_FULL if key_mode else frozenset()
     results = await sc.fetch_all(calls, first="stats", timeout_s=CALL_TIMEOUT_S, deadline_s=DEADLINE_S, skip=skip)
@@ -1561,9 +1562,9 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
     ])
     threshold_calls: Dict[str, sc.Call] = {}
     if "lt_speed_mps" in needed or "lt_hr" in needed:
-        threshold_calls["lactate_threshold"] = sc.call(_method(client, "get_lactate_threshold"))
+        threshold_calls["lactate_threshold"] = sc.call(sc.client_method(client, "get_lactate_threshold"))
     if "ftp_w" in needed:
-        threshold_calls["cycling_ftp"] = sc.call(_method(client, "get_cycling_ftp"))
+        threshold_calls["cycling_ftp"] = sc.call(sc.client_method(client, "get_cycling_ftp"))
     fetched: Dict[str, Dict[str, Any]] = {}
     if threshold_calls:
         remaining = DEADLINE_S - (time.monotonic() - started)
@@ -1632,9 +1633,9 @@ async def build_daily_status(
     as the last line of the markdown text. Argument checks do not change.
     """
     zone = _zone(tz)
-    now = _aware(now, zone)
+    now = sc.local_now(zone, now)
     day = _report_day(date, zone, now)
-    fmt = _check_format(text_format)
+    fmt = sc.text_format(text_format)
     started = time.monotonic()
     if probe:
         status, raws = await _probe(client, day, zone, now, key_mode)
@@ -1654,34 +1655,17 @@ async def build_daily_status(
 
 # --- text ---------------------------------------------------------------------
 
-def word_count(text: str) -> int:
-    return len(re.sub(r"\*\*", " ", text or "").split())
-
-
-def _md_escape(text: str) -> str:
-    return _MD_SPECIAL_RE.sub(r"\\\1", text)
-
-
 class _Fmt:
     """Markdown escaping, bold and bullets for the report text."""
 
     def esc(self, text: Any) -> str:
-        return _md_escape("" if text is None else str(text))
+        return sc.md_escape("" if text is None else str(text))
 
     def bold(self, text: Any) -> str:
         return f"**{self.esc(text)}**"
 
     def join(self, title: str, lines: List[str]) -> str:
         return "\n".join([title, ""] + [f"- {line}" for line in lines])
-
-
-def _num_txt(value: Any) -> str:
-    v = sc.num(value)
-    if v is None:
-        return NO_VALUE
-    if isinstance(v, float) and v.is_integer():
-        return str(int(v))
-    return str(v)
 
 
 def _title_date(status: Dict[str, Any]) -> str:
@@ -1731,9 +1715,9 @@ def _class_txt(w: Dict[str, Any]) -> str:
 def _workout_txt(w: Dict[str, Any], name_words: int) -> str:
     parts = [_sport_txt(w)]
     if w.get("minutes") is not None:
-        parts.append(f"{_num_txt(w['minutes'])} min")
+        parts.append(f"{sc.num_txt(w['minutes'])} min")
     if w.get("km"):
-        parts.append(f"{_num_txt(w['km'])} km")
+        parts.append(f"{sc.num_txt(w['km'])} km")
     parts.append(_class_txt(w))
     if w.get("completed"):
         parts.append("done")
@@ -1744,18 +1728,18 @@ def _workout_txt(w: Dict[str, Any], name_words: int) -> str:
 def _session_txt(s: Dict[str, Any], detail: bool) -> str:
     text = _sport_txt(s)
     if s.get("minutes") is not None:
-        text += f" {_num_txt(s['minutes'])} min"
+        text += f" {sc.num_txt(s['minutes'])} min"
     if detail and s.get("km"):
-        text += f" {_num_txt(s['km'])} km"
+        text += f" {sc.num_txt(s['km'])} km"
     if detail and s.get("load") is not None:
-        text += f", load {_num_txt(s['load'])}"
+        text += f", load {sc.num_txt(s['load'])}"
     return text
 
 
 def _metric_vs_avg(label: str, value: Any, avg: Any) -> str:
     if value is None and avg is None:
         return f"{label}: {NO_VALUE}"
-    return f"{label}: {_num_txt(value)} (7-day avg: {_num_txt(avg)})"
+    return f"{label}: {sc.num_txt(value)} (7-day avg: {sc.num_txt(avg)})"
 
 
 def _workouts_txt(workouts: List[Dict[str, Any]], name_words: int, max_items: int) -> str:
@@ -1775,21 +1759,21 @@ def _daily_lines(status: Dict[str, Any], f: _Fmt, compact: int) -> Tuple[str, Li
 
     sleep = f"Sleep: {rec.get('sleep_hhmm') or NO_VALUE}"
     if rec.get("sleep_hhmm"):
-        sleep += f" (score {_num_txt(rec.get('sleep_score'))})"
+        sleep += f" (score {sc.num_txt(rec.get('sleep_score'))})"
     lines.append(("sleep", f.esc(sleep)))
     lines.append(("hrv", f.esc(_metric_vs_avg("HRV", rec.get("hrv"), rec.get("hrv_7d")))))
     lines.append(("rhr", f.esc(_metric_vs_avg("Resting HR", rec.get("rhr"), rec.get("rhr_7d")))))
 
-    ready = f"Readiness: {_num_txt(rec.get('readiness'))}"
+    ready = f"Readiness: {sc.num_txt(rec.get('readiness'))}"
     level_word = _READINESS_LEVEL_EN.get(rec.get("readiness_level") or "")
     if rec.get("readiness") is not None and level_word:
         ready += f" ({level_word})"
     hours = rec.get("recovery_hours")
-    ready += f", recovery: {_num_txt(hours)}" + (" h" if hours is not None else "")
+    ready += f", recovery: {sc.num_txt(hours)}" + (" h" if hours is not None else "")
     lines.append(("readiness", f.esc(ready)))
 
     acwr_status = load.get("acwr_status")
-    acwr = f"Load: ACWR {_num_txt(load.get('acwr'))}"
+    acwr = f"Load: ACWR {sc.num_txt(load.get('acwr'))}"
     acwr += f" ({_ACWR_STATUS_EN.get(acwr_status, acwr_status)})" if acwr_status else f" (status: {NO_VALUE})"
     lines.append(("load", f.esc(acwr)))
 
@@ -1855,14 +1839,14 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
     for compact in (0, 1, 2):
         title, pairs = _daily_lines(status, f, compact)
         text = f.join(title, [line for _, line in pairs]) + end
-        if word_count(text) <= MAX_WORDS:
+        if sc.word_count(text) <= MAX_WORDS:
             return text
     # Not reachable with Garmin data (compact 2 has no names and at most two
     # workouts per line); kept so the limit holds whatever the input.
     for key in ("yesterday", "tomorrow", "today"):
         pairs = [(k, line) for k, line in pairs if k != key]
         text = f.join(title, [line for _, line in pairs]) + end
-        if word_count(text) <= MAX_WORDS:
+        if sc.word_count(text) <= MAX_WORDS:
             break
     return text
 

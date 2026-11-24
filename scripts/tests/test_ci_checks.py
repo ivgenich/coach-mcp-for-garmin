@@ -163,7 +163,7 @@ class Audit(unittest.TestCase):
         return code, out.getvalue()
 
     def test_pip_audit_reads_constraints_and_both_feature_files_one_run_each(self):
-        """Review fix: pip-audit refuses to mix the unhashed constraints.txt with the hash-pinned feature files
+        """pip-audit refuses to mix the unhashed constraints.txt with the hash-pinned feature files
         in one run ("does not contain a hash"), so each file is a run of its own."""
         cc = load()
         seen = []
@@ -224,6 +224,64 @@ class Dashboards(unittest.TestCase):
             self.assertEqual(self.cc.cmd_text_scan(None), 1)
         self.assertEqual(out.getvalue().count("a uid that is not"), 1)
         self.assertIn("dashboards/grafana/a.json", out.getvalue())
+
+
+class InstallFull(unittest.TestCase):
+    """install-full replays the Dockerfile's pip steps in order: hashed packages first, the index never."""
+
+    REF = "0" * 40
+    URL = f"https://github.com/Taxuspt/garmin_mcp/archive/{REF}.tar.gz"
+
+    def setUp(self):
+        self.cc = load()
+
+    def dockerfile(self, run):
+        return (f"ARG GARMIN_MCP_REF={self.REF}\nCOPY constraints.txt /tmp/constraints.txt\n"
+                "COPY config/requirements-build.txt /tmp/requirements-build.txt\n"
+                "COPY config/requirements-core.txt /tmp/requirements-core.txt\n" + run)
+
+    def test_the_repo_dockerfile_installs_by_hash_before_the_offline_check(self):
+        with open(os.path.join(ROOT, "Dockerfile"), encoding="utf-8") as f:
+            steps = self.cc.dockerfile_installs(f.read())
+        kinds = [(words[0], "--require-hashes" in words, env) for words, env in steps]
+        first_c = next(i for i, (words, _env) in enumerate(steps) if "-c" in words)
+        self.assertEqual(steps[first_c][1], {"PIP_NO_INDEX": "1"})
+        self.assertTrue(kinds[0][1], steps[0])                       # the build backends, by hash
+        self.assertIn("--no-build-isolation", steps[1][0])           # the upstream tarball
+        core = next(words for words, _env in steps if any(w.endswith("requirements-core.txt") for w in words))
+        self.assertIn("--no-build-isolation", core)                  # fitparse's sdist
+        self.assertLess(steps.index((core, {})), first_c)
+        self.assertEqual(steps[first_c - 1][0][:2], ["uninstall", "--yes"])
+
+    def test_an_index_install_before_the_hashed_one_fails(self):
+        run = ('RUN pip install --no-deps "garmin-mcp @ https://github.com/Taxuspt/garmin_mcp/archive/'
+               '${GARMIN_MCP_REF}.tar.gz" \\\n    && export PIP_NO_INDEX=1 \\\n'
+               '    && pip install -c /tmp/constraints.txt mcp==2.3.0 \\\n'
+               '    && pip install --require-hashes --no-deps -r /tmp/requirements-core.txt\n')
+        with self.assertRaisesRegex(ValueError, "hashed packages before"):
+            self.cc.dockerfile_installs(self.dockerfile(run))
+
+    def test_the_check_must_run_without_the_index(self):
+        run = ('RUN pip install --require-hashes --no-deps -r /tmp/requirements-core.txt \\\n'
+               '    && pip install --no-deps "garmin-mcp @ https://github.com/Taxuspt/garmin_mcp/archive/'
+               '${GARMIN_MCP_REF}.tar.gz" \\\n    && pip install -c /tmp/constraints.txt mcp==2.3.0\n')
+        with self.assertRaisesRegex(ValueError, "PIP_NO_INDEX=1"):
+            self.cc.dockerfile_installs(self.dockerfile(run))
+
+    def test_dry_run_prints_the_steps_in_order(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(self.cc.cmd_install_full(mock.Mock(dry_run=True)), 0)
+        lines = [line for line in out.getvalue().splitlines() if "-m pip" in line]
+        self.assertIn("requirements-build.txt", lines[0])
+        self.assertIn("PIP_NO_INDEX=1 ", [line for line in lines if " -c " in line][0])
+
+    def test_build_backends_must_not_overlap_constraints(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(self.cc.build_pin_problems(self.cc.constraints()), [])
+            problems = self.cc.build_pin_problems({"setuptools": "1.0"})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("setuptools, which constraints.txt pins too", problems[0])
 
 
 if __name__ == "__main__":

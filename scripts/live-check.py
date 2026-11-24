@@ -14,17 +14,18 @@ coach-mcp-for-garmin without showing any secret.
     python3 scripts/live-check.py data-shape FILE [FILE...] [--keep]
         [--keys-out SHAPES] [--compare SHAPES] [--require-key LABEL:KEY]
 
-It works only on the Railway projects coach-mcp-staging and coach-mcp-dryrun,
-as linked in --dir (default: this repository). Before any Railway command it
-reads `railway status --json` and stops unless the linked project has that
-name, and `run` refuses a command that names any other host. It prints
+It works only on the throwaway Railway projects named in LIVE_CHECK_PROJECTS
+(a comma list; default coach-mcp-test), as linked in --dir (default: this
+repository). Before any Railway command it reads `railway status --json` and
+stops unless the linked project has that name, and `run` refuses a command
+that names any other host. Never list your real server's project there. It prints
 counts, check results and fixed names only: never a secret value, an IP
 address, a client ID, a user agent or Garmin data.
 Standard library only, so any python3 3.10 or newer runs it.
 
 Common options (before or after the subcommand): --dir PATH (the folder whose
-Railway link is used) and --project coach-mcp-staging|coach-mcp-dryrun
-(default coach-mcp-staging). Exit codes: 0 pass, 1 a check failed, 2 refused
+Railway link is used) and --project NAME (one of LIVE_CHECK_PROJECTS; default
+the first). Exit codes: 0 pass, 1 a check failed, 2 refused
 or usage error.
 """
 
@@ -48,8 +49,9 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ALLOWED_PROJECTS = ("coach-mcp-staging", "coach-mcp-dryrun")
-DEFAULT_PROJECT = "coach-mcp-staging"
+PROJECTS_ENV = "LIVE_CHECK_PROJECTS"  # the throwaway projects this script may touch
+DEFAULT_PROJECTS = ("coach-mcp-test",)
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ELLIPSIS = chr(0x2026)  # ext/text_hygiene.py's cut mark
 MARKS = ("[link]", "[image]", "[html]")  # ext/text_hygiene.py's replacements
 
@@ -586,8 +588,8 @@ def _as_dict(value):
 def is_railway_health_check(req, uri, address_cls):
     """Railway's deploy health check (deploy.healthcheckPath): GET /healthz sent
     from inside Railway's network straight to the container, so Caddy has no
-    edge header and its client_ip is the TCP peer (live test R1, 17 Nov 2026:
-    from 100.64.0.0/10). A caller's request through the edge never looks like
+    edge header and its client_ip is the TCP peer (seen on Railway: from
+    100.64.0.0/10). A caller's request through the edge never looks like
     this, and a broken client_ip would show on every other path too."""
     return (address_cls in ("private", "loopback") and req.get("method") == "GET" and uri == "/healthz"
             and req.get("client_ip") == req.get("remote_ip"))
@@ -1275,7 +1277,7 @@ def cmd_probe_ip(rw, args):
     print("INFO probe-ip: 3 requests to a random /probe/ path with planted X-Real-IP, X-Forwarded-For and "
           "CF-Connecting-IP")
     if sent == 0:
-        print("FAIL T15: the probe requests could not be sent; run probe-ip again")
+        print("FAIL probe-ip: the probe requests could not be sent; run probe-ip again")
         return 1
     poll = _env_float("LIVE_CHECK_TEST_POLL", 10.0)
     limit = _env_float("LIVE_CHECK_TEST_WAIT", 90.0)
@@ -1299,28 +1301,28 @@ def cmd_probe_ip(rw, args):
             break
         time.sleep(poll)
     if not found:
-        print(f"FAIL T15: the probe requests were not in the log within {int(limit)} s; run probe-ip again")
+        print(f"FAIL probe-ip: the probe requests were not in the log within {int(limit)} s; run probe-ip again")
         return 1
     head = f"{min(len(found), 3)} of 3 requests found in Caddy's access log"
     for addr, header in PLANTED:
         if addr in found:
             if header == "X-Real-IP":
-                print(f"FAIL T15: {head}; client_ip is the planted X-Real-IP: yes (Railway passes a client's own "
+                print(f"FAIL probe-ip: {head}; client_ip is the planted X-Real-IP: yes (Railway passes a client's own "
                       "X-Real-IP through, so per-caller rate limits can be dodged)")
             else:
-                print(f"FAIL T15: {head}; client_ip is the planted {header}: yes (Caddy reads a header the caller "
+                print(f"FAIL probe-ip: {head}; client_ip is the planted {header}: yes (Caddy reads a header the caller "
                       "writes)")
             return 1
     classes = sorted({address_class(a) for a in found})
     for cls in ("private", "loopback"):
         if cls in classes:
-            print(f"FAIL T15: {head}; client_ip class: {cls} (Railway's internal hop; every caller would share one "
+            print(f"FAIL probe-ip: {head}; client_ip class: {cls} (Railway's internal hop; every caller would share one "
                   "rate-limit bucket)")
             return 1
     if classes != ["public"]:
-        print(f"FAIL T15: {head}; client_ip class: {', '.join(c if c in ADDRESS_CLASSES else 'other' for c in classes)}")
+        print(f"FAIL probe-ip: {head}; client_ip class: {', '.join(c if c in ADDRESS_CLASSES else 'other' for c in classes)}")
         return 1
-    print(f"PASS T15: {head}; client_ip is a planted address: no; client_ip class: public")
+    print(f"PASS probe-ip: {head}; client_ip is a planted address: no; client_ip class: public")
     return 0
 
 
@@ -1491,7 +1493,8 @@ def build_parser():
     common.add_argument("--dir", default=argparse.SUPPRESS, help="folder whose Railway link is used (default: "
                         "this repository)")
     common.add_argument("--project", default=argparse.SUPPRESS,
-                        help="coach-mcp-staging (default) or coach-mcp-dryrun")
+                        help=f"one of {PROJECTS_ENV} (default: the first; {PROJECTS_ENV} defaults to "
+                        f"{','.join(DEFAULT_PROJECTS)})")
     p = argparse.ArgumentParser(prog="live-check.py", parents=[common],
                                 description="Staging helper for a throwaway Railway deployment (no secret shown).")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1514,7 +1517,7 @@ def build_parser():
     s = sub.add_parser("ssh", parents=[common], help="one of three fixed probes in the container")
     s.add_argument("probe", choices=("cache-modes", "token-copies", "wipe-garmin"))
     s.add_argument("--yes", action="store_true", help="needed by wipe-garmin")
-    sub.add_parser("probe-ip", parents=[common], help="T15: which caller address Caddy logs")
+    sub.add_parser("probe-ip", parents=[common], help="which caller address Caddy logs")
     s = sub.add_parser("data-shape", parents=[common], help="numbers about saved tool replies (then deletes them)")
     s.add_argument("files", nargs="+", metavar="FILE")
     s.add_argument("--keep", action="store_true")
@@ -1524,11 +1527,27 @@ def build_parser():
     return p
 
 
+def allowed_projects():
+    """The project names from LIVE_CHECK_PROJECTS, or None when one is not a plain name."""
+    raw = os.environ.get(PROJECTS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_PROJECTS
+    names = tuple(x.strip() for x in raw.split(",") if x.strip())
+    if not names or not all(PROJECT_NAME_RE.match(x) for x in names):
+        return None
+    return names
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    project = getattr(args, "project", DEFAULT_PROJECT)
-    if project not in ALLOWED_PROJECTS:
-        print("live-check: --project must be coach-mcp-staging or coach-mcp-dryrun")
+    allowed = allowed_projects()
+    if allowed is None:
+        print(f"live-check: {PROJECTS_ENV} must be a comma list of Railway project names (letters, digits, "
+              "'.', '_', '-')")
+        return 2
+    project = getattr(args, "project", allowed[0])
+    if project not in allowed:
+        print(f"live-check: --project must be one of {PROJECTS_ENV}: {', '.join(allowed)}")
         return 2
     if args.cmd == "data-shape":
         return cmd_data_shape(args)

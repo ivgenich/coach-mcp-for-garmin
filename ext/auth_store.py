@@ -443,7 +443,7 @@ class AuthStore:
             "LIMIT 1", {"now": now, "young": now - pending_ttl}).fetchone()
         if row is not None:
             return row["client_id"], 1
-        # Tier 2 (F11): every client now holds something only the owner can create.
+        # Tier 2: every client now holds something only the owner can create.
         # Take the one whose newest activity (its grants' last use or its own last
         # /authorize or /token) is oldest, if that is more than idle_days ago.
         row = db.execute(
@@ -565,7 +565,7 @@ class AuthStore:
 
         {"ok": True, "scopes", "resource"} or {"ok": False, "reason": "used" | "expired" | "missing",
         "revoked": (grant_id, client_id) or None}. A code that was already used revokes the
-        grant it produced (F13)."""
+        grant it produced."""
         with self._tx() as db:
             now = self.clock()
             cur = db.execute(
@@ -638,7 +638,7 @@ class AuthStore:
 
     def refresh_unused(self, token_hash: str) -> bool:
         """True while this refresh token is unused, unexpired and its grant is not revoked
-        (the F4 replay condition for the child of a rotated token)."""
+        (the replay condition for the child of a rotated token)."""
         with self._read() as db:
             row = db.execute(
                 "SELECT 1 FROM tokens t JOIN grants g ON g.grant_id = t.grant_id WHERE t.token_hash = ? "

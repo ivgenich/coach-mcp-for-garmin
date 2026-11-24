@@ -1,10 +1,10 @@
-"""The history scheduler (ROLE=enqueue): put the day's jobs in the queue, then exit (plan section 5b).
+"""The history scheduler (ROLE=enqueue): put the day's jobs in the queue, then exit.
 
 A Railway cron service runs this once a day (UTC). What to enqueue is history_jobs.scheduled_jobs(store, today)
-(B3, the owner of the job kinds): the daily sweep, which indexes the last days (late syncs), starts or continues
+(history_jobs owns the job kinds): the daily sweep, which indexes the last days (late syncs), starts or continues
 the backfill chain from the newest missing day (catch-up: newest first, one day at a time, stopping at the account
-start after 14 empty days), queues the weeks that became complete, and on Mondays re-checks the empty days of the
-last 30 once; plus a rebuild when the rules, text or numbers version changed. The trigger is "a day is
+start after 14 answered empty days), fetches again a few older days that are still not final, queues the weeks
+that became complete, and on Mondays re-checks the empty days of the last 30 once; plus a rebuild when the rules, text or numbers version changed. The trigger is "a day is
 missing", never the hour, so a DST change or a missed cron run loses nothing.
 
 Enqueueing is idempotent: a key that already has a queued or running job is skipped, so running this twice, or

@@ -1,4 +1,4 @@
-"""Tests for key_mode (GARMIN_AUTH=key; KEY contract tests K1, K3-K6, K9, K11, K16-K18).
+"""Tests for key_mode (GARMIN_AUTH=key).
 
 Fakes only, no network. Run from ext/:
 
@@ -231,7 +231,7 @@ def tearDownModule():
     KEY_LOG.handlers, KEY_LOG.propagate = _saved
 
 
-# --- K1: the config matrix -----------------------------------------------------------------------------------
+# --- the config matrix ---------------------------------------------------------------------------------------
 
 class Config(TempDir, unittest.TestCase):
     def key_env(self, **changes):
@@ -399,7 +399,7 @@ class Config(TempDir, unittest.TestCase):
             te._SECRETS = saved
 
 
-# --- K3: the adapter's requests ------------------------------------------------------------------------------
+# --- the adapter's requests ----------------------------------------------------------------------------------
 
 class Adapter(unittest.TestCase):
     def test_paths_and_params(self):
@@ -591,7 +591,7 @@ class Adapter(unittest.TestCase):
         self.assertIsNone(copy.copy(g).__dict__.get("missing"))
 
 
-# --- K4: the token manager -----------------------------------------------------------------------------------
+# --- the token manager ---------------------------------------------------------------------------------------
 
 class Tokens(TempDir, unittest.TestCase):
     def manager(self, answers=(), clock=None, delay=0.0, key=None):
@@ -880,7 +880,7 @@ class Tokens(TempDir, unittest.TestCase):
         self.assertEqual(lines, ["WARNING garmin_ext.key_mode garmin key mode: token request failed (unavailable)"])
 
 
-# --- K5 (fake parts) and install -----------------------------------------------------------------------------
+# --- fake parts and install ----------------------------------------------------------------------------------
 
 def _hooked_main():
     email = password = None
@@ -955,7 +955,7 @@ class Install(TempDir, unittest.TestCase):
                 km.install(fake_key(), "/tmp/x.json")
 
 
-# --- K6: the error table -------------------------------------------------------------------------------------
+# --- the error table -----------------------------------------------------------------------------------------
 
 def systemic(exc):
     group = te.classify_exception(exc)[0]
@@ -964,7 +964,7 @@ def systemic(exc):
 
 
 class ErrorTable(unittest.TestCase):
-    TABLE = (  # exception, group, systemic (D11)
+    TABLE = (  # exception, group, systemic
         (km.KeyModeLoginError(km.TEXT_KEY_REFUSED.format(code=400)), te.LOGIN, True),
         (km.KeyModeLoginError(km.TEXT_KEY_REFUSED.format(code=401)), te.LOGIN, True),
         (km.KeyModeLoginError(km.TEXT_KEY_REFUSED.format(code=403)), te.LOGIN, True),
@@ -1064,7 +1064,7 @@ class ErrorTable(unittest.TestCase):
         self.assertEqual(te.classify_exception(exc)[0], te.INTERNAL)
 
 
-# --- K16: no key, token or Garmin body in any rendered log record or client text -----------------------------
+# --- no key, token or Garmin body in any rendered log record or client text ----------------------------------
 
 class Leaks(TempDir, unittest.TestCase):
     def setUp(self):
@@ -1163,7 +1163,7 @@ class Leaks(TempDir, unittest.TestCase):
         self.check_clean(lines + ["".join(traceback.format_exception(type(exc), exc, exc.__traceback__))])
 
 
-# --- K11: import hygiene -------------------------------------------------------------------------------------
+# --- import hygiene ------------------------------------------------------------------------------------------
 
 class Imports(unittest.TestCase):
     def test_no_top_level_client_import(self):
@@ -1192,7 +1192,7 @@ class Imports(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "[]")
 
 
-# --- K17, K18: the list file and the hash pin ----------------------------------------------------------------
+# --- the list file and the hash pin --------------------------------------------------------------------------
 
 def _names(path):
     names = []
@@ -1363,7 +1363,7 @@ class RealClient(TempDir, unittest.TestCase):
                 km.selfcheck()
 
 
-# --- K9: parity with garminconnect on upstream's tools -------------------------------------------------------
+# --- parity with garminconnect on upstream's tools -----------------------------------------------------------
 
 @unittest.skipUnless(HAVE_UPSTREAM, NEEDS_UPSTREAM)
 class Parity(unittest.TestCase):

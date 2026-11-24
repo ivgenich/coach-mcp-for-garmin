@@ -6,6 +6,7 @@ fake Garmin athlete. Standard library only:
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import logging
 import os
@@ -145,7 +146,8 @@ class Harness(unittest.TestCase):
         self.garmin = FakeAthlete()
         self.vectors = mock.Mock()
         handlers = {}
-        hj.register_jobs(lambda kind, fn, garmin=True: handlers.__setitem__(kind, worker.Handler(fn, garmin)))
+        hj.register_jobs(lambda kind, fn, garmin=True, prepare=None:
+                         handlers.__setitem__(kind, worker.Handler(fn, garmin, prepare)))
         self.worker = worker.Worker(self.queue, store=self.store, garmin=self.garmin, handlers=handlers,
                                     clock=self.clock, heartbeat_s=0, worker_id="w-test")
 
@@ -155,6 +157,15 @@ class Harness(unittest.TestCase):
             n += 1
             self.assertLess(n, limit, "the queue never drained")
         return n
+
+    def run_until_idle(self, rounds=10):
+        """run_all, then move the clock past the retry backoff, until no index_day job is left waiting."""
+        for _ in range(rounds):
+            self.run_all()
+            if not self.rows("index_day", "queued"):
+                return
+            self.clock.t += max(jobqueue.BACKOFF_S[:2]) * 1.5
+        self.fail("jobs still waiting")
 
     def enqueue(self, kind, key, payload):
         self.queue.enqueue(kind, key, payload)
@@ -194,7 +205,7 @@ class Backfill(Harness):
         for r in days:
             self.assertEqual(r["final"], r["date"] <= TODAY - dt.timedelta(days=3), r["date"])
             self.assertEqual(r["empty"], r["date"] < ACCOUNT_START, r["date"])
-        # weeks with 7 final days were built; embed jobs are waiting for B5's handler
+        # weeks with 7 final days were built; embed jobs wait for their handler (not registered here)
         weeks = self.store.weeks(self.fp(), first_empty, TODAY)
         self.assertEqual(weeks[-1]["start"], dt.date(2026, 3, 16))
         self.assertTrue(all(w["numbers"]["mode"] == "key" and w["numbers"]["load_acute"] is None for w in weeks))
@@ -211,11 +222,83 @@ class Backfill(Harness):
     def test_a_second_sweep_refetches_only_the_open_days(self):
         self.enqueue("sweep", "sweep:1", {})
         self.run_all()
+        floor = dt.date.fromisoformat(self.store.meta_get(hs.META_BACKFILL_FLOOR))
+        open_days = [(TODAY - dt.timedelta(days=d)).isoformat() for d in (1, 2)]
+        probes = [(floor - dt.timedelta(days=n)).isoformat() for n in hj.PROBE_DAYS]
         before = len(self.garmin.calls)
         self.enqueue("sweep", "sweep:2", {})
         self.run_all()
         refetched = sorted({c[1] for c in self.garmin.calls[before:]})
-        self.assertEqual(refetched, sorted((TODAY - dt.timedelta(days=d)).isoformat() for d in (1, 2)))
+        self.assertEqual(refetched, sorted(open_days + probes))
+        # The probes found nothing: the floor stays, and each probe day is fetched once only.
+        self.assertEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR), floor.isoformat())
+        before = len(self.garmin.calls)
+        self.enqueue("sweep", "sweep:3", {})
+        self.run_all()
+        self.assertEqual(sorted({c[1] for c in self.garmin.calls[before:]}), sorted(open_days))
+
+    def test_garmin_unavailable_days_never_stop_the_backfill_and_are_fetched_again(self):
+        # 20 days in a row on which every call answers 503: not empty days, so no floor there.
+        bad = [ACCOUNT_START + dt.timedelta(days=i) for i in range(10, 30)]
+        err = tws.GarminConnectConnectionError("503 Server Error: Service Unavailable")
+        for d in bad:
+            for name in ("get_stats", "get_sleep_data", "get_hrv_data", "connectapi"):
+                self.garmin.fail[(name, d.isoformat())] = err
+        self.enqueue("sweep", "sweep:1", {})
+        self.run_until_idle(rounds=3 * len(bad) + 5)
+        self.assertEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR),
+                         (ACCOUNT_START - dt.timedelta(days=hx.EMPTY_STOP_DAYS)).isoformat())
+        rows = {r["date"]: r for r in self.store.days(self.fp(), bad[0], bad[-1])}
+        self.assertEqual(sorted(rows), bad)
+        for r in rows.values():
+            self.assertFalse(r["final"], r["date"])
+            self.assertEqual(sorted(r["numbers"]["missing"]), sorted(hx.SOURCES))
+        # 3 tries each (the first two are retried with backoff), then stored open.
+        self.assertEqual(len(self.garmin.names("get_stats")) - len(self.store.days(self.fp(), bad[0] - dt.timedelta(
+            days=400), TODAY)), 2 * len(bad))
+        # Garmin is back: each sweep fetches a few of the open days again, until all are final.
+        self.garmin.fail.clear()
+        for n in range(1, 10):
+            before = len(self.garmin.names("get_stats"))
+            self.enqueue("sweep", f"sweep:again{n}", {})
+            self.run_until_idle()
+            again = {c[1] for c in self.garmin.names("get_stats")[before:]} & {d.isoformat() for d in bad}
+            self.assertLessEqual(len(again), hj.REFETCH_PER_SWEEP)
+        rows = self.store.days(self.fp(), bad[0], bad[-1])
+        self.assertTrue(all(r["final"] and not r["empty"] and r["numbers"]["missing"] == [] for r in rows))
+
+    def test_an_open_day_that_failed_again_waits_for_the_late_sweep(self):
+        fp = "e" * 64
+        self.store.meta_set(hs.META_ACCOUNT, fp)
+        old = TODAY - dt.timedelta(days=60)
+        self.store.upsert_day(fp, old, {"mode": "key", "missing": ["hrv"]}, False, rechecked=True)
+        hj.sweep(*self.ctx({}))
+        self.assertNotIn(f"index_day:{old}", {r.key for r in self.rows("index_day")})
+        hj.sweep(*self.ctx({"late": True}))
+        queued = [r for r in self.rows("index_day") if r.key == f"index_day:{old}"]
+        self.assertEqual([r.payload for r in queued], [{"date": old.isoformat(), "recheck": True}])
+
+    def test_a_probe_before_the_floor_finds_older_data_after_a_long_break(self):
+        # Data from ACCOUNT_START on and in an older stretch, a 40-day break (Garmin answers, no data) between.
+        old_from, old_to = ACCOUNT_START - dt.timedelta(days=70), ACCOUNT_START - dt.timedelta(days=41)
+        has = self.garmin._has
+        self.garmin._has = lambda day: has(day) or old_from <= dt.date.fromisoformat(day) <= old_to
+        self.enqueue("sweep", "sweep:1", {})
+        self.run_all()
+        floor = ACCOUNT_START - dt.timedelta(days=hx.EMPTY_STOP_DAYS)
+        self.assertEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR), floor.isoformat())
+        self.assertEqual(self.store.days(self.fp(), old_from, old_to), [])
+        with self.assertLogs("garmin_ext.history", "INFO") as logs:
+            self.enqueue("sweep", "sweep:2", {})
+            self.run_all()
+        self.assertIn("data found before the backfill floor", "\n".join(logs.output))
+        rows = self.store.days(self.fp(), old_from, old_to)
+        self.assertEqual(len(rows), (old_to - old_from).days + 1)
+        self.assertTrue(all(not r["empty"] for r in rows))
+        # The break is filled in, and the new floor is below the older stretch.
+        self.assertEqual(self.store.missing_days(self.fp(), old_from, floor), [])
+        new_floor = self.store.meta_get(hs.META_BACKFILL_FLOOR)
+        self.assertEqual(new_floor, (old_from - dt.timedelta(days=hx.EMPTY_STOP_DAYS)).isoformat())
 
     def test_running_a_day_twice_changes_nothing(self):
         d = (TODAY - dt.timedelta(days=10)).isoformat()
@@ -227,6 +310,11 @@ class Backfill(Harness):
         self.run_all()
         self.assertEqual(len(self.garmin.calls), calls)
         self.assertEqual(self.store.days(self.fp(), row["date"], row["date"])[0], row)
+
+    def test_a_stored_final_day_with_a_failed_source_does_not_count_as_empty(self):
+        self.assertTrue(hx.is_answered_empty({"mode": "key", "missing": []}))
+        self.assertFalse(hx.is_answered_empty({"mode": "key", "missing": ["hrv"]}))
+        self.assertFalse(hx.is_answered_empty({"mode": "key", "rhr": 50, "missing": []}))
 
     def test_late_sweep_rechecks_empty_days_once(self):
         self.garmin.start = TODAY - dt.timedelta(days=8)
@@ -293,6 +381,60 @@ class Failures(Harness):
         self.assertFalse(row["final"])
         self.assertIn("hrv", row["numbers"]["missing"])
 
+    def test_a_403_is_not_retried_and_the_day_can_be_final(self):
+        # tool_errors groups a 403 with the 5xx answers; it does not go away on a retry.
+        self.garmin.fail["get_hrv_data"] = tws.GarminConnectConnectionError(
+            "API client error (403): 403 Client Error: Forbidden")
+        job, ctx = self.ctx({"date": "2026-03-10"})          # first attempt: no retry, no exception
+        hj.index_day(job, ctx)
+        row = self.store.days(self.fp(), dt.date(2026, 3, 10), dt.date(2026, 3, 10))[0]
+        self.assertTrue(row["final"])
+        self.assertEqual(row["numbers"]["missing"], ["hrv"])
+        self.assertEqual(row["numbers"]["rhr"], 50)
+        # Before the account start every other source answers empty: still not an answered empty day.
+        before = ACCOUNT_START - dt.timedelta(days=3)
+        _payloads, degraded, answered = hj.fetch_day(ctx, job, before)
+        self.assertFalse(degraded)
+        self.assertFalse(answered)
+        self.assertTrue(hj._forbidden("GarminConnectConnectionError: API Error 403 - Forbidden"))
+        for text in ("API Error 503 - Service Unavailable", "(403) then (502)", "Connection error: timed out"):
+            self.assertFalse(hj._forbidden(text), text)
+
+    def test_a_5xx_is_still_retried(self):
+        self.garmin.fail["get_hrv_data"] = tws.GarminConnectConnectionError("API Error 503 - Service Unavailable")
+        job, ctx = self.ctx({"date": "2026-03-10"})
+        with self.assertRaises(tws.GarminConnectConnectionError):
+            hj.index_day(job, ctx)
+
+    def test_no_data_is_an_answer_on_the_fetch_path_and_in_the_stored_row(self):
+        day = ACCOUNT_START - dt.timedelta(days=3)          # Garmin has nothing that day
+        self.garmin.fail[("get_hrv_data", day.isoformat())] = tws.GarminConnectConnectionError(
+            "API client error (404): 404 Client Error: Not Found")
+        self.enqueue("index_day", "index_day:a", {"date": "2026-03-10"})   # sets the account fingerprint
+        self.run_all()
+        job, ctx = self.ctx({"date": day.isoformat()})
+        _payloads, degraded, answered = hj.fetch_day(ctx, job, day)
+        self.assertEqual((degraded, answered), (False, True))
+        hj.index_day(job, ctx)
+        row = self.store.days(self.fp(), day, day)[0]
+        self.assertEqual(row["numbers"]["missing"], [])
+        self.assertTrue(hx.is_answered_empty(row["numbers"]))
+        # Rows stored before this rule may list a no-data source: they read as not answered empty.
+        self.assertFalse(hx.is_answered_empty({"mode": "key", "missing": ["hrv"]}))
+
+    def test_a_day_that_changed_after_the_prepare_step_is_deferred_not_fetched(self):
+        self.enqueue("index_day", "index_day:a", {"date": "2026-03-10"})   # sets the account fingerprint
+        self.run_all()
+        calls = len(self.garmin.calls)
+        day = "2026-03-11"                                   # not stored: prepare would have fetched it
+        job, ctx = self.ctx({"date": day})
+        ctx.prepared = {"day": day, "fetched": None}         # what prepare returns for a day already final
+        with self.assertRaises(jobqueue.Defer) as cm:
+            hj.index_day(job, ctx)
+        self.assertEqual(cm.exception.group, "prepare_stale")
+        self.assertEqual(len(self.garmin.calls), calls)
+        self.assertEqual(self.store.days(self.fp(), dt.date(2026, 3, 11), dt.date(2026, 3, 11)), [])
+
     def test_another_account_stops_indexing(self):
         self.enqueue("index_day", "index_day:a", {"date": "2026-03-10"})
         self.run_all()
@@ -321,6 +463,39 @@ class Failures(Harness):
         self.assertEqual(self.store.meta_get(hs.META_INDEX_MODE), "mixed")
         self.assertEqual([hj.index_mode(a, b) for a, b in ((None, "full"), ("full", "full"), ("mixed", "key"))],
                          ["full", "full", "mixed"])
+
+    def test_garmin_calls_run_before_the_jobs_transaction(self):
+        state = {"open": False, "in_txn_calls": 0}
+        real = self.queue.transaction
+
+        @contextlib.contextmanager
+        def tracked():
+            state["open"] = True
+            try:
+                with real() as conn:
+                    yield conn
+            finally:
+                state["open"] = False
+
+        enter = self.garmin._enter
+
+        def watched(name, day):
+            state["in_txn_calls"] += state["open"]
+            enter(name, day)
+
+        self.queue.transaction = tracked
+        self.garmin._enter = watched
+        with mock.patch.dict(os.environ, {"GARMIN_AUTH": "full"}):
+            self.enqueue("index_day", "index_day:a", {"date": "2026-03-10"})
+            self.run_all()
+            for d in range(9, 16):
+                self.store.upsert_day(self.fp(), dt.date(2026, 3, d), {"mode": "full", "missing": []}, True)
+            self.enqueue("build_week", "build_week:x", {"start": "2026-03-09"})
+            self.run_all()
+        self.assertEqual(len(self.garmin.names("get_stats")), 1)
+        self.assertEqual(len(self.garmin.names("get_training_status")), 1)
+        self.assertEqual(state["in_txn_calls"], 0)
+        self.assertEqual(len(self.store.weeks(self.fp(), dt.date(2026, 3, 9), dt.date(2026, 3, 9))), 1)
 
     def test_today_is_never_indexed(self):
         self.enqueue("index_day", "index_day:x", {"date": TODAY.isoformat()})
@@ -403,8 +578,9 @@ class Retention(Harness):
 
     def test_register_jobs(self):
         got = {}
-        hj.register_jobs(lambda kind, fn, garmin=True: got.__setitem__(kind, garmin))
-        self.assertEqual(got, {"index_day": True, "build_week": True, "sweep": False, "rebuild": False})
+        hj.register_jobs(lambda kind, fn, garmin=True, prepare=None: got.__setitem__(kind, (garmin, prepare)))
+        self.assertEqual(got, {"index_day": (True, hj.prepare_index_day), "build_week": (True, hj.prepare_build_week),
+                               "sweep": (False, None), "rebuild": (False, None)})
         self.assertIn("history_jobs", worker.HANDLER_MODULES)
 
 

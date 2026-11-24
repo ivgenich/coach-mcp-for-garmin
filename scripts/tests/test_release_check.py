@@ -11,7 +11,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import livefakes  # noqa: E402
+import livefakes
 
 ALL_IDS = ["R1", "R2", "R3", "R4", "R6", "R7", "R8", "R9", "R10"]
 
@@ -66,7 +66,8 @@ class GoodRepoTest(Base):
         self.assertIn("PASS R4 tag: v1.0.0 does not exist yet", out)
         self.assertIn("INFO R5 remotes: 0 (this script never pushes)", out)
         self.assertIn("PASS R6 identity: repo-local user.email is a GitHub noreply address; every author and "
-                      "committer email in 2 commits is one too; every date offset is +0000", out)
+                      "committer email in 2 commits is one too; every date offset in the 2 commits of HEAD's "
+                      "history is +0000", out)
         self.assertIn("PASS R7 tracked files: .gitignore, LICENSE, README.md, CHANGELOG.md, SECURITY.md present; "
                       "nothing of the forbidden kinds", out)
         self.assertIn("PASS R8 secrets: gitleaks 8.30.1 found nothing in the HEAD tree or the history", out)
@@ -206,7 +207,8 @@ class DateTest(Base):
         self.repo.commit("late", env={"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
         code, out = self.rc()
         self.assertEqual(self.status(out, "R2"), "PASS", out)
-        self.assertIn("FAIL R6 identity: 1 of 3 commits carry a local time zone offset; commit with TZ=UTC", out)
+        self.assertIn("FAIL R6 identity: 1 of 3 commits of HEAD's history carry a local time zone offset; commit "
+                      "with TZ=UTC", out)
         self.assertNotIn("+1400", out)
         self.repo.write("CHANGELOG.md", "## [Unreleased]\n\n## [1.0.0] - 2026-11-18\n")
         self.repo.git("commit", "-q", "-a", "--amend", "--no-edit",
@@ -219,7 +221,8 @@ class DateTest(Base):
         self.repo.commit("tokyo", env={"TZ": "Asia/Tokyo"})
         self.repo.sync_changelog()
         code, out = self.rc()
-        self.assertIn("FAIL R6 identity: 1 of 4 commits carry a local time zone offset; commit with TZ=UTC", out)
+        self.assertIn("FAIL R6 identity: 1 of 4 commits of HEAD's history carry a local time zone offset; commit "
+                      "with TZ=UTC", out)
         self.assertNotIn("+0900", out)
 
     def test_tag_zone_and_tagger(self):
@@ -232,6 +235,63 @@ class DateTest(Base):
         code, out = self.rc("--expect-tag")
         self.assertIn("the tag's tagger email is not a GitHub noreply address", out)
         self.assertNotIn("tagger@example.net", out)
+
+
+class OffsetScopeTest(Base):
+    """Offsets are checked only after the newest release tag, or after --since / the baseline."""
+
+    def old_local_commit(self):
+        self.repo.write("old.txt", "old\n")
+        self.repo.commit("old local", env={"TZ": "Asia/Tokyo"})
+
+    def test_only_commits_after_the_previous_tag(self):
+        self.old_local_commit()
+        self.repo.git("tag", "-a", "v0.9.0", "-m", "0.9.0")
+        self.repo.write("new.txt", "new\n")
+        self.repo.commit("new")
+        self.repo.sync_changelog()
+        code, out = self.rc()
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"PASS R6 identity: .* every date offset in the [12] commits since v0\.9\.0 is "
+                              r"\+0000\n")
+        # the release tag itself is not the previous tag
+        self.repo.git("tag", "-a", "v1.0.0", "-m", "1.0.0")
+        code, out = self.rc("--expect-tag")
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"since v0\.9\.0 is \+0000; the tag's tagger too\n")
+        self.repo.git("tag", "-d", "v1.0.0")
+        self.repo.write("late.txt", "late\n")
+        self.repo.commit("late local", env={"TZ": "Asia/Tokyo"})
+        self.repo.sync_changelog()
+        code, out = self.rc()
+        self.assertRegex(out, r"FAIL R6 identity: 1 of [23] commits since v0\.9\.0 carry a local time zone offset")
+        self.assertOnlyFails(out, "R6")
+
+    def test_since_commit(self):
+        self.old_local_commit()
+        base = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.sync_changelog()
+        code, out = self.rc()
+        self.assertEqual(self.status(out, "R6"), "FAIL", out)
+        code, out = self.rc("--since", base)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"commits after commit {base[:7]} is +0000", out)
+        code, out = self.rc("--since", base + "^")
+        self.assertEqual(self.status(out, "R6"), "FAIL", out)
+
+    def test_bad_since(self):
+        for since in ("0" * 40, "--all", "no-such-ref"):
+            with self.subTest(since=since):
+                code, out = self.rc(f"--since={since}")
+                self.assertEqual(code, 2, out)
+                self.assertIn("release-check: --since is not a commit in HEAD's history", out)
+
+    def test_baseline_is_a_full_commit_id(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("release_check", livefakes.RELEASE_CHECK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertRegex(mod.BASELINE, r"^[0-9a-f]{40}$")
 
 
 class DenylistTest(Base):
@@ -323,7 +383,7 @@ class StaticTest(unittest.TestCase):
             text = f.read()
         ast.parse(text, feature_version=(3, 10))
         self.assertIn("python3 scripts/release-check.py --version 1.0.0 [--denylist FILE] [--expect-tag] "
-                      "[--repo PATH]", text)
+                      "[--since COMMIT]", text)
         self.assertNotRegex(text, r"\b(push|commit|tag -a)\b.*check=True")
 
 

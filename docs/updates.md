@@ -12,7 +12,9 @@ newest first, in [CHANGELOG.md](../CHANGELOG.md). For a version MAJOR.MINOR.PATC
   says what to change.
 
 The server reports its version to clients as `serverInfo.version`. Each release has a
-`vX.Y.Z` tag and an entry on the repository's **Releases** page.
+`vX.Y.Z` tag and an entry on the repository's **Releases** page. If no release is listed yet,
+stay on `main`: the commands below then use `git pull` in place of `git fetch --tags` and
+`git checkout vX.Y.Z`.
 
 ## The public API
 
@@ -50,7 +52,8 @@ MAJOR release here, or the upstream pin stays where it is.
 Your Garmin login or key and your Claude sign-ins stay, so you don't reconnect Claude.
 
 - Railway with deploy.sh: in your clone, `git fetch --tags`, `git checkout vX.Y.Z` (the release
-  you want), then `./scripts/deploy.sh`.
+  you want), then `./scripts/deploy.sh`. With history search on, also redeploy the worker and the
+  scheduler from the same checkout ([History worker](history-worker.md#stopping-redeploying-forgetting)).
 - Docker: in the project folder, `git fetch --tags`, `git checkout vX.Y.Z` (the release you
   want), then `docker compose up -d --build`. Your settings and the volume stay.
 
@@ -66,7 +69,8 @@ Roll back if a new version misbehaves: redeploy the previous deployment or image
 Railway: dashboard → the service → **Deployments** → the last deployment from before the
 change → **Redeploy**. The `/data` volume (Garmin login) is untouched.
 
-With Docker: `git checkout` the previous release tag, then `docker compose up -d --build`. If a
+With Docker: `git checkout` the previous release tag (on `main`, the previous commit), then
+`docker compose up -d --build`. If a
 release changes the sign-in database, its CHANGELOG entry says whether rolling back is safe.
 
 ## Support

@@ -58,7 +58,7 @@ expect every tool in `config/enabled-tools.txt`, or in `key` mode in
 it). The tool-error checks call `get_daily_status` with an impossible date, which never
 reaches Garmin, and print SKIP when that tool is off. `scripts/test-connector.sh` checks the
 first steps of the sign-in, and the old handshake when `MCP_BEARER_TOKEN` is set. The version
-check expects the version of your clone's checkout; check out the release you deployed, or
-pass `--expect-version <version>`. A tool call's answer holds your Garmin data, so the script
+check expects the version of your clone's checkout; check out the release you deployed (or
+the `main` commit, if no release is listed yet), or pass `--expect-version <version>`. A tool call's answer holds your Garmin data, so the script
 shows it only for a server on your own computer; `--preview` shows its first 120 characters
 anyway.

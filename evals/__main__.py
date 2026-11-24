@@ -214,7 +214,7 @@ def _sdk_version() -> str:
         import anthropic
 
         return anthropic.__version__
-    except Exception:
+    except Exception:  # noqa: BLE001 - the SDK version is only a label in the report
         return ""
 
 

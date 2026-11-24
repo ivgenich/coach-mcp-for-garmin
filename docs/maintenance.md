@@ -5,8 +5,8 @@
 The Garmin login tokens last about 6 months. When they expire, tool calls answer `Error: Garmin login missing or
 expired. ...`, while `/readyz` can still say 200. Run `railway ssh`, then
 `garmin-mcp-auth --token-path /data/tokens --force-reauth`, then
-`kill "$(cat /tmp/garmin-mcp.pid)"` (the server restarts with the new tokens in about 3 s),
-then `exit`.
+`kill "$(cat /tmp/garmin-mcp.pid)"` (the server restarts with the new tokens within a few
+seconds, and first makes the files the login wrote as root its own), then `exit`.
 
 With Docker: in the project folder, run
 `docker compose exec app garmin-mcp-auth --token-path /data/tokens --force-reauth`, then
@@ -100,8 +100,27 @@ it: `railway variable delete MCP_BEARER_TOKEN`.
 The Dockerfile pins `GARMIN_MCP_REF` to a commit, so a plain
 redeploy rebuilds the same version. To take a fix, set it to a newer commit from
 [the repo](https://github.com/Taxuspt/garmin_mcp/commits/main), regenerate
-`constraints.txt` from that commit's `uv.lock`, and redeploy. The build fails,
+`constraints.txt` from that commit's `uv.lock`, regenerate `config/requirements-core.txt` and `config/requirements-build.txt`
+(the same versions with their hashes; its header has the commands), and redeploy. The build fails,
 instead of the server, if the update breaks a hook or a helper `ext/` relies on.
 Keep the `mcp==2.3.0` pin and its 2.x dependencies when you regenerate: upstream's
 `uv.lock` still pins mcp 1.x (see [MCP protocol](protocol.md)). Once upstream itself
 moves to mcp 2.x (its issue #344), `ext/mcp2_compat.py` can go.
+
+The two base images (`caddy` and `python` in the Dockerfile) are pinned by tag and by digest.
+Dependabot proposes new ones; to bump by hand, change the tag and put in the digest that
+`docker buildx imagetools inspect <image>:<tag>` prints. Keep the Caddy version equal to
+`scripts/ci-tools.sh` and the Python version equal to `FULL_PYTHON` in
+`.github/workflows/ci.yml`.
+
+## Release (for maintainers)
+
+Set `VERSION` in `ext/version.py` to the new version (the release check fails if it
+differs), then run `scripts/release-check.py` before tagging (its header lists the checks). Commit and tag
+with `TZ=UTC` and your GitHub noreply address: the check refuses local time zone offsets on
+commits made after the previous release tag (before the first tag, after the baseline commit
+named in the script; `--since COMMIT` overrides it), and on the tag itself. Add a
+`## [X.Y.Z] - <UTC date>` section under `## [Unreleased]` in `CHANGELOG.md`, keep the
+`## [Unreleased]` line, then create an annotated tag `vX.Y.Z` on that commit. Push the
+tag and publish a GitHub Release from it with that version's `CHANGELOG.md` section as its
+notes.

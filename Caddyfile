@@ -42,11 +42,12 @@
 (garmin_mcp) {
 	reverse_proxy 127.0.0.1:{$GARMIN_MCP_PORT:8000} {
 		# The server is bound to 127.0.0.1, so the SDK's DNS-rebinding guard
-		# on /mcp answers 421 to any other Host and 403 to a non-local Origin.
-		# Present the loopback Host and drop Origin; the token check in Python
-		# is the gate (there is no Origin check yet).
+		# on /mcp answers 421 to any other Host: present the loopback Host.
+		# Origin goes through: Python checks it on /mcp (403 unless it is
+		# PUBLIC_URL's, Claude's or in ALLOWED_ORIGINS; ext/owner_auth.py)
+		# and then removes it, so the SDK's loopback-only Origin rule never
+		# sees it.
 		header_up Host {upstream_hostport}
-		header_up -Origin
 		# The caller's address for the sign-in rate limits (ext/auth_http.py).
 		# Replaces any X-Client-IP the caller sent.
 		header_up X-Client-IP {client_ip}

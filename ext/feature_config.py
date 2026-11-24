@@ -55,7 +55,7 @@ ROLES = ("app", "worker", "enqueue")
 SECRET_ENVS = (OTLP_HEADERS_ENV, DATABASE_URL_ENV, TOKEN_KEY_ENV)
 # OpenTelemetry variables the server sets itself: one of them set by hand
 # could add a resource attribute, an exporter or a sampler the export filter
-# was not written for (plan section 4).
+# was not written for.
 REFUSED_OTEL = ("OTEL_RESOURCE_ATTRIBUTES", "OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER",
                 "OTEL_SERVICE_NAME", "OTEL_METRICS_EXEMPLAR_FILTER", "OTEL_TRACES_SAMPLER",
                 "OTEL_TRACES_SAMPLER_ARG", "OTEL_PROPAGATORS")

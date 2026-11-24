@@ -67,6 +67,53 @@ class Rules(unittest.TestCase):
             q.claim("bad id with spaces")
 
 
+class Timeouts(unittest.TestCase):
+    """Every history connection carries the same statement, lock and idle-in-transaction limits."""
+
+    def test_pg_options(self):
+        self.assertEqual(jobqueue.pg_options(), "-c statement_timeout=30000 -c lock_timeout=10000 "
+                                                "-c idle_in_transaction_session_timeout=300000")
+        self.assertIn("-c statement_timeout=0 ", jobqueue.pg_options(0))
+
+    def test_connect_passes_them(self):
+        import sys
+        import types
+        from unittest import mock
+
+        seen = {}
+        fake = types.ModuleType("psycopg")
+        fake.connect = lambda dsn, **kw: seen.update(kw) or "conn"
+        with mock.patch.dict(sys.modules, {"psycopg": fake}):
+            self.assertEqual(jobqueue.connect("postgresql://h/db", application_name="x"), "conn")
+        self.assertEqual(seen["options"], jobqueue.pg_options())
+        self.assertEqual(seen["connect_timeout"], jobqueue.CONNECT_TIMEOUT_S)
+
+    def test_history_store_and_retrieval_use_them(self):
+        import sys
+        import types
+        from unittest import mock
+
+        import history_retrieval as hr
+        import history_store as hs
+
+        seen = []
+        fake = types.ModuleType("psycopg")
+        fake.Error = Exception
+        fake.connect = lambda dsn, **kw: seen.append(kw) or "conn"
+        fake_json = types.ModuleType("psycopg.types.json")
+        fake_json.Jsonb = dict
+        with mock.patch.dict(sys.modules, {"psycopg": fake, "psycopg.types": types.ModuleType("psycopg.types"),
+                                           "psycopg.types.json": fake_json}):
+            store = hs.PgHistoryStore("postgresql://h/db")
+            store._connect()
+            store._connect(autocommit=True, statement_timeout_ms=0)
+            hr._pg_connect("postgresql://h/db")
+        self.assertEqual([kw["options"] for kw in seen],
+                         [jobqueue.pg_options(), jobqueue.pg_options(0), jobqueue.pg_options()])
+        self.assertEqual(hr._engine_connect_args(), {"connect_timeout": jobqueue.CONNECT_TIMEOUT_S,
+                                                     "options": jobqueue.pg_options()})
+
+
 class MemoryQueue(unittest.TestCase):
     def setUp(self):
         self.clock = Clock()
@@ -81,7 +128,7 @@ class MemoryQueue(unittest.TestCase):
         self.assertIsNotNone(self.q.enqueue("index_day", "index_day:2026-11-23"), "a done job frees the key")
 
     def test_enqueue_while_running_runs_it_again(self):
-        """Review fix: an enqueue while the same key runs is not lost; the job runs again after it completes."""
+        """An enqueue while the same key runs is not lost; the job runs again after it completes."""
         key = "index_day:2026-11-23"
         first = self.q.enqueue("index_day", key, {"date": "2026-11-23"})
         job = self.q.claim("w1")
@@ -123,7 +170,7 @@ class MemoryQueue(unittest.TestCase):
         self.assertEqual(next(r for r in self.q.rows() if r.key == key).status, DONE)
 
     def test_payloads_merge_for_queued_and_running_keys(self):
-        """Review fix S3: a running key took the newest payload (enqueue {"recheck": true} then
+        """A running key took the newest payload (enqueue {"recheck": true} then
         {"backfill": true} lost recheck) and a queued key kept the first. Both now merge: the new keys win,
         a flag that was true stays true. A queued key still returns None."""
         key = "index_day:2026-11-23"
@@ -160,7 +207,7 @@ class MemoryQueue(unittest.TestCase):
         self.assertEqual(jobqueue.merge_payload(None, {"a": 1}), {"a": 1})
 
     def test_a_handler_that_enqueues_its_own_key_ends(self):
-        """Review fix S3: a handler that enqueues its own running key ran again for ever; now at most
+        """A handler that enqueues its own running key ran again for ever; now at most
         MAX_RERUNS times in a row, then the enqueue returns None and the job ends done."""
         import worker
 
@@ -416,7 +463,7 @@ class PgQueue(unittest.TestCase):
         self.assertIsNone(self.q.enqueue("index_day", "index_day:2026-11-19"), "a queued job still holds its key")
 
     def test_payloads_merge_and_reruns_end(self):
-        """Review fix S3: the SQL merges payloads as merge_payload() does (queued and running keys), a queued key
+        """The SQL merges payloads as merge_payload() does (queued and running keys), a queued key
         returns None, and a job reruns at most MAX_RERUNS times in a row."""
         key = "index_day:2026-11-18"
         first = self.q.enqueue("index_day", key, {"date": "2026-11-18", "recheck": True})

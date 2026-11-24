@@ -27,7 +27,8 @@ their key paths, for debugging). A full status takes about a dozen Garmin calls,
 parallel with per-call timeouts; a call that fails marks its values missing instead of
 failing the status. The exception: when the first call fails because the Garmin login is
 missing or expired, Garmin's rate limit, or the network (no other call is then made), the
-tool answers with that error instead of a status. The calibration recipe then ends with
+tool answers with that error instead of a status. A rate limit on any later call still
+starts the server's 15-minute call guard ([Troubleshooting](troubleshooting.md)). The calibration recipe then ends with
 "calibration failed: no thresholds": fix the Garmin login and run it again.
 
 ## Daily status rules v1
@@ -82,7 +83,10 @@ interval step inside a repeat of 2 or more. A range alone proves little: workout
 from TrainingPeaks put pace ranges even on easy single-step runs. Your lactate threshold
 and FTP are read from Garmin only when a workout needs them. A workout without steps
 counts as hard when its name says so, in English (interval, tempo, threshold, VO2, race,
-hard, brick). A name in another language does not count.
+hard, brick). A name in another language does not count. Phrases that say the opposite do
+not count either: "pre-race" and "post-race", "race" in a shakeout's name, "not hard" or "no
+hard", and a keyword with "-free" ("tempo-free"); any other keyword in the same name still
+does ("Intervals with recovery jogs" is hard).
 
 A workout is long when its estimated duration or distance reaches run 75 min / 15 km,
 bike 150 min / 70 km, swim 75 min / 3.5 km, other sports 90 min. The duration is Garmin's

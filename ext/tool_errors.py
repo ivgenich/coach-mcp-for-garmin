@@ -1,17 +1,16 @@
 """Put a failed tool call in one of six groups and write the short, fixed text the model sees.
 
-The groups are login, rate_limited, bad_input, no_data, unavailable and internal (step 1.3 contract, sections 4.2
-and 5.4-5.8, with amendments M2, M6 and M7). A failure arrives either as text (upstream answers "Error ...: ..."
+The groups are login, rate_limited, bad_input, no_data, unavailable and internal. A failure arrives either as text (upstream answers "Error ...: ..."
 instead of raising) or as an exception that reached the tool-call override. classify_text() and
-classify_exception() pick the group with the ordered table of section 5.6; client_text() gives the fixed text for
+classify_exception() pick the group with one ordered table (_TABLE); client_text() gives the fixed text for
 the client, source_phrase() the short phrase for a status report's sources, and redact() the one-line form of an
 original text for the server log.
 
 Caller values echoed in error texts (an id, a date, a tool name) never pick the group: they are blanked out of
 the copy the table reads, and texts this repository or upstream wrote for bad arguments are recognised by how they
-start (M7). An exception only gets the full table when the failure started in Garmin, the network, a timeout or
-this repository's own known failures (KnownFailure); any other exception is a bug in the server and is internal
-(M2), whatever its message says, unless it carries the Garmin login text.
+start. An exception only gets the full table when the failure started in Garmin, the network, a timeout or
+this repository's own known failures (KnownFailure); any other exception is a bug in the server and is internal,
+whatever its message says, unless it carries the Garmin login text.
 
 Standard library only (plus text_hygiene from this folder); imports on Python 3.10. Nothing here raises on any
 input, except client_text() on a programming error: an unknown group, or INTERNAL without a ref from new_ref().
@@ -33,8 +32,8 @@ IS_ERROR = {LOGIN: True, RATE_LIMITED: True, BAD_INPUT: True, NO_DATA: False, UN
 GROUP_PHRASE = {LOGIN: "Garmin login missing or expired", RATE_LIMITED: "Garmin rate limit",
                 BAD_INPUT: "Invalid input", NO_DATA: "No data:", UNAVAILABLE: "Garmin Connect did not answer",
                 INTERNAL: "Internal server error"}
-# Fixer (EV-SEC-2): the head may hold colons and runs up to 200 characters, matched lazily (contract 4.2 had
-# [^:\n]{1,80}), so a caller value before the colon cannot hide a failure.
+# The head may hold colons and runs up to 200 characters, matched lazily, so a caller value before the colon
+# cannot hide a failure.
 FAILURE_RE = re.compile(r"^Error(?: [^\n]{1,200}?)?: ")
 PLAIN_FAILURE_PREFIXES = ("Invalid date format:", "Date range too large", "end_date must be on or after start_date",
                           "Provide both start_date and end_date", "Unexpected response format",
@@ -44,7 +43,7 @@ PLAIN_FAILURE_PREFIXES = ("Invalid date format:", "Date range too large", "end_d
 ECHO_FAILURE_PREFIXES = ("Error downloading FIT data for activity ",)
 UPSTREAM_HINTS = ("Garmin Connect may be unreachable; check your network connection or try again later",)
 
-# Bad-input details (section 5.5).
+# Bad-input details.
 DETAIL_UNKNOWN_TOOL = "there is no tool with that name; check the tool list"
 DATE_DETAIL = "dates must be real calendar dates written YYYY-MM-DD"
 RANGE_MAX_DETAIL = "the date range is too long: at most {n} days"
@@ -60,7 +59,7 @@ GENERIC_DETAIL = "check the arguments against the tool description"
 
 DETAIL_MAX = 200  # a longer detail is cut to 197 characters and "..."
 
-# pydantic error type -> the words after the field name (section 5.5).
+# pydantic error type -> the words after the field name.
 _PROBLEM_WORDS = {
     "missing": "is required",
     "int_parsing": "must be a whole number", "int_type": "must be a whole number",
@@ -73,7 +72,7 @@ _PROBLEM_WORDS = {
 }
 _OTHER_PROBLEM = "has an invalid value"
 
-# Client texts (section 5.4): ASCII, at most 300 characters.
+# Client texts: ASCII, at most 300 characters.
 _CLIENT_TEXTS = {
     LOGIN: ("Error: Garmin login missing or expired. This server cannot read Garmin data until its owner signs in to "
             "Garmin again: run garmin-mcp-auth on the server, then restart it. Retrying will not help until then."),
@@ -89,7 +88,7 @@ _CLIENT_TEXTS = {
     INTERNAL: ("Error: Internal server error (ref {ref}). Retrying once later may help. If it fails again, tell the "
                "user; the server owner can find the details in the server log under this ref."),
 }
-# Key mode (GARMIN_AUTH=key, KEY D12 and 4.8) changes two texts only, after their first words: the login remedy is
+# Key mode (GARMIN_AUTH=key) changes two texts only, after their first words: the login remedy is
 # a new Personal API key, and the no-data hint names no tool key mode lacks. The other four groups are shared.
 _KEY_MODE_TEXTS = {
     LOGIN: ("Error: Garmin login missing or expired. This server cannot read Garmin data until its owner makes a new "
@@ -98,7 +97,7 @@ _KEY_MODE_TEXTS = {
               "or get_activities_by_date); repeating the same call will not help."),
 }
 
-# A date Garmin has no sleep for (live test B3: the night had not synced yet). Upstream's get_sleep_summary then
+# A date Garmin has no sleep for (for example a night that has not synced yet). Upstream's get_sleep_summary then
 # answers an empty JSON object, or one with only nulls, which tells the model nothing; launch answers this instead.
 NO_SLEEP_TEXT = ("No data: Garmin has no sleep recorded for this date. If the night just ended, the watch may not have "
                  "synced yet: sync it in the Garmin Connect app and ask again later. Repeating the call right away "
@@ -119,7 +118,7 @@ def is_empty_sleep_summary(text) -> bool:
     return isinstance(data, dict) and all(value is None for value in data.values())
 
 
-# Source phrases (section 5.7).
+# Source phrases for a status report's sources[*].error.
 _SOURCE_PHRASES = {LOGIN: "Garmin login missing or expired", RATE_LIMITED: "Garmin rate limit",
                    BAD_INPUT: "invalid input", NO_DATA: "no data from Garmin",
                    UNAVAILABLE: "Garmin Connect did not answer"}
@@ -135,7 +134,7 @@ class KnownFailure(Exception):
     BadArgument, NoData and SystemicFailure subclass it). classify_exception() gives them the full table."""
 
 
-# --- the table (section 5.6, with M2's "mfa required" in L1) -------------------------------------------
+# --- the table, top to bottom ----------------------------------------------------------------------------
 
 _L1 = re.compile(r"garmin login|garmin-mcp-auth|garmin authentication failed|authentication failed"
                  r"|authenticationerror|not authenticated|unauthori[sz]ed|refresh token|token exchange failed"
@@ -173,8 +172,8 @@ _TABLE = (
      UNAVAILABLE, None),
 )
 
-# M7: texts this repository or upstream writes for a bad argument, recognised by how they start (re.match on the
-# lstripped text), before row L1. The last two rows (B1's addition) read this module's own bad-input text back,
+# Texts this repository or upstream writes for a bad argument, recognised by how they start (re.match on the
+# lstripped text), before row L1. The last two rows read this module's own bad-input text back,
 # so a client text classifies to its own group and detail.
 _ANCHORED = (
     (re.compile(r"(?:error: )?date must be", _I), DATE_DETAIL),
@@ -203,13 +202,13 @@ _TAIL_ECHO_RE = re.compile(r"(, got: |\bunknown tool: ).*", _I | re.S)
 _UNKNOWN_TOOL_START_RE = re.compile(r"unknown tool:", _I)
 # The FIT tools' first step is int(activity_id): a numeric id comes back as digits, which pick no group, and any
 # other id fails there, with int()'s own words at the end of the text. Such a text is bad input, whatever the
-# caller's id before the colon says (M7).
+# caller's id before the colon says.
 _INT_FAILURE_WORDS = ("invalid literal for int() with base ", "for integer string conversion")
 
 _TEXT_MAX = 4000  # classify_text() reads at most this much
 _LINK_TEXT_MAX = 2000  # each exception message in a chain text is cut to this
 _CHAIN_MAX = 6
-# garmin_personal_api is Garmin's official Personal API client (key mode, KEY D11): an exception of it that slips
+# garmin_personal_api is Garmin's official Personal API client (key mode): an exception of it that slips
 # past key_mode's mapping is still read by the table.
 _GARMIN_MODULES = ("garminconnect", "garth", "requests", "urllib3", "httpx", "httpcore", "curl_cffi",
                    "garmin_personal_api")
@@ -224,7 +223,7 @@ def _safe_str(value):
         return value
     try:
         text = str(value)
-    except Exception:
+    except Exception:  # noqa: BLE001 - str() of an odd object: a failure text must not fail
         text = None
     if isinstance(text, str):
         return text
@@ -234,7 +233,7 @@ def _safe_str(value):
 def _type_name(value):
     try:
         name = type(value).__name__
-    except Exception:
+    except Exception:  # noqa: BLE001 - an odd object: a failure text must not fail
         name = None
     return name if isinstance(name, str) else "object"
 
@@ -242,7 +241,7 @@ def _type_name(value):
 def _attr(obj, name, default=None):
     try:
         return getattr(obj, name, default)
-    except Exception:
+    except Exception:  # noqa: BLE001 - an odd object's attribute: a failure text must not fail
         return default
 
 
@@ -314,8 +313,8 @@ def classify_text(text) -> tuple:
     """(group, detail or None) for a failure text. The detail is set for bad_input only. A FIT tool's text whose
     caller id failed int(), or is a number of 100 or more digits, is (BAD_INPUT, NUMBER_DETAIL) whatever the id
     and the words after it say. Otherwise reads the first 4,000
-    characters, removes UPSTREAM_HINTS, blanks caller echoes, tries the anchored bad-input rows (M7), then the
-    table of section 5.6 top to bottom; no match -> (INTERNAL, None). A non-str -> (INTERNAL, None)."""
+    characters, removes UPSTREAM_HINTS, blanks caller echoes, tries the anchored bad-input rows, then the
+    table top to bottom; no match -> (INTERNAL, None). A non-str -> (INTERNAL, None)."""
     if not isinstance(text, str):
         return INTERNAL, None
     if _int_echo_failure(text) or _long_id_echo(text):
@@ -378,9 +377,9 @@ def _validation_errors(exc):
     except TypeError:
         try:
             return errors()
-        except Exception:
+        except Exception:  # noqa: BLE001 - an odd errors() method: no field detail
             return []
-    except Exception:
+    except Exception:  # noqa: BLE001 - an odd errors() method: no field detail
         return []
 
 
@@ -393,14 +392,14 @@ def classify_exception(exc) -> tuple:
 
     The chain is `exc`, then each __cause__, else __context__ when it is not suppressed (at most 6 links,
     stopping on a repeat); `root` is its last link; the chain text joins "<Type>: <message>" of every link with
-    " <- " (each message cut to 2,000 characters). In order (amendments M2 and M7):
+    " <- " (each message cut to 2,000 characters). In order:
     1. a link that is a pydantic ValidationError (duck-typed) -> (BAD_INPUT, validation_detail(its errors)), and
        the chain text is "ValidationError: <that detail>": pydantic's message holds the rejected values, which are
-       the caller's data and never go to the log (D16);
+       the caller's data and never go to the log;
     2. `root` is a ToolError with no cause and no unsuppressed context whose text starts "Unknown tool:" ->
        (BAD_INPUT, DETAIL_UNKNOWN_TOOL);
     3. the origin (the first link that is not a ToolError wrapper with a cause) is table-eligible and its message
-       starts like a bad-argument text (the anchored rows of M7) -> that bad_input detail;
+       starts like a bad-argument text (the anchored rows) -> that bad_input detail;
     4. row L1 matches the chain text -> LOGIN, whatever the types;
     5. the origin is table-eligible (_eligible) -> the table over the chain text; otherwise INTERNAL.
     Echoes and UPSTREAM_HINTS are removed from the copy the rows read, link by link; the returned chain text is
@@ -462,7 +461,7 @@ def _first_errors(errors):
         return ()
     try:
         return list(itertools.islice(iter(errors), 3))
-    except Exception:
+    except Exception:  # noqa: BLE001 - an odd errors object: no field detail
         return ()
 
 
@@ -474,7 +473,7 @@ def validation_detail(errors) -> str:
     """The bad-input detail for pydantic validation errors (a list of dicts from ValidationError.errors()): for at
     most the first 3, "<field> <problem>" joined with "; ". The field is the error's loc joined with "." and
     kept to [A-Za-z0-9_.[]] and 64 characters ("an argument" when empty); the problem comes from the error's type
-    (section 5.5). Never reads "input" or "ctx". No usable error -> GENERIC_DETAIL. Longer than 200 characters ->
+    (_PROBLEM_WORDS). Never reads "input" or "ctx". No usable error -> GENERIC_DETAIL. Longer than 200 characters ->
     cut to 197 and "...". Any input is accepted."""
     parts = []
     for err in _first_errors(errors):
@@ -484,7 +483,7 @@ def validation_detail(errors) -> str:
             kind = err.get("type")
             problem = _PROBLEM_WORDS.get(kind, _OTHER_PROBLEM) if isinstance(kind, str) else _OTHER_PROBLEM
             parts.append(f"{_field(err.get('loc'))} {problem}")
-        except Exception:  # an odd mapping or loc: skip this error
+        except Exception:  # noqa: BLE001 - an odd mapping or loc: skip this error
             continue
     if not parts:
         return GENERIC_DETAIL
@@ -505,7 +504,7 @@ def _clean_detail(detail):
 
 
 def client_text(group, *, ref=None, detail=None, today=None, key_mode=False) -> str:
-    """The fixed text of section 5.4 for `group`: ASCII, at most 300 characters.
+    """The fixed client text for `group`: ASCII, at most 300 characters.
 
     BAD_INPUT takes `detail` (one of the *_DETAIL constants, validation_detail(), or the detail classify_text()
     returned; None -> GENERIC_DETAIL; made printable ASCII and cut to 200 characters). With DATE_DETAIL and
@@ -530,7 +529,7 @@ def client_text(group, *, ref=None, detail=None, today=None, key_mode=False) -> 
 
 
 def source_phrase(group, ref=None) -> str:
-    """The phrase of section 5.7 for a status report's sources[*].error. INTERNAL gives "internal error (ref
+    """The phrase for a status report's sources[*].error. INTERNAL gives "internal error (ref
     <ref>)" with a valid ref and "internal error" without one; an unknown group gives "internal error" too.
     Never raises."""
     if isinstance(group, str):
@@ -546,12 +545,12 @@ def new_ref() -> str:
     return secrets.token_hex(4)
 
 
-# Log redaction (section 5.8 as amended by M6), applied in this order. Fixer changes, each one tested:
-# - pattern 2 (EVE-3): the key may end a longer name (oauth_token, di_refresh_token, accessToken), a backslash may
+# Log redaction, applied in this order. Notes on the patterns, each one tested:
+# - pattern 2: the key may end a longer name (oauth_token, di_refresh_token, accessToken), a backslash may
 #   escape the quotes, and the value runs to a space, a quote or & , ; < > (a password may hold "!" or "@");
-# - pattern 3 (EVE-1, EV-SEC-1): an address starts where a run of address characters starts, so a long run with
-#   no "@" is read once, not once per position (the contract's form took 32 s for 100,000 characters).
-# KEY D14: the first row hides a Personal API key in Garmin's "Authorization: ApiKey <key>" header form, and row 3's
+# - pattern 3: an address starts where a run of address characters starts, so a long run with no "@" is read
+#   once, not once per position (a per-position form took 32 s for 100,000 characters).
+# The first row hides a Personal API key in Garmin's "Authorization: ApiKey <key>" header form, and row 3's
 # names gain api_?key (GARMIN_PERSONAL_API_KEY=..., "apiKey": "...").
 _REDACT = (
     (re.compile(r"(?i)\bapikey\s+[^\s\"'&,;<>]+"), "ApiKey <redacted>"),
@@ -575,7 +574,7 @@ _SECRETS_LOCK = threading.Lock()
 
 def register_secret(value) -> None:
     """From now on redact() replaces every occurrence of `value` (an exact str) with "<redacted>", before its
-    patterns run (KEY D14: launch registers the Personal API key, which no generic pattern may catch). A value
+    patterns run (launch registers the Personal API key, which no generic pattern may catch). A value
     that is not a str or is shorter than 8 characters is ignored (it would hide ordinary words). Never raises."""
     global _SECRETS
     if not isinstance(value, str) or len(value) < _SECRET_MIN:
@@ -597,7 +596,7 @@ def redact(text, limit=2000) -> str:
     at most `limit` long, so a multi-megabyte argument costs no more than a short one), text_hygiene.
     strip_invisible() (controls, line breaks and bidi become spaces or vanish, so a zero-width character cannot
     split a token), runs of spaces collapsed, every registered secret (register_secret()) replaced with
-    "<redacted>", the patterns of section 5.8 in order ("ApiKey <key>", bearer tokens, key=value secrets, email
+    "<redacted>", the _REDACT patterns in order ("ApiKey <key>", bearer tokens, key=value secrets, email
     addresses, long tokens; "rate limit:" becomes "rate limit -"), runs of spaces collapsed again,
     trimmed, then cut to `limit` (2000 when it is not an int) with an ellipsis. When the input was cut, the text
     after the last space, quote or & , ; < > becomes the ellipsis (all of it when there is none), so no part of a

@@ -12,6 +12,8 @@ serves streamable-http). The variables:
     MCP_BEARER_TOKEN       optional static header bearer for Claude Code or CI
     AUTH_DB                sqlite file for clients and tokens; default /data/auth.sqlite
     ALLOWED_REDIRECT_URIS  extra exact https:// redirect URIs, comma-separated
+    ALLOWED_ORIGINS        extra browser origins allowed to call /mcp, comma-separated
+    ORIGIN_CHECK           on (default) or off: the Origin check on /mcp
 
 config_from_environ() never prints or returns a secret in an error line.
 """
@@ -32,29 +34,32 @@ CONSENT_PATH = "/consent"
 ROOT_PRM_PATH = "/.well-known/oauth-protected-resource"
 MCP_PATH = "/mcp"
 CLAUDE_CALLBACKS = ("https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback")
+# Browser origins always allowed on /mcp besides PUBLIC_URL's (Claude's web apps).
+CLAUDE_ORIGINS = ("https://claude.ai", "https://claude.com")
 GRANT_TYPES = ("authorization_code", "refresh_token")
 VALID_SCOPES = ("offline_access",)
 DEFAULT_AUTH_DB = "/data/auth.sqlite"
 RAILWAY_DEPLOYMENT_VARS = ("RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID", "RAILWAY_DEPLOYMENT_ID")
 ACCESS_TTL = 3600                 # seconds
 REFRESH_TTL = 30 * 86400          # from issue; every rotation issues a fresh one (sliding)
-REFRESH_REUSE_GRACE = 120         # F4: idempotent replay window, seconds
+REFRESH_REUSE_GRACE = 30          # idempotent refresh replay window, seconds (memory only; SECURITY.md)
 CODE_TTL = 300
 PENDING_TTL = 600
 MAX_SECRET_FAILURES = 3
-MAX_PENDING_PER_CLIENT = 5        # F5: past it, that client's own oldest row is deleted
-MAX_CLIENTS = 200                 # F1
-# F5: global; when full, authorize() refuses. It is at least MAX_CLIENTS x
+MAX_PENDING_PER_CLIENT = 5        # past it, that client's own oldest row is deleted
+MAX_CLIENTS = 200                 # registered clients; past it, one is evicted
+# Global; when full, authorize() refuses. It is at least MAX_CLIENTS x
 # MAX_PENDING_PER_CLIENT (evicting a client deletes its rows), so strangers'
 # clients can never fill it and refuse the owner's sign-in; it only bounds the
 # table if those caps change.
 MAX_PENDING = MAX_CLIENTS * MAX_PENDING_PER_CLIENT
 MAX_EXTRA_REDIRECTS = 10
-MAX_STATE_LEN = 1024              # F12
-MAX_SCOPE_LEN = 512               # F12
-EVICT_IDLE_DAYS = 7               # F11, tier 2
+MAX_EXTRA_ORIGINS = 10
+MAX_STATE_LEN = 1024              # longer: /authorize refuses before storing
+MAX_SCOPE_LEN = 512               # longer: /authorize refuses before storing
+EVICT_IDLE_DAYS = 7               # eviction tier 2: idle this long
 
-# Secret and token rules (section 3 of the build contract).
+# Secret and token rules.
 OWNER_SECRET_MIN, OWNER_SECRET_MAX = 32, 256
 OWNER_SECRET_MIN_DISTINCT = 12
 STATIC_BEARER_RE = re.compile(r"[A-Za-z0-9._~-]{32,512}")
@@ -80,6 +85,10 @@ ERR_A9 = "AUTH_DB must be an absolute file path, e.g. /data/auth.sqlite"
 ERR_A10 = "ALLOWED_REDIRECT_URIS: entry {n} must be an https:// URL with a host and no fragment or user info"
 ERR_A11 = "ALLOWED_REDIRECT_URIS: at most 10 entries"
 ERR_A12 = "GARMIN_MCP_TRANSPORT=sse cannot be used with the built-in sign-in: use streamable-http"
+ERR_A13 = ("ALLOWED_ORIGINS: entry {n} must be an origin only: https:// (http:// only for 127.0.0.1, localhost "
+           "or [::1], and never on Railway), a host and an optional port, e.g. https://app.example.com")
+ERR_A14 = "ALLOWED_ORIGINS: at most 10 entries"
+ERR_A15 = "ORIGIN_CHECK must be on or off (unset means on)"
 
 # EDGE_CLIENT_IP_HEADER: the header Caddy reads the caller's address from (the Caddyfile's client_ip_headers),
 # which keys the sign-in rate limits. Unset means X-Real-IP (Railway's edge sets it); CF-Connecting-IP is for
@@ -111,6 +120,8 @@ class AuthConfig:
     static_bearer: Optional[str] = field(default=None, repr=False)
     extra_redirect_uris: Tuple[str, ...] = ()
     db_path: str = DEFAULT_AUTH_DB
+    extra_origins: Tuple[str, ...] = ()               # ALLOWED_ORIGINS, normalized by normal_origin()
+    origin_check: bool = True                         # ORIGIN_CHECK; False turns the /mcp Origin check off
 
     @property
     def resource_url(self) -> str:
@@ -120,6 +131,11 @@ class AuthConfig:
     @property
     def consent_url(self) -> str:
         return self.public_url + CONSENT_PATH
+
+    @property
+    def allowed_origins(self) -> frozenset:
+        """The browser origins /mcp accepts: PUBLIC_URL's, Claude's web apps and ALLOWED_ORIGINS."""
+        return frozenset((self.public_url,) + CLAUDE_ORIGINS + tuple(self.extra_origins))
 
     @property
     def host(self) -> str:
@@ -196,6 +212,45 @@ def _origin(raw: str, environ: Mapping[str, str]) -> Tuple[Optional[str], List[s
     return f"{scheme}://{host}{suffix}", []
 
 
+def normal_origin(raw: str) -> Optional[str]:
+    """An Origin header value or an ALLOWED_ORIGINS entry as scheme://host[:port], lowercase, without a
+    default port (the same spelling as PUBLIC_URL), or None when it is not an http(s) origin ("null", a
+    path, user info, a bad port). A single trailing "/" is accepted. Pure; never raises."""
+    if not raw or len(raw) > MAX_REDIRECT_LEN or any(ch <= " " or ch == "\x7f" for ch in raw):
+        return None
+    try:
+        parts = urlsplit(raw)
+        hostname = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or "@" in parts.netloc or not hostname or port == 0:
+        return None
+    if parts.path not in ("", "/") or parts.query or parts.fragment or "?" in raw or "#" in raw:
+        return None
+    if parts.netloc.startswith("["):
+        try:
+            host = "[" + ipaddress.IPv6Address(hostname).compressed + "]"
+        except ValueError:
+            return None
+    elif _DNS_HOST.fullmatch(hostname):
+        host = hostname
+    else:
+        return None
+    suffix = f":{port}" if port is not None and port != {"https": 443, "http": 80}[parts.scheme] else ""
+    return f"{parts.scheme}://{host}{suffix}"
+
+
+def _loopback_http_ok(origin: str, environ: Mapping[str, str]) -> bool:
+    """True for an http:// origin on a loopback host (127.0.0.1, localhost, [::1]) off Railway: the rule
+    PUBLIC_URL follows (_origin)."""
+    try:
+        hostname = urlsplit(origin).hostname or ""
+    except ValueError:
+        return False
+    return hostname in LOOPBACK_HOSTS and not _on_railway(environ)
+
+
 def _owner_secret_errors(secret: str) -> List[str]:
     if not secret:
         return [ERR_A4]
@@ -223,7 +278,7 @@ def _redirect_ok(uri: str) -> bool:
 def config_from_environ(environ: Mapping[str, str]) -> Tuple[Optional[AuthConfig], List[str]]:
     """Pure: no file system, no network, never raises for a bad value. (config, []) or (None, errors).
 
-    Error order: A12, A1-A3, A4-A7, A8, A9, A10-A11. No error line contains
+    Error order: A12, A1-A3, A4-A7, A8, A9, A10-A11, A13-A14, A15. No error line contains
     the text of OWNER_SECRET or MCP_BEARER_TOKEN.
     """
     errors: List[str] = []
@@ -268,6 +323,23 @@ def config_from_environ(environ: Mapping[str, str]) -> Tuple[Optional[AuthConfig
     if len(extra) > MAX_EXTRA_REDIRECTS:
         errors.append(ERR_A11)
 
+    origins = []
+    raw_origins = [u.strip() for u in _set(environ, "ALLOWED_ORIGINS").split(",") if u.strip()]
+    for n, raw in enumerate(raw_origins, 1):
+        origin = normal_origin(raw)
+        if origin is not None and origin.startswith("http://") and not _loopback_http_ok(origin, environ):
+            origin = None                # PUBLIC_URL's rule: plain http only on this machine, never on Railway
+        if origin is None:
+            errors.append(ERR_A13.format(n=n))
+        elif origin not in origins:
+            origins.append(origin)
+    if len(raw_origins) > MAX_EXTRA_ORIGINS:
+        errors.append(ERR_A14)
+
+    check = _set(environ, "ORIGIN_CHECK").strip().lower()
+    if check not in ("", "on", "off"):
+        errors.append(ERR_A15)
+
     if errors:
         return None, errors
     return AuthConfig(
@@ -276,4 +348,6 @@ def config_from_environ(environ: Mapping[str, str]) -> Tuple[Optional[AuthConfig
         static_bearer=static,
         extra_redirect_uris=extra,
         db_path=db_path,
+        extra_origins=tuple(origins),
+        origin_check=check != "off",
     ), []

@@ -1,0 +1,62 @@
+name: Bug report
+description: Something does not work as the docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. This is a public page: never paste health data, tokens, secrets,
+        keys, emails or logs with personal data. Replace them with made-up values.
+        A security problem goes to a private report instead: see SECURITY.md.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed health data, tokens and logs with personal data from everything below.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release tag or commit you deployed (git describe --tags --always, in your clone).
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Where it runs
+      options:
+        - Railway (scripts/deploy.sh)
+        - Docker Compose
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Garmin mode (GARMIN_AUTH)
+      options:
+        - full
+        - key
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client
+      description: For example claude.ai on the web, the Claude mobile app, Claude Code.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Steps to reproduce, and the exact error text if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines (optional)
+      description: Only lines you checked for personal data, host names and tokens.
+      render: text

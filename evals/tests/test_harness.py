@@ -106,7 +106,7 @@ class States(unittest.TestCase):
     def test_overlay_names_are_looked_up(self):
         folder = os.path.join(state_mod.FIXTURES, "overlays")
         names = sorted(f[:-5] for f in os.listdir(folder) if f.endswith(".json")) if os.path.isdir(folder) else []
-        for name in names[:3]:  # B3's files: a bare name resolves
+        for name in names[:3]:  # versioned files: a bare name resolves
             with self.subTest(name=name):
                 self.assertIn(f"fixtures/overlays/{name}.json", load_state("empty", [name])["files"])
 

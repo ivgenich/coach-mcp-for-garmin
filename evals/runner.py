@@ -362,7 +362,7 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
         tr["stop_reason"], tr["error"] = "budget", f"budget: {e}"
     except HarnessError as e:
         tr["stop_reason"], tr["error"] = "harness_error", f"harness: {e}"
-    except Exception as e:  # API errors after the SDK's own retries, or a harness bug
+    except Exception as e:  # noqa: BLE001 - API errors after the SDK's own retries, or a harness bug
         tr["stop_reason"] = tr["stop_reason"] or "error"
         tr["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -371,7 +371,7 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
         if srv is not None and not tr["garmin_calls"]:
             try:
                 tr["garmin_calls"] = garmin_calls(srv.calls)
-            except Exception:
+            except Exception:  # noqa: BLE001 - the call count is extra; keep the transcript
                 pass
         tr["duration_s"] = round(time.monotonic() - t0, 3)
         tr["cost_usd"] = round(tr["cost_usd"], 6)

@@ -5,7 +5,7 @@ rules are testable anywhere.
 
 SignInRateLimit is ASGI middleware. launch.py puts it outermost, through
 mcp2_compat.set_asgi_middleware(), so it sees every request before the SDK.
-It limits the sign-in endpoints per client IP (contract D7, F1):
+It limits the sign-in endpoints per client IP:
 
     POST /consent         20 per 10 minutes per IP (the owner secret is typed here)
     GET, POST /authorize  30 per 10 minutes per IP
@@ -23,8 +23,7 @@ the form body on any method but GET, so it would start a sign-in uncounted),
 and OPTIONS on /register, /token and /revoke unless it is a CORS preflight
 (both Origin and Access-Control-Request-Method), which the SDK answers without
 its handler; any other OPTIONS would reach the handler, past the /register
-limit and owner_auth's RegistrationFilter. Caddy drops Origin, so through
-Caddy every OPTIONS on those paths gets 405.
+limit and owner_auth's RegistrationFilter.
 
 The client IP. Python listens on 127.0.0.1 only, behind Caddy. Caddy sets
 X-Client-IP to the caller's address (Railway's X-Real-IP) and replaces any
@@ -37,9 +36,9 @@ so launch.py sets FORWARDED_ALLOW_IPS to empty (uvicorn then applies no
 X-Forwarded-* header at all) and Caddy drops X-Forwarded-For. Caddy still
 passes a caller's own X-Forwarded-Proto and X-Forwarded-Host through, so
 nothing here or anywhere else in this server may build a URL or make a
-security decision from the request's scheme, Host or X-Forwarded-* headers
-(the Phase 2 Host and Origin checks included): PUBLIC_URL is the only source
-of this server's own address.
+security decision from the request's scheme, Host or X-Forwarded-* headers:
+PUBLIC_URL is the only source of this server's own address (owner_auth's
+Origin check compares the Origin header with it, never with Host).
 
 DropQueryString keeps query strings out of uvicorn's access log: /authorize
 carries state and code_challenge there, and /consent the pending request id.
@@ -60,7 +59,7 @@ log = logging.getLogger("garmin_ext.http")
 
 CLIENT_IP_HEADER = "x-client-ip"  # set by Caddy from {client_ip}; Python listens on 127.0.0.1 only
 
-# Anthropic's published outbound ranges; claude.ai's backend registers from them (R2 section 2, F1).
+# Anthropic's published outbound ranges; claude.ai's backend registers from them.
 ANTHROPIC_EGRESS = ("160.79.104.0/21", "153.61.208.0/20")
 
 
@@ -71,7 +70,7 @@ class Rule:
     limit: int
     window_s: float
     per_ip: bool  # False: one bucket for everyone (no default rule uses it now)
-    wide_limit: Optional[int] = None  # F1: the limit for a caller inside wide_nets
+    wide_limit: Optional[int] = None  # the limit for a caller inside wide_nets
     wide_nets: Tuple[str, ...] = ()
 
 
@@ -123,7 +122,7 @@ def _header(scope, name):
 
 
 def client_ip(scope: dict) -> str:
-    """The caller's IP address for rate limits and log lines (F19).
+    """The caller's IP address for rate limits and log lines.
 
     X-Client-IP counts only when the direct peer (scope["client"][0]) is a
     loopback address, Caddy on this machine, and the header parses as an IP
@@ -143,7 +142,7 @@ def client_ip(scope: dict) -> str:
 
 
 def bucket_key(ip: str) -> str:
-    """The rate-limit bucket for a client_ip() value (F19): an IPv4 address as
+    """The rate-limit bucket for a client_ip() value: an IPv4 address as
     is (an IPv4-mapped IPv6 address counts as its IPv4 address); any other
     IPv6 address as its /64, since one host usually holds a whole /64; any
     other text as is."""

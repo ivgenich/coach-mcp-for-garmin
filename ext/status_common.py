@@ -20,12 +20,14 @@ SystemicFailure instead of answering an all-missing status.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import datetime as dt
 import json
 import logging
 import os
 import re
 import time
+import weakref
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -50,6 +52,9 @@ DEFAULT_CALL_TIMEOUT_S = 30.0
 # Concurrent Garmin calls per report: enough to finish in a few seconds, few
 # enough not to look like a burst to Garmin's rate limiter.
 DEFAULT_CONCURRENCY = 6
+# Concurrent Garmin calls of all reports together, per event loop (the
+# server's): two reports at once still send at most this many.
+PROCESS_CONCURRENCY = 6
 # Whole-report budget: calls still queued when it runs out are skipped, so a
 # Garmin outage costs a report about this long, not calls x timeout.
 DEFAULT_DEADLINE_S = 45.0
@@ -91,7 +96,7 @@ _SYSTEMIC_PHRASES = frozenset(
     for group in (tool_errors.LOGIN, tool_errors.RATE_LIMITED, tool_errors.UNAVAILABLE)
 )
 _TIMEOUT_PREFIX = "timeout after"  # fetch_all's own timeout: "timeout after 30s"
-# Log level of a failed source by group (contract 5.8); internal errors log at ERROR with the traceback.
+# Log level of a failed source by group; internal errors log at ERROR with the traceback.
 _LOG_LEVELS = {
     tool_errors.LOGIN: logging.WARNING, tool_errors.RATE_LIMITED: logging.WARNING,
     tool_errors.UNAVAILABLE: logging.WARNING, tool_errors.BAD_INPUT: logging.INFO,
@@ -272,6 +277,54 @@ def hours_to_hmm(hours: Any) -> Optional[str]:
     return f"{total_min // 60}:{total_min % 60:02d}"
 
 
+# --- report text (shared by daily_status and weekly_status) ---------------------
+
+NO_VALUE = "no data"   # a null value in the report text
+_MD_SPECIAL_RE = re.compile(r"([\\`*_\[\]<>#|~])")
+
+
+def text_format(value: Any) -> str:
+    """A report's text_format argument: '' (none) or 'markdown'; stripped and lower-cased, so ' Markdown '
+    counts and blank or None means none. Anything else is BadArgument("text_format must be ...")."""
+    fmt = value.strip().lower() if isinstance(value, str) else value
+    if not fmt:
+        return ""
+    if fmt != "markdown":
+        raise BadArgument(f"text_format must be '' or 'markdown', got {value!r}")
+    return fmt
+
+
+def local_now(zone: ZoneInfo, now: Optional[dt.datetime] = None) -> dt.datetime:
+    """`now` in `zone` (a naive `now` is taken as wall-clock time there); the current time when None."""
+    if now is None:
+        return now_local(zone)
+    return now.replace(tzinfo=zone) if now.tzinfo is None else now.astimezone(zone)
+
+
+def word_count(text: str) -> int:
+    """Words of a markdown report text; '**' counts as a space, so bold never joins two words."""
+    return len(re.sub(r"\*\*", " ", text or "").split())
+
+
+def md_escape(text: str) -> str:
+    """Markdown special characters escaped with a backslash (~ too: '~~x~~' in a name is no strikethrough)."""
+    return _MD_SPECIAL_RE.sub(r"\\\1", text)
+
+
+def num_txt(value: Any) -> str:
+    """A JSON number as report text: whole numbers without a decimal point, others to at most 2 decimals
+    without trailing zeros (1.5, 1.23); NO_VALUE for anything that is not a number."""
+    v = num(value)
+    if v is None:
+        return NO_VALUE
+    if isinstance(v, int):
+        return str(v)
+    if float(v).is_integer():
+        return str(int(v))
+    text = f"{v:.2f}".rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
+
+
 # --- numbers and nested payloads ----------------------------------------------
 
 def num(value: Any) -> Optional[float]:
@@ -446,6 +499,47 @@ def call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Call:
     return (fn, args, kwargs)
 
 
+# garminconnect's activity search path (Garmin.garmin_connect_activities); used when the client has none.
+ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
+
+
+def client_method(client: Any, name: str) -> Callable[..., Any]:
+    """client.<name>(...), looked up when the call runs, in fetch_all's worker thread.
+
+    Upstream's proxy blocks at the lookup (up to 90 s) while its background
+    login is pending and raises the stored login error there once the login
+    failed, so the lookup must not happen on the event loop: one report would
+    stall every other request of the server, one wait per method. A missing
+    client or method is one failed source. A failed lookup raises its own
+    exception, unwrapped: fetch_sync groups a failure by its type and text,
+    so a wrapper would turn a rate limit or a network failure into an
+    internal error.
+    """
+    def invoke(*args: Any, **kwargs: Any) -> Any:
+        fn = getattr(client, name)
+        if not callable(fn):
+            raise AttributeError(f"Garmin client attribute {name} is not callable")
+        return fn(*args, **kwargs)
+
+    invoke.__name__ = name
+    return invoke
+
+
+def activities_call(client: Any) -> Callable[..., Any]:
+    """connectapi(<the client's activity search path, else ACTIVITIES_PATH>, **kwargs); the path is read in
+    the worker thread too."""
+    def invoke(**kwargs: Any) -> Any:
+        try:
+            path = getattr(client, "garmin_connect_activities", None)
+        except Exception:  # noqa: BLE001 - fall back to garminconnect's path
+            path = None
+        return client_method(client, "connectapi")(path if isinstance(path, str) and path else ACTIVITIES_PATH,
+                                                   **kwargs)
+
+    invoke.__name__ = "connectapi"
+    return invoke
+
+
 def clean_error(exc: BaseException) -> str:
     """Short error text without URLs or API paths: both carry the account's display name."""
     text = f"{type(exc).__name__}: {exc}".strip()
@@ -461,7 +555,7 @@ def fetch_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Dict[str, A
     """Run one client call; never raises.
 
     -> {"ok": True, "data": <payload>, "fetched_at", "ms"} or
-       {"ok": False, "error": <source phrase>, "systemic": <bool>,
+       {"ok": False, "error": <source phrase>, "systemic": <bool>, "group": <tool_errors group>,
         "_failure": (group, ref, original text, exception), "fetched_at", "ms"}.
 
     tool_errors.classify_exception() puts a failure in a group; "error" is
@@ -485,6 +579,7 @@ def fetch_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Dict[str, A
         result["error"] = tool_errors.source_phrase(group, ref)
         result["systemic"] = group in (tool_errors.LOGIN, tool_errors.RATE_LIMITED) or (
             group == tool_errors.UNAVAILABLE and is_systemic_error(full))
+        result["group"] = group
         result["_failure"] = (group, ref, full, exc)
     result["ms"] = int((time.monotonic() - started) * 1000)
     return result
@@ -521,7 +616,7 @@ def systemic_failure(results: Dict[str, Dict[str, Any]], first: str) -> Optional
 
 
 def _log_failure(source: str, group: str, ref: Optional[str], text: Any, exc: Optional[BaseException]) -> None:
-    """One server-log line for a failed source (contract 5.8): its original text, redacted to one line.
+    """One server-log line for a failed source: its original text, redacted to one line.
 
     An internal error logs at ERROR with its ref and traceback; the other
     groups log at WARNING (login, rate limit, Garmin unavailable), INFO (bad
@@ -550,6 +645,57 @@ def unusable_answer(result: Dict[str, Any], source: str, why: str) -> Dict[str, 
     return dict(result, ok=False, error=tool_errors.source_phrase(tool_errors.UNAVAILABLE))
 
 
+# The guard outcome of a report (launch.py's call guard, garmin_guard): a rate limit or a login failure on ANY
+# source must start the guard's cooldown, also when the report still answers with what the other sources gave.
+# launch.py opens a capture around each tool call (capture_outcomes); fetch_all adds the group of every such
+# failed source to it; launch.py hands guard_group() of the captured groups to the guard.
+_COOLDOWN_GROUPS = (tool_errors.RATE_LIMITED, tool_errors.LOGIN)   # in order of precedence
+_OUTCOMES: "contextvars.ContextVar[Optional[set]]" = contextvars.ContextVar("coach_status_outcomes", default=None)
+
+
+def capture_outcomes() -> Tuple[contextvars.Token, set]:
+    """Start collecting the cooldown groups fetch_all meets in this context: (token for end_capture, the set
+    it fills). The set is shared, so a fetch_all in a copied context (a task, a worker thread) still adds to it."""
+    groups: set = set()
+    return _OUTCOMES.set(groups), groups
+
+
+def end_capture(token: contextvars.Token) -> None:
+    _OUTCOMES.reset(token)
+
+
+def _note_group(group: Optional[str]) -> None:
+    if group in _COOLDOWN_GROUPS:
+        sink = _OUTCOMES.get()
+        if sink is not None:
+            sink.add(group)
+
+
+def guard_group(groups: Iterable[Optional[str]]) -> Optional[str]:
+    """The group the call guard should hear for a report whose sources met `groups`: rate_limited before login,
+    else None (nothing that starts a cooldown)."""
+    seen = set(groups)
+    for group in _COOLDOWN_GROUPS:
+        if group in seen:
+            return group
+    return None
+
+
+# One semaphore per event loop (an asyncio.Semaphore belongs to the loop it first waits on; tests run many
+# loops), shared by every fetch_all on that loop.
+_LOOP_SEMAPHORES: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary())
+
+
+def _process_semaphore(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    """The loop's shared semaphore of PROCESS_CONCURRENCY slots (made on first use; only the loop's thread
+    calls this)."""
+    sem = _LOOP_SEMAPHORES.get(loop)
+    if sem is None:
+        sem = _LOOP_SEMAPHORES[loop] = asyncio.Semaphore(max(1, int(PROCESS_CONCURRENCY)))
+    return sem
+
+
 async def fetch_all(
     calls: Dict[str, Call],
     *,
@@ -567,9 +713,17 @@ async def fetch_all(
     error (auth, rate limit, network, stall), the others are skipped
     (systemic_failure() then names the reason).
 
+    At most `concurrency` calls of this fetch_all run at once, and at most
+    PROCESS_CONCURRENCY of all fetch_all calls on the same event loop together.
+
     A call that outlives timeout_s, or the time left of deadline_s, is recorded
     as failed; its thread is left to finish on its own. Calls that have not
     started when deadline_s runs out are recorded as skipped.
+
+    A failed call keeps its tool_errors group in "group" (fetch_all's own
+    timeouts: unavailable). A rate-limited or login failure is also added to
+    the capture launch.py opened for the tool call (capture_outcomes), so the
+    call guard starts its cooldown even though the report still answers.
 
     Each failed call writes one "status source failed:" line to the
     "garmin_ext.status" log (its own timeouts as group unavailable); skipped
@@ -586,10 +740,11 @@ async def fetch_all(
     loop = asyncio.get_running_loop()
     t_end = loop.time() + max(0.0, float(deadline_s))
     sem = asyncio.Semaphore(max(1, int(concurrency)))
+    shared = _process_semaphore(loop)
 
     async def one(name: str, spec: Call) -> Tuple[str, Dict[str, Any]]:
         fn, args, kwargs = spec
-        async with sem:
+        async with sem, shared:
             budget = min(float(timeout_s), t_end - loop.time())
             if budget <= 0:
                 return name, _skipped("report deadline reached")
@@ -604,12 +759,14 @@ async def fetch_all(
                     "fetched_at": _utc_stamp(),
                     "ms": int(budget * 1000),
                     "systemic": True,
+                    "group": tool_errors.UNAVAILABLE,
                 }
                 _log_failure(name, tool_errors.UNAVAILABLE, None, res["error"], None)
             else:
                 failure = res.pop("_failure", None)
                 if failure is not None:
                     _log_failure(name, *failure)
+                    _note_group(failure[0])
         return name, res
 
     results: Dict[str, Dict[str, Any]] = {}

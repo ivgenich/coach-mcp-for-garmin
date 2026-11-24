@@ -100,7 +100,6 @@ FIT_TIMEOUT_S = 45.0
 # 14 days of activities in one call; a triathlete's fortnight is far below it. A full page counts as an
 # incomplete volume comparison (_activities_cut).
 ACTIVITY_LIMIT = 100
-ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 WEIGHT_LOOKBACK_DAYS = 90
 PLAN_MAX_SHIFT_DAYS = 6  # a planned workout counts when done on any day of its week
 # get_gear_stats calls per report (gear with a distance limit first).
@@ -186,41 +185,6 @@ def _skip(reason: str) -> Dict[str, Any]:
 def _left(started: float) -> float:
     """Seconds left of the whole-report deadline."""
     return DEADLINE_S - (time.monotonic() - started)
-
-
-def _method(client: Any, name: str) -> Callable[..., Any]:
-    """client.<name>(...), looked up when the call runs, in fetch_all's worker thread.
-
-    Upstream's proxy blocks at the lookup (up to 90 s) while its background
-    login is pending and raises the stored login error there once the login
-    failed, so the lookup must not happen on the event loop: one report would
-    stall every other request of the server, one wait per method. A missing
-    client or method is one failed source. A failed lookup raises its own
-    exception, unwrapped: status_common groups a failure by its type and
-    text, so a wrapper would turn a rate limit or a network failure into an
-    internal error.
-    """
-    def invoke(*args: Any, **kwargs: Any) -> Any:
-        fn = getattr(client, name)
-        if not callable(fn):
-            raise AttributeError(f"Garmin client attribute {name} is not callable")
-        return fn(*args, **kwargs)
-
-    invoke.__name__ = name
-    return invoke
-
-
-def _activities_call(client: Any) -> Callable[..., Any]:
-    """connectapi(<garminconnect's activity-list path>, ...); the path is read in the worker thread too."""
-    def invoke(**kwargs: Any) -> Any:
-        try:
-            path = getattr(client, "garmin_connect_activities", None)
-        except Exception:  # noqa: BLE001 - fall back to garminconnect's path
-            path = None
-        return _method(client, "connectapi")(path if isinstance(path, str) and path else ACTIVITIES_PATH, **kwargs)
-
-    invoke.__name__ = "connectapi"
-    return invoke
 
 
 # Dict keys that are identifiers (device-keyed maps such as latestTrainingStatusData).
@@ -782,18 +746,6 @@ def _flag(fid: str, level: str, label: str) -> Dict[str, str]:
     return {"id": fid, "level": level, "label_en": label}
 
 
-def _num_txt(value: Any) -> str:
-    """A JSON number as text: ints as is, floats without trailing zeros."""
-    v = sc.num(value)
-    if v is None:
-        return NO_DATA
-    if isinstance(v, int):
-        return str(v)
-    if float(v).is_integer():
-        return str(int(v))
-    return f"{v:.2f}".rstrip("0").rstrip(".")
-
-
 def evaluate_flags(status: Dict[str, Any], thresholds: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
     """Weekly flags v1. A rule whose input is missing is skipped, not counted."""
     t = THRESHOLDS if thresholds is None else thresholds
@@ -804,14 +756,14 @@ def evaluate_flags(status: Dict[str, Any], thresholds: Optional[Dict[str, Any]] 
     by_baseline = a7 is not None and low is not None and a7 < low
     if by_trend:
         flags.append(_flag("hrv_down", "yellow",
-                           f"HRV down: 7-day average {_num_txt(t['hrv_drop_ms'])} ms or more below the 28-day average"))
+                           f"HRV down: 7-day average {sc.num_txt(t['hrv_drop_ms'])} ms or more below the 28-day average"))
     elif by_baseline:
         flags.append(_flag("hrv_down", "yellow", "HRV down: 7-day average below Garmin's balanced range"))
 
     short = (status.get("sleep") or {}).get("nights_under_6h")
     if short is not None and short >= t["short_nights"]:
         flags.append(_flag("short_nights", "yellow",
-                           f"Short nights: {t['short_nights']} or more nights under {_num_txt(t['sleep_h'])} h"))
+                           f"Short nights: {t['short_nights']} or more nights under {sc.num_txt(t['sleep_h'])} h"))
 
     volume = status.get("volume") or {}
     total, prev = volume.get("total_hours"), volume.get("prev_total_hours")
@@ -866,26 +818,26 @@ def _round1_calls(client: Any, start: dt.date, end: dt.date) -> Dict[str, sc.Cal
 
     calls: Dict[str, sc.Call] = {
         # Cheap and needed for gear: runs alone first (token refresh, systemic check).
-        "device_last_used": sc.call(_method(client, "get_device_last_used")),
-        "devices": sc.call(_method(client, "get_devices")),
+        "device_last_used": sc.call(sc.client_method(client, "get_device_last_used")),
+        "devices": sc.call(sc.client_method(client, "get_devices")),
     }
     for back in HRV_WEEKS:
         day = end - dt.timedelta(days=back)
-        calls[f"hrv@{iso(day)}"] = sc.call(_method(client, "get_hrv_data"), iso(day))
+        calls[f"hrv@{iso(day)}"] = sc.call(sc.client_method(client, "get_hrv_data"), iso(day))
     for offset in range(7):
         day = start + dt.timedelta(days=offset)
-        calls[f"sleep@{iso(day)}"] = sc.call(_method(client, "get_sleep_data"), iso(day))
+        calls[f"sleep@{iso(day)}"] = sc.call(sc.client_method(client, "get_sleep_data"), iso(day))
     params = {
         "startDate": iso(end - dt.timedelta(days=13)), "endDate": iso(end),
         "start": "0", "limit": str(ACTIVITY_LIMIT),
     }
-    calls["activities"] = sc.call(_activities_call(client), params=params)
+    calls["activities"] = sc.call(sc.activities_call(client), params=params)
     for back in (0, 7):
         day = end - dt.timedelta(days=back)
-        calls[f"training_status@{iso(day)}"] = sc.call(_method(client, "get_training_status"), iso(day))
-    calls["schedule"] = sc.call(_method(client, "query_garmin_graphql"),
+        calls[f"training_status@{iso(day)}"] = sc.call(sc.client_method(client, "get_training_status"), iso(day))
+    calls["schedule"] = sc.call(sc.client_method(client, "query_garmin_graphql"),
                                 {"query": SCHEDULE_QUERY.format(start=iso(start), end=iso(end))})
-    calls["weigh_ins"] = sc.call(_method(client, "get_weigh_ins"),
+    calls["weigh_ins"] = sc.call(sc.client_method(client, "get_weigh_ins"),
                                  iso(end - dt.timedelta(days=WEIGHT_LOOKBACK_DAYS - 1)), iso(end))
     return calls
 
@@ -903,7 +855,7 @@ def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
     fmt, parse_fit, available = _load_fit_helpers()
     if not available:
         raise RuntimeError("fitparse is not installed")
-    raw = _method(client, "download_activity")(activity_id, dl_fmt=fmt)
+    raw = sc.client_method(client, "download_activity")(activity_id, dl_fmt=fmt)
     if not raw:
         raise sc.NoData("Garmin returned an empty FIT download")  # source error "no data from Garmin"
     parsed = parse_fit(bytes(raw), include_records=False)
@@ -942,7 +894,7 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
         results["decoupling_details"] = _skip(f"decoupling_fit failed: {error}"[:200])
         return results, slims, None
     res = await sc.fetch_all(
-        {"decoupling_details": sc.call(_method(client, "get_activity_details"), act["id"],
+        {"decoupling_details": sc.call(sc.client_method(client, "get_activity_details"), act["id"],
                                        maxchart=DETAILS_MAX_CHART, maxpoly=0)},
         timeout_s=CALL_TIMEOUT_S, deadline_s=_left(started))
     results.update(res)
@@ -961,7 +913,7 @@ async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode
     if profile_number is None:
         results["gear"] = _skip("device_last_used gave no profile number")
         return results, slims, None
-    res = await sc.fetch_all({"gear": sc.call(_method(client, "get_gear"), profile_number)},
+    res = await sc.fetch_all({"gear": sc.call(sc.client_method(client, "get_gear"), profile_number)},
                              timeout_s=CALL_TIMEOUT_S, deadline_s=_left(started))
     results.update(res)
     raw = sc.data_of(res["gear"])
@@ -971,7 +923,7 @@ async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode
     slims["gear"] = {"count": len(raw), "active_shoes_bikes": len(items)}
     if not items:
         return results, slims, []
-    calls = {f"gear_stats_{i}": sc.call(_method(client, "get_gear_stats"), item["uuid"])
+    calls = {f"gear_stats_{i}": sc.call(sc.client_method(client, "get_gear_stats"), item["uuid"])
              for i, item in enumerate(items, 1)}
     res = await sc.fetch_all(calls, timeout_s=CALL_TIMEOUT_S, concurrency=4, deadline_s=_left(started))
     results.update(res)
@@ -984,12 +936,6 @@ async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode
 
 # --- the report ---------------------------------------------------------------
 
-def _local_now(tz: Any, now: Optional[dt.datetime]) -> dt.datetime:
-    if now is None:
-        return sc.now_local(tz)
-    return now.replace(tzinfo=tz) if now.tzinfo is None else now.astimezone(tz)
-
-
 def _end_date(value: Any, current: dt.datetime) -> dt.date:
     if value is None or not str(value).strip():
         return current.date() - dt.timedelta(days=1)
@@ -998,14 +944,6 @@ def _end_date(value: Any, current: dt.datetime) -> dt.date:
     except ValueError:
         raise sc.BadArgument(f"end_date must be YYYY-MM-DD, got {value!r}") from None
     return sc.report_date(day, "end_date", value)  # BadArgument outside 0002-01-01..9998-12-31
-
-
-def _text_format(text_format: Any) -> str:
-    """text_format stripped and lower-cased, as get_daily_status reads it; BadArgument unless '' or 'markdown'."""
-    fmt = text_format.strip().lower() if isinstance(text_format, str) else text_format
-    if fmt not in TEXT_FORMATS:
-        raise sc.BadArgument("text_format must be '' or 'markdown'")
-    return fmt
 
 
 def _activities_cut(raw: Any) -> bool:
@@ -1077,9 +1015,9 @@ async def build_weekly_status(
     and the details chart are never called, activities runs first, and the
     answer carries "key_mode_note" (also the last line of the markdown text).
     """
-    text_format = _text_format(text_format)
+    text_format = sc.text_format(text_format)
     zone = sc.zone(tz)
-    current = _local_now(zone, now)
+    current = sc.local_now(zone, now)
     end = _end_date(end_date, current)
     start = end - dt.timedelta(days=6)
     started = time.monotonic()
@@ -1182,7 +1120,7 @@ async def build_weekly_status(
             for name, res in results.items() if res.get("ok")
         })[0]
     if text_format:
-        # No catch (amendment M2): a rendering bug reaches launch.py's tool-error wrapper, which logs its traceback.
+        # No catch: a rendering bug reaches launch.py's tool-error wrapper, which logs its traceback.
         status["text"] = render_text(status, text_format)
     return status
 
@@ -1197,9 +1135,9 @@ def _signed(value: Any) -> str:
     if v is None:
         return NO_DATA
     if v > 0:
-        return f"+{_num_txt(v)}"
+        return f"+{sc.num_txt(v)}"
     if v < 0:
-        return f"-{_num_txt(-v)}"
+        return f"-{sc.num_txt(-v)}"
     return "0"
 
 
@@ -1216,13 +1154,13 @@ def _short(text: Any, limit: int = 30) -> str:
 def _count(count: Any, noun: str) -> str:
     """Like "1 session" or "3 sessions"."""
     count = count or 0
-    return f"{_num_txt(count)} {noun}" + ("" if count == 1 else "s")
+    return f"{sc.num_txt(count)} {noun}" + ("" if count == 1 else "s")
 
 
 def _lines(status: Dict[str, Any], compact: bool) -> List[Tuple[str, List[Segment]]]:
     """(kind, segments) lines: kind "head" (bold line), "item" (bullet) or "plain"."""
     t = {**THRESHOLDS, **(status.get("thresholds") or {})}
-    n = _num_txt
+    n = sc.num_txt
     lines: List[Tuple[str, List[Segment]]] = []
 
     def head(text: str) -> None:
@@ -1368,10 +1306,6 @@ def _lines(status: Dict[str, Any], compact: bool) -> List[Tuple[str, List[Segmen
     return lines
 
 
-def _esc_md(text: str) -> str:
-    return re.sub(r"([\\`*_\[\]<>#|])", r"\\\1", text)
-
-
 def _format(lines: List[Tuple[str, List[Segment]]]) -> str:
     """Markdown (CommonMark): a blank line before every non-bullet line, or a
     heading would merge into the paragraph or bullet above it; the bullets of
@@ -1379,15 +1313,11 @@ def _format(lines: List[Tuple[str, List[Segment]]]) -> str:
     """
     out: List[str] = []
     for kind, segs in lines:
-        body = "".join(f"**{_esc_md(text)}**" if is_bold and text else _esc_md(text) for text, is_bold in segs)
+        body = "".join(f"**{sc.md_escape(text)}**" if is_bold and text else sc.md_escape(text) for text, is_bold in segs)
         if kind != "item" and out:
             out.append("")
         out.append(("- " if kind == "item" else "") + body)
     return "\n".join(out)
-
-
-def _word_count(text: str) -> int:
-    return len(re.sub(r"\*\*", " ", text).split())
 
 
 def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
@@ -1403,7 +1333,7 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
     note = status.get("key_mode_note")
     end = [("plain", [(note, False)])] if note else []
     text = _format(_lines(status, compact=False) + end)
-    if _word_count(text) > MAX_WORDS:
+    if sc.word_count(text) > MAX_WORDS:
         text = _format(_lines(status, compact=True) + end)
     return text
 
@@ -1451,7 +1381,7 @@ def register_tools(app: Any, get_client: Callable[[], Any], key_mode: bool = Fal
                 (for automation); empty = JSON only.
         """
         try:
-            text_format = _text_format(text_format)
+            text_format = sc.text_format(text_format)
         except sc.BadArgument:
             return "Error: text_format must be '' or 'markdown'."
         # Only a bad argument and a failed first call answer as text here. Anything else is a bug: it

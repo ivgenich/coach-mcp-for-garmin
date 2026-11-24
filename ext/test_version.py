@@ -1,4 +1,4 @@
-"""Tests for version.py: this project's version, one line (KEY contract D17, test K14).
+"""Tests for version.py: this project's version, one line.
 
     python -m unittest test_version -v      (from ext/)
 
@@ -17,7 +17,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import version  # noqa: E402
+import version
 
 VERSION_FILE = os.path.join(HERE, "version.py")
 
@@ -32,7 +32,7 @@ class VersionFile(unittest.TestCase):
         self.assertRegex(read(), r'\AVERSION = "\d+\.\d+\.\d+"\n\Z')
 
     def test_the_readers_regex_finds_it(self):
-        # As DOCS's T-VER and LIVE's release check read it: no MULTILINE.
+        # A simple reader finds it without re.MULTILINE: the file is that one line.
         match = re.search(r'^VERSION = "(\d+\.\d+\.\d+)"$', read())
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1), version.VERSION)

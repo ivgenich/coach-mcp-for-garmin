@@ -19,12 +19,17 @@
 #                                                 for it; e.g. before Garmin's key expires)
 #
 # Environment: GARMIN_AUTH (required on the first deploy: full or key; when
-# exported, it replaces the value on Railway), REPORT_TZ (required on the first
-# deploy; when exported, it replaces the value on Railway), DEPLOY_SERVICE (the
-# Railway project and service name for a first deploy; default
-# coach-mcp-for-garmin), DEPLOY_WORKSPACE (optional: the exact Railway workspace
-# ID or name for a first deploy; the CLI needs it when it runs outside a
-# terminal and you have more than one workspace).
+# exported, it replaces the value on Railway; in a terminal the script asks
+# when it is missing), REPORT_TZ (the same), DEPLOY_SERVICE (the Railway
+# service name, and the project name on a first deploy; default
+# coach-mcp-for-garmin; the folder's linked service must have this name),
+# DEPLOY_WORKSPACE (optional: the exact Railway workspace ID or name for a
+# first deploy; the CLI needs it when it runs outside a terminal and you have
+# more than one workspace).
+#
+# Needs bash, the Railway CLI and python3 (to read the CLI's JSON). Before it
+# changes anything it prints the linked project and service, and it stops when
+# the folder's link belongs to another service or comes from a parent folder.
 #
 # Sign-in: the first run generates OWNER_SECRET, the secret you type on the
 # server's sign-in page when Claude connects. It is never printed; read it with
@@ -124,60 +129,261 @@ public_origin() {
   printf '%s\n' "$url"
 }
 
+# Reads the Railway CLI's JSON with python3, so a reworded CLI message cannot
+# change what the script decides. Only names, ids and yes/no come out. Text
+# that holds secret values (the environment config) reaches it on stdin.
+#   railway_json link FILE DIR    the folder the CLI takes its link from (DIR or
+#                                 its closest parent in the CLI's config FILE),
+#                                 the project id and the service id, one a line
+#   railway_json project NAME ID  from `railway status --json`: project name,
+#                                 project id, the id of service NAME, the name
+#                                 of service ID, one a line
+#   railway_json volume NAME      from `railway volume list --json`: exit 0 when
+#                                 service NAME has a volume at /data, 3 when not
+#   railway_json healthcheck ID   from `railway environment config --json`:
+#                                 exit 0 when service ID checks /healthz, 3 when not
+# Any other exit status means the JSON could not be read.
+railway_json() {
+  python3 -I -c '
+import json, os, sys
+
+def clean(value):
+    return "".join(ch for ch in str(value or "") if ch.isprintable())
+
+mode = sys.argv[1]
+if mode == "link":
+    try:
+        with open(sys.argv[2], encoding="utf-8") as f:
+            projects = json.load(f).get("projects") or {}
+    except FileNotFoundError:
+        projects = {}
+    folder = sys.argv[3]
+    while True:
+        link = projects.get(folder)
+        if isinstance(link, dict) and link.get("project"):
+            print(clean(folder))
+            print(clean(link.get("project")))
+            print(clean(link.get("service")))
+            break
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    sys.exit(0)
+data = json.load(sys.stdin)
+if mode == "project":
+    services = [edge.get("node") or {} for edge in (data.get("services") or {}).get("edges") or []]
+    print(clean(data.get("name")))
+    print(clean(data.get("id")))
+    print(next((clean(s.get("id")) for s in services if s.get("name") == sys.argv[2]), ""))
+    print(next((clean(s.get("name")) for s in services if sys.argv[3] and s.get("id") == sys.argv[3]), ""))
+elif mode == "volume":
+    found = any(v.get("serviceName") == sys.argv[2] and v.get("mountPath") == "/data"
+                for v in data.get("volumes") or [])
+    sys.exit(0 if found else 3)
+elif mode == "healthcheck":
+    service = (data.get("services") or {}).get(sys.argv[2]) or {}
+    sys.exit(0 if (service.get("deploy") or {}).get("healthcheckPath") == "/healthz" else 3)
+else:
+    sys.exit(2)
+' "$@"
+}
+
+# GARMIN_AUTH and REPORT_TZ, when neither the environment nor Railway has
+# them: asked for in a terminal (a wrong answer is never shown), else the
+# script stops. ask_auth sets WANT_AUTH, ask_tz sets REPORT_TZ.
+ask_auth() {
+  local answer
+  [[ -t 0 ]] || return 1
+  while IFS= read -rp 'Garmin mode, full or key (see docs/garmin-login.md): ' answer; do
+    answer="$(lower_trim "$answer")"
+    if [[ $answer == full || $answer == key ]]; then
+      WANT_AUTH="$answer"
+      return 0
+    fi
+    echo "Type full or key."
+  done
+  return 1
+}
+ask_tz() {
+  local answer
+  [[ -t 0 ]] || return 1
+  while IFS= read -rp 'Time zone, an IANA name such as Europe/London: ' answer; do
+    answer="${answer#"${answer%%[![:space:]]*}"}"
+    answer="${answer%"${answer##*[![:space:]]}"}"
+    if [[ -n $answer ]] && valid_tz "$answer"; then
+      REPORT_TZ="$answer"
+      return 0
+    fi
+    echo "That is not a time zone name on this machine (match the case, e.g. Europe/London)."
+  done
+  return 1
+}
+# $1: what the stop message says about changes ("Nothing was changed." or "Nothing was deployed.").
+stop_no_auth() {
+  warn "GARMIN_AUTH is required: full (log in to Garmin once with your email and password; every tool)"
+  warn "or key (a Garmin Personal API key; fewer tools and less data). See docs/garmin-login.md."
+  warn "$1 Export it and re-run:  GARMIN_AUTH=full REPORT_TZ=Europe/London ./scripts/deploy.sh"
+  exit 1
+}
+stop_no_tz() {
+  warn "REPORT_TZ is required: the IANA time zone for the daily and weekly status, e.g. Europe/London."
+  # The mode is full or key here (checked before), so it is safe to show; on a
+  # first deploy it is not on Railway yet, so the re-run needs it again.
+  warn "$1 Export it and re-run:  GARMIN_AUTH=$2 REPORT_TZ=Europe/London ./scripts/deploy.sh  (your own zone)"
+  exit 1
+}
+
 say "Railway CLI"
 if ! command -v railway >/dev/null 2>&1; then
   warn "Install the Railway CLI first:  brew install railway   (or: npm i -g @railway/cli)"
   exit 1
 fi
 railway --version
+if ! python3 -I -c 'import json' >/dev/null 2>&1; then
+  warn "deploy.sh needs python3 to read the Railway CLI's JSON. Install it (macOS: xcode-select --install;"
+  warn "Linux and WSL: your package manager's python3), then re-run. Nothing was changed."
+  exit 1
+fi
+# With these set the CLI ignores the folder's link, so the checks below would
+# look at the wrong thing.
+for name in RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID RAILWAY_SERVICE_ID; do
+  if [[ -n ${!name:-} ]]; then
+    warn "$name is set: the Railway CLI then ignores this folder's link. Unset it (unset $name) and re-run. Nothing was changed."
+    exit 1
+  fi
+done
 
 say "Login"
 railway whoami >/dev/null 2>&1 || railway login
 railway whoami
 
 say "Project and service"
-# Create a project only when none is linked, and a service only when none is.
-# Any other failure (network, expired login) stops here: taking it for "not
-# linked yet" would create a second project or service. The CLI's output is
-# not shown: a variable listing holds secret values. Text that can hold secret
-# values is matched through a pipe, never a here-string (<<<): bash 3.2, the
-# macOS bash, writes here-string text to a temporary file.
-cli_rc=0
-CLI_OUT="$(railway status 2>&1)" || cli_rc=$?
-if grep -q 'No linked project' < <(printf '%s\n' "$CLI_OUT"); then
+# Which project and service this folder is linked to, read before anything
+# changes. The CLI keeps folder links in its config file and, for a folder
+# with no link of its own, uses the closest parent folder's: then `railway up`
+# would upload that whole parent folder, so the script stops. It also stops
+# when the linked service is not $SERVICE. Any failure to read (network,
+# expired login) stops too: taking it for "not linked yet" would create a
+# second project or service. Text that can hold secret values is matched
+# through a pipe, never a here-string (<<<): bash 3.2, the macOS bash, writes
+# here-string text to a temporary file.
+REPO_DIR="$(pwd -P)"
+case "$(printf '%s' "${RAILWAY_ENV:-}" | tr '[:upper:]' '[:lower:]')" in
+  staging) LINK_FILE="$HOME/.railway/config-staging.json" ;;
+  dev | develop) LINK_FILE="$HOME/.railway/config-dev.json" ;;
+  *) LINK_FILE="$HOME/.railway/config.json" ;;
+esac
+line_of() { sed -n "$1p" < <(printf '%s\n' "$2"); }
+# Sets LINK_DIR (empty: no link), LINK_PROJECT and LINK_SERVICE (ids).
+read_link() {
+  local out
+  out="$(railway_json link "$LINK_FILE" "$REPO_DIR")" || return 1
+  LINK_DIR="$(line_of 1 "$out")"
+  LINK_PROJECT="$(line_of 2 "$out")"
+  LINK_SERVICE="$(line_of 3 "$out")"
+}
+# Sets PROJECT_NAME, SERVICE_ID (of the service named $SERVICE; empty: none)
+# and LINKED_NAME (the name of the linked service; empty: none or not found).
+read_project() {
+  local out
+  out="$(railway status --json 2>/dev/null | railway_json project "$SERVICE" "$LINK_SERVICE")" || return 1
+  PROJECT_NAME="$(line_of 1 "$out")"
+  [[ "$(line_of 2 "$out")" == "$LINK_PROJECT" ]] || return 1
+  SERVICE_ID="$(line_of 3 "$out")"
+  LINKED_NAME="$(line_of 4 "$out")"
+}
+# After init, add or service link: the link must now be this folder's own.
+reread_link() { read_link && [[ $LINK_DIR == "$REPO_DIR" ]] && read_project; }
+cannot_read_project() {
+  warn "Could not read the linked Railway project (network, or an expired login)."
+  warn "Nothing was changed. Check 'railway whoami' and 'railway status', then re-run."
+  exit 1
+}
+if ! read_link; then
+  warn "Could not read the Railway CLI's folder links in $LINK_FILE. Nothing was changed."
+  exit 1
+fi
+if [[ -n $LINK_DIR && $LINK_DIR != "$REPO_DIR" ]]; then
+  warn "This folder has no Railway link of its own: the CLI would use the link of $LINK_DIR"
+  warn "and upload that whole folder. Nothing was changed. Give this folder its own link, then re-run:"
+  warn "  railway link                      (an existing project; pick the $SERVICE service)"
+  warn "  railway init --name $SERVICE   (a new project)"
+  exit 1
+fi
+SERVICE_ID=""
+FRESH=false   # true: no service named $SERVICE yet, so nothing is set on Railway
+if [[ -n $LINK_DIR ]]; then
+  read_project || cannot_read_project
+  echo "Linked project: $PROJECT_NAME"
+  if [[ -n $LINK_SERVICE ]]; then
+    echo "Linked service: ${LINKED_NAME:-(not found in the project)}"
+    if [[ $LINKED_NAME != "$SERVICE" ]]; then
+      if [[ -n $LINKED_NAME ]]; then
+        warn "This folder is linked to the service '$LINKED_NAME', but the script deploys '$SERVICE' (DEPLOY_SERVICE)."
+        warn "Nothing was changed. If '$LINKED_NAME' is your server, re-run with DEPLOY_SERVICE='$LINKED_NAME' in front."
+      else
+        warn "This folder is linked to a service that is no longer in the project. Nothing was changed."
+      fi
+      warn "To use the $SERVICE service instead:  railway service link $SERVICE   (or railway link for another project)"
+      exit 1
+    fi
+  else
+    echo "Linked service: none"
+  fi
+  [[ -z $LINK_SERVICE ]] || SERVICE_ID="$LINK_SERVICE"
+  [[ -n $SERVICE_ID ]] || FRESH=true
+  if [[ -n ${DEPLOY_WORKSPACE:-} ]]; then
+    echo "This folder is already linked to a Railway project; DEPLOY_WORKSPACE is not used."
+  fi
+else
+  echo "This folder is not linked to a Railway project: a new project named $SERVICE will be created."
+  echo "(Already deployed from another folder? Stop with Ctrl-C and run railway link here first.)"
+  FRESH=true
+fi
+# A first deploy has nothing on Railway yet, so check its inputs before
+# anything is created.
+if [[ $FRESH == true ]]; then
+  if [[ -z $WANT_AUTH ]] && ! ask_auth; then
+    stop_no_auth "Nothing was changed."
+  fi
+  if [[ -z ${REPORT_TZ:-} ]] && ! ask_tz; then
+    stop_no_tz "Nothing was changed." "$WANT_AUTH"
+  fi
+  if [[ $WANT_AUTH == key && ! -t 0 ]]; then
+    warn "GARMIN_AUTH=key needs GARMIN_PERSONAL_API_KEY. Run this script in a terminal (it asks for the key"
+    warn "and never shows it). Nothing was changed."
+    exit 1
+  fi
+fi
+if [[ -z $LINK_DIR ]]; then
   INIT_ARGS=(--name "$SERVICE")
   if [[ -n ${DEPLOY_WORKSPACE:-} ]]; then
     INIT_ARGS+=(--workspace "$DEPLOY_WORKSPACE")
   fi
-  railway init "${INIT_ARGS[@]}"
-elif [[ $cli_rc -ne 0 ]]; then
-  warn "Could not read the Railway project status (network, or an expired login)."
-  warn "Nothing was changed. Check 'railway whoami' and 'railway status', then re-run."
-  exit 1
-elif [[ -n ${DEPLOY_WORKSPACE:-} ]]; then
-  echo "This folder is already linked to a Railway project; DEPLOY_WORKSPACE is not used."
+  railway init "${INIT_ARGS[@]}"   # creates the project and links this folder to it
 fi
-# railway init links an empty project; volumes and variables need a linked service.
-# Railway CLI 5.70 says "Project has no services." for a new project; older
-# versions said "No service linked".
-cli_rc=0
-CLI_OUT="$(railway variable list 2>&1)" || cli_rc=$?
-if grep -qE 'No service linked|has no services' < <(printf '%s\n' "$CLI_OUT"); then
-  CLI_OUT=""
-  railway add --service "$SERVICE"   # creates the service and links this directory to it
-elif [[ $cli_rc -ne 0 ]]; then
-  CLI_OUT=""
-  warn "Could not read the service variables from Railway (network, or an expired login)."
-  warn "Nothing was changed. Check 'railway whoami' and 'railway variable list', then re-run."
-  exit 1
+if [[ -z $LINK_DIR || -z $LINK_SERVICE ]]; then
+  reread_link || cannot_read_project
+  if [[ -n $SERVICE_ID ]]; then
+    railway service link "$SERVICE"   # the service exists: link this folder to it
+  else
+    railway add --service "$SERVICE"  # creates the service and links this folder to it
+  fi
+  reread_link || cannot_read_project
+  if [[ -z $SERVICE_ID || $LINKED_NAME != "$SERVICE" ]]; then
+    warn "Could not confirm that this folder is now linked to the $SERVICE service. Check 'railway status', then re-run."
+    exit 1
+  fi
+  echo "Linked project: $PROJECT_NAME"
+  echo "Linked service: $SERVICE"
 fi
-CLI_OUT=""
 # Read the service's variables once, before changing anything. If that fails
 # (network, expired login), stop: taking "could not read" for "nothing set"
 # would mint a new OWNER_SECRET, which signs out every client. On a first
-# deploy the service was linked just above, so the list succeeds and is
+# deploy the service was created just above, so the list succeeds and is
 # simply empty.
-if ! EXISTING="$(railway variable list --kv 2>/dev/null)" ||
+if ! EXISTING="$(railway variable list --kv --service "$SERVICE" 2>/dev/null)" ||
   { [[ -n $EXISTING ]] && ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' < <(printf '%s\n' "$EXISTING"); }; then
   warn "Could not read the service variables from Railway (network, or an expired login)."
   warn "Nothing was changed. Check 'railway whoami' and 'railway variable list', then re-run."
@@ -190,10 +396,8 @@ say "Settings the container checks at startup"
 RAILWAY_AUTH="$(lower_trim "$(sed -n 's/^GARMIN_AUTH=//p' < <(printf '%s\n' "$EXISTING"))")"
 AUTH_MODE="${WANT_AUTH:-$RAILWAY_AUTH}"
 if [[ -z $AUTH_MODE ]]; then
-  warn "GARMIN_AUTH is required: full (log in to Garmin once with your email and password; every tool)"
-  warn "or key (a Garmin Personal API key; fewer tools and less data). See docs/garmin-login.md."
-  warn "Nothing was deployed. Export it and re-run:  GARMIN_AUTH=full REPORT_TZ=Europe/London ./scripts/deploy.sh"
-  exit 1
+  ask_auth || stop_no_auth "Nothing was deployed."
+  AUTH_MODE="$WANT_AUTH"
 fi
 if [[ $AUTH_MODE != full && $AUTH_MODE != key ]]; then
   warn "GARMIN_AUTH on Railway is neither full nor key (the value is not shown)."
@@ -201,11 +405,7 @@ if [[ $AUTH_MODE != full && $AUTH_MODE != key ]]; then
   exit 1
 fi
 if [[ -z ${REPORT_TZ:-} ]] && ! grep -qE '^REPORT_TZ=.*[^[:space:]]' < <(printf '%s\n' "$EXISTING"); then
-  warn "REPORT_TZ is required: the IANA time zone for the daily and weekly status, e.g. Europe/London."
-  # AUTH_MODE is full or key here (checked above), so it is safe to show; on a
-  # first deploy it is not on Railway yet, so the re-run needs it again.
-  warn "Nothing was deployed. Export it and re-run:  GARMIN_AUTH=$AUTH_MODE REPORT_TZ=Europe/London ./scripts/deploy.sh  (your own zone)"
-  exit 1
+  ask_tz || stop_no_tz "Nothing was deployed." "$AUTH_MODE"
 fi
 # Key mode serves only the tools of config/enabled-tools-key.txt, and the
 # server refuses to start when GARMIN_ENABLED_TOOLS names any other (launch.py
@@ -361,12 +561,16 @@ fi
 echo "OK."
 
 say "Volume at /data (the Garmin login and the sign-ins live here)"
-# Capture first: piped straight into `grep -q`, which exits at the first match,
-# the CLI aborts writing to the closed pipe and pipefail fails the test.
-VOLUMES="$(railway volume list 2>/dev/null || true)"
-if grep -q '/data' <<<"$VOLUMES"; then
+# Only a volume of $SERVICE counts: another service's /data volume is not this one's.
+# `volume --service` takes the service id.
+vol_rc=0
+railway volume list --json 2>/dev/null | railway_json volume "$SERVICE" || vol_rc=$?
+if [[ $vol_rc -eq 0 ]]; then
   echo "Already attached."
-elif ! railway volume add --mount-path /data; then
+elif [[ $vol_rc -ne 3 ]]; then
+  warn "Could not read the volumes from Railway (network, or an expired login). Nothing was deployed."
+  exit 1
+elif ! railway volume --service "$SERVICE_ID" add --mount-path /data; then
   warn "Could not add the volume. In the Railway dashboard: open the $SERVICE service,"
   warn "create a volume with mount path /data, then re-run this script."
   exit 1
@@ -385,10 +589,11 @@ else
   DOMAIN="$(sed -n 's/^RAILWAY_PUBLIC_DOMAIN=//p' < <(printf '%s\n' "$EXISTING"))"
   [[ $DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || DOMAIN=""
   if [[ -z $DOMAIN ]]; then
-    DOMAIN_OUT="$(railway domain 2>&1 || true)"
+    # The host name is taken from the JSON reply by its shape, not from any message.
+    DOMAIN_OUT="$(railway domain --service "$SERVICE" --json 2>&1 || true)"
     DOMAIN="$(grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' <<<"$DOMAIN_OUT" | head -n1 || true)"
     if [[ -z $DOMAIN ]]; then
-      DOMAIN="$(railway domain list 2>/dev/null | grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' | head -n1 || true)"
+      DOMAIN="$(railway domain list --service "$SERVICE" --json 2>/dev/null | grep -oE '[A-Za-z0-9.-]+\.up\.railway\.app' | head -n1 || true)"
     fi
     if [[ -z $DOMAIN ]]; then
       echo "$DOMAIN_OUT"
@@ -406,13 +611,13 @@ say "Service variables"
 # GARMINTOKENS_BASE64 and GARMIN_MCP_STATELESS_HTTP are baked into the image,
 # so this script never sets them.
 if [[ -n $WANT_AUTH ]]; then
-  railway variable set --skip-deploys "GARMIN_AUTH=$WANT_AUTH" >/dev/null
+  railway variable set --skip-deploys "GARMIN_AUTH=$WANT_AUTH" --service "$SERVICE" >/dev/null
   echo "GARMIN_AUTH set to $WANT_AUTH."
 else
   echo "GARMIN_AUTH already set to $AUTH_MODE; keeping it (export GARMIN_AUTH to change it)."
 fi
 if [[ -n ${REPORT_TZ:-} ]]; then
-  railway variable set --skip-deploys "REPORT_TZ=$REPORT_TZ" >/dev/null
+  railway variable set --skip-deploys "REPORT_TZ=$REPORT_TZ" --service "$SERVICE" >/dev/null
   echo "REPORT_TZ set to $REPORT_TZ."
 else
   echo "REPORT_TZ already set; keeping it (export REPORT_TZ to change it)."
@@ -438,7 +643,7 @@ stopped_early() {
 # GARMIN_PERSONAL_API_KEY (key mode): typed above, stored on Railway through
 # stdin, never printed and never on a command line.
 if [[ $NEW_GARMIN_KEY == true ]]; then
-  printf '%s' "$GARMIN_KEY" | railway variable set GARMIN_PERSONAL_API_KEY --stdin --skip-deploys >/dev/null
+  printf '%s' "$GARMIN_KEY" | railway variable set GARMIN_PERSONAL_API_KEY --stdin --skip-deploys --service "$SERVICE" >/dev/null
   GARMIN_KEY=""
   [[ $HAD_GARMIN_KEY == false ]] || trap stopped_early EXIT
   echo "GARMIN_PERSONAL_API_KEY set (not shown)."
@@ -457,7 +662,7 @@ if [[ $OWNER_SECRET_WAS_MISSING == true || $ROTATE_SECRET == true ]]; then
     warn "Could not generate OWNER_SECRET (reading /dev/urandom failed). Nothing was deployed."
     exit 1
   fi
-  printf '%s' "$SECRET" | railway variable set OWNER_SECRET --stdin --skip-deploys >/dev/null
+  printf '%s' "$SECRET" | railway variable set OWNER_SECRET --stdin --skip-deploys --service "$SERVICE" >/dev/null
   SECRET=""
   [[ $ROTATE_SECRET == false ]] || trap stopped_early EXIT
   echo "OWNER_SECRET set (not shown). See it with: railway variable list --kv | grep ^OWNER_SECRET="
@@ -474,7 +679,7 @@ fi
 if [[ $ROTATE_TOKEN == true ]]; then
   TOKEN="$(openssl rand -hex 32)"
   # stdin, not argv, so the token never shows up in `ps`.
-  printf '%s' "$TOKEN" | railway variable set MCP_BEARER_TOKEN --stdin --skip-deploys >/dev/null
+  printf '%s' "$TOKEN" | railway variable set MCP_BEARER_TOKEN --stdin --skip-deploys --service "$SERVICE" >/dev/null
   # From here the new token is live: if anything below stops the script (a
   # failed build, Ctrl-C) before "Done" shows it, say where to find it.
   trap stopped_early EXIT
@@ -489,12 +694,10 @@ say "Healthcheck path"
 # Railway waits for /healthz before a new deployment goes live. Never /readyz: in full mode it stays 503 until the
 # Garmin login, so a first deployment would never go live. Best effort (the
 # dashboard can set it too), set before the build so the build's deployment
-# uses it. Captured first and never printed: the environment config also holds
-# variable values.
+# uses it. Only $SERVICE's own setting counts. Never printed: the environment
+# config also holds variable values.
 healthcheck_is_set() {
-  local cfg
-  cfg="$(railway environment config --json 2>/dev/null || true)"
-  grep -qE '"healthcheckPath": *"/healthz"' < <(printf '%s\n' "$cfg")
+  railway environment config --json 2>/dev/null | railway_json healthcheck "$SERVICE_ID"
 }
 if healthcheck_is_set; then
   echo "Already /healthz."
@@ -502,7 +705,7 @@ else
   # Railway CLI 5.70 applies this edit only when it runs in a terminal: it
   # asks "Apply changes now?" (Enter says yes). Without one it answers "No
   # changes to apply" and still exits 0, so the setting is read back instead
-  # of trusting the exit code (live test R1, 17 Nov 2026). The --json reply
+  # of trusting the exit code. The --json reply
   # holds no variable values, so it is shown.
   railway environment edit --service-config "$SERVICE" deploy.healthcheckPath /healthz \
     --message "coach-mcp-for-garmin: healthcheck /healthz" --json || true
@@ -513,11 +716,13 @@ else
   fi
 fi
 
-say "Building (a few minutes; stops here if the build fails)"
-# --ci exits once the build finishes; plain `railway up` keeps streaming runtime
-# logs forever and never reaches the summary below.
-railway up --ci
-echo "Build done; Railway is starting the container (~30 s)."
+say "Building and deploying (a few minutes; stops here if the build or the deploy fails)"
+# --ci streams the build log, then waits for the deployment: it exits 0 once
+# Railway reports it live (after the /healthz check when that is set) and 1
+# when it failed or crashed. Plain `railway up` keeps streaming runtime logs
+# forever and never reaches the summary below.
+railway up --ci --service "$SERVICE"
+echo "Deployed: Railway reports the new deployment as live."
 
 trap - EXIT
 say "Done"
@@ -546,7 +751,35 @@ if [[ $HAD_TOKEN == true && $ROTATE_TOKEN == false && $OWNER_SECRET_WAS_MISSING 
   # The first run after the update from the token-only version.
   warn "The https://<domain>/<token>/mcp form is gone (410). If you ever used it, the token may be in Railway's HTTP logs: run ./scripts/deploy.sh --rotate-token, or delete it: railway variable delete MCP_BEARER_TOKEN"
 fi
-if [[ $AUTH_MODE == full ]]; then
+# Full mode: offer the one-time Garmin login when this deploy is the first in
+# full mode, and only in a terminal (the login asks for the email, password
+# and MFA code). `railway ssh COMMAND` runs it on the server with a terminal.
+# A failed or skipped login does not stop the script: the notes below follow.
+LOGIN_DONE=false
+LOGIN_CMD=(garmin-mcp-auth --token-path /data/tokens)
+if [[ $AUTH_MODE == full && $RAILWAY_AUTH != full && -t 0 && -t 1 ]]; then
+  echo
+  echo "Full mode needs a one-time Garmin login on the server (docs/garmin-login.md): you type your"
+  echo "Garmin email, password and MFA code into the server's login, which keeps only the tokens."
+  answer=""
+  IFS= read -rp 'Run the Garmin login now? [Y/n] ' answer || answer=n
+  case "$(lower_trim "$answer")" in
+    "" | y | yes)
+      if railway ssh --service "$SERVICE" -- "${LOGIN_CMD[@]}"; then
+        LOGIN_DONE=true
+      else
+        warn "The Garmin login did not finish. Run it again with the steps below."
+      fi
+      ;;
+  esac
+fi
+if [[ $LOGIN_DONE == true ]]; then
+  cat <<'EOF'
+
+Garmin login done. Wait ~30 s while the server loads the tokens, then add the connector on
+claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
+EOF
+elif [[ $AUTH_MODE == full ]]; then
   cat <<'EOF'
 
 Next, first deploy only (docs/garmin-login.md):

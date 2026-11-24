@@ -1,14 +1,17 @@
-"""The history worker (ROLE=worker): claims jobs from the queue and runs their handlers (plan section 5b).
+"""The history worker (ROLE=worker): claims jobs from the queue and runs their handlers.
 
-Handlers are registered by the modules that own each kind (B3: index_day, build_week, sweep, rebuild; B5:
-embed_doc) with register(kind, handler, garmin=True|False). A handler is handler(job, ctx): ctx carries the store,
-the queue, the guard, the Garmin client, telemetry, the worker id and `conn`, the open transaction the job's own
-writes and follow-up jobs must use (queue.enqueue(..., conn=ctx.conn): the outbox). The worker then completes the
-job in that same transaction, so a crash leaves either everything or nothing.
+Handlers are registered by the modules that own each kind (history_jobs: index_day, build_week, sweep, rebuild;
+history_retrieval: embed_doc) with register(kind, handler, garmin=True|False, prepare=None). A handler is
+handler(job, ctx): ctx carries the store, the queue, the guard, the Garmin client, telemetry, the worker id and
+`conn`, the open transaction the job's own writes and follow-up jobs must use (queue.enqueue(..., conn=ctx.conn):
+the outbox). The worker then completes the job in that same transaction, so a crash leaves either everything or
+nothing. A kind that calls Garmin registers a prepare(job, ctx) step too: the worker runs it first, with no
+transaction open (ctx.conn is None), and passes what it returns as ctx.prepared, so no database transaction
+stays open while a Garmin call waits for the guard.
 
 What a handler may raise, and what happens to the job:
 - jobqueue.Defer(seconds, group): back to the queue after `seconds`, no attempt used (a week whose days are not
-  final, a stored token that is stale);
+  final, a stored token that is stale: that one also logs a WARNING, at most once every STALE_LOG_S);
 - garmin_guard.GuardBlocked(group, until): back to the queue until `until`; rate_limited and login use no attempt
   (they wait for the shared cooldown), neither do the guard's other groups; the worker then claims only kinds
   registered with garmin=False until `until` (at most MAX_PAUSE_S);
@@ -52,6 +55,8 @@ MAX_POLL_S = 30.0
 REAP_S = 60.0
 MAX_PAUSE_S = 900.0
 NOT_RETRIED = frozenset({tool_errors.BAD_INPUT, tool_errors.NO_DATA})
+TOKEN_STALE = "token_stale"     # worker_garmin.TOKEN_STALE: jobs wait for the app's Garmin token
+STALE_LOG_S = 3600.0            # the token_stale WARNING at most this often
 # Modules that may register job handlers; each one that exists and has register_jobs(register) is called.
 HANDLER_MODULES = ("history_jobs", "history_extract", "history_docs", "history_store", "history_embed",
                    "history_retrieval")
@@ -69,21 +74,26 @@ class Permanent(Exception):
 class Handler:
     fn: Callable[[Any, Any], Any]
     garmin: bool
+    prepare: Optional[Callable[[Any, Any], Any]] = None
 
 
 _HANDLERS: dict = {}
 _LOCK = threading.Lock()
+_STALE_LOGGED = {"at": None}     # when the token_stale WARNING was last logged (all worker threads)
 
 
-def register(kind: str, handler: Callable, *, garmin: bool = True) -> None:
+def register(kind: str, handler: Callable, *, garmin: bool = True, prepare: Optional[Callable] = None) -> None:
     """Run `handler(job, ctx)` for jobs of `kind`. garmin=False marks kinds that never call Garmin (embed_doc,
-    rebuild): they keep running while the guard pauses Garmin work."""
+    rebuild): they keep running while the guard pauses Garmin work. prepare(job, ctx), when given, runs first
+    with no transaction open (the Garmin calls); its return value is ctx.prepared for the handler."""
     if not isinstance(kind, str) or not jobqueue.KIND_RE.fullmatch(kind):
         raise ValueError("worker.register: kind must match [a-z_]{1,32}")
     if not callable(handler):
         raise TypeError("worker.register: handler must be callable")
+    if prepare is not None and not callable(prepare):
+        raise TypeError("worker.register: prepare must be callable")
     with _LOCK:
-        _HANDLERS[kind] = Handler(handler, bool(garmin))
+        _HANDLERS[kind] = Handler(handler, bool(garmin), prepare)
 
 
 def registered() -> dict:
@@ -95,6 +105,7 @@ def clear() -> None:
     """Tests only."""
     with _LOCK:
         _HANDLERS.clear()
+        _STALE_LOGGED["at"] = None
 
 
 @dataclasses.dataclass
@@ -108,6 +119,7 @@ class Context:
     job: Any = None
     conn: Any = None
     vectors: Any = None          # a LangChain VectorStore, when the worker has one (sweep's retention deletes)
+    prepared: Any = None         # what the kind's prepare step returned (its Garmin answers)
     lost: threading.Event = dataclasses.field(default_factory=threading.Event)
 
 
@@ -316,6 +328,11 @@ class Worker:
 
     def _run(self, job, handler: Handler, ctx: Context) -> tuple:
         try:
+            if handler.prepare is not None:
+                # The Garmin calls, before any transaction: a guard wait never holds a connection or a lock.
+                ctx.prepared = handler.prepare(job, ctx)
+                if ctx.lost.is_set():
+                    raise jobqueue.LeaseLost()
             with self.queue.transaction() as conn:
                 ctx.conn = conn
                 handler.fn(job, ctx)
@@ -330,6 +347,8 @@ class Worker:
             if _is_defer(exc):
                 group = getattr(exc, "group", None)
                 self.queue.defer(job, exc.seconds, group)
+                if group == TOKEN_STALE:
+                    self._log_stale(exc.seconds)
                 return "deferred", group
             if _is_permanent(exc):
                 group = jobqueue.clean_group(exc.group)
@@ -344,6 +363,18 @@ class Worker:
             log.log(level, "worker: job %s (%s) attempt %d failed: group=%s type=%s -> %s", job.id, job.kind,
                     job.attempts + 1, group, type(exc).__name__, status)
             return status or "lost", group
+
+    def _log_stale(self, seconds: float) -> None:
+        """One WARNING at most every STALE_LOG_S (across worker threads) while jobs wait for the Garmin token."""
+        now = self._clock()
+        with _LOCK:
+            last = _STALE_LOGGED["at"]
+            if last is not None and 0 <= now - last < STALE_LOG_S:
+                return
+            _STALE_LOGGED["at"] = now
+        log.warning("worker: Garmin jobs wait %.0f s: no usable Garmin token from the app (group=%s). Check "
+                    "that the app runs with HISTORY_SEARCH=on, the same HISTORY_TOKEN_KEY and a working Garmin "
+                    "login", seconds, TOKEN_STALE)
 
     def _blocked(self, job, exc) -> tuple:
         group = jobqueue.clean_group(getattr(exc, "group", None))
@@ -462,7 +493,7 @@ def main(argv=None, environ=None) -> int:
     import history_store
     import worker_garmin
 
-    # The store's migrations first (B3's versioned files), then the queue's, the guard's and the token's
+    # The store's migrations first (its versioned files), then the queue's, the guard's and the token's
     # tables; all take the one advisory lock (jobqueue.MIGRATE_LOCK_ID), all in schema history.
     store = history_store.PgHistoryStore(dsn)
     store.migrate()

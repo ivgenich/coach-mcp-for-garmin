@@ -14,10 +14,10 @@ import unittest
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import livefakes  # noqa: E402
+import livefakes
 
-STAGING = "coach-mcp-staging"
-DOMAIN = "coach-mcp-staging-production-" + "abcd.up.railway.app"
+STAGING = "coach-mcp-test"  # live-check.py's default project name
+DOMAIN = "coach-mcp-test-production-" + "abcd.up.railway.app"
 URL = "https://" + DOMAIN
 IPV4_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 IPV6_RE = re.compile(r"\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){2,7}\b")
@@ -52,6 +52,7 @@ class Base(unittest.TestCase):
 
     def env(self, **extra):
         env = dict(os.environ)
+        env.pop("LIVE_CHECK_PROJECTS", None)
         env["PATH"] = self.railway.path_env()
         env.update({"LIVE_CHECK_TEST_TIMEOUT": "10", "LIVE_CHECK_TEST_POLL": "0.1", "LIVE_CHECK_TEST_WAIT": "1"})
         env.update(extra)
@@ -70,21 +71,34 @@ class GuardTest(Base):
     def test_pass(self):
         code, out = self.lc("guard")
         self.assertEqual(code, 0, out)
-        self.assertIn("PASS guard: linked to Railway project coach-mcp-staging", out)
+        self.assertIn("PASS guard: linked to Railway project coach-mcp-test", out)
 
     def test_other_project_stops_before_anything_else(self):
         self.set_rules([], name="my-live-server")
         code, out = self.lc("url")
         self.assertEqual(code, 2, out)
-        self.assertIn('linked to project "my-live-server", not coach-mcp-staging. Nothing was run.', out)
+        self.assertIn('linked to project "my-live-server", not coach-mcp-test. Nothing was run.', out)
         self.assertEqual(self.railway.calls(), [["status", "--json"]])
 
-    def test_dryrun_project(self):
-        self.set_rules([], name="coach-mcp-dryrun")
-        code, out = self.lc("--project", "coach-mcp-dryrun", "guard")
+    def test_projects_from_env(self):
+        names = {"LIVE_CHECK_PROJECTS": "demo-a, demo-b"}
+        self.set_rules([], name="demo-b")
+        code, out = self.lc("--project", "demo-b", "guard", **names)
         self.assertEqual(code, 0, out)
-        code, out = self.lc("guard")
+        code, out = self.lc("guard", **names)  # the first name is the default
         self.assertEqual(code, 2, out)
+        self.assertIn('linked to project "demo-b", not demo-a. Nothing was run.', out)
+        code, out = self.lc("--project", "coach-mcp-test", "guard", **names)
+        self.assertEqual(code, 2, out)
+        self.assertIn("live-check: --project must be one of LIVE_CHECK_PROJECTS: demo-a, demo-b", out)
+        self.assertEqual(self.railway.calls(), [["status", "--json"], ["status", "--json"]])
+
+    def test_bad_projects_env(self):
+        for raw in ("a;b", ",,", "-x", "x" * 65):
+            with self.subTest(raw=raw):
+                code, out = self.lc("guard", LIVE_CHECK_PROJECTS=raw)
+                self.assertEqual(code, 2, out)
+                self.assertIn("live-check: LIVE_CHECK_PROJECTS must be a comma list", out)
 
     def test_unlinked(self):
         self.railway.set_rules([{"args": ["status"], "stdout": "", "stderr": "No linked project found. Run "
@@ -125,7 +139,7 @@ class GuardTest(Base):
     def test_project_refused_before_any_call(self):
         code, out = self.lc("--project", "live-thing", "guard")
         self.assertEqual(code, 2)
-        self.assertIn("live-check: --project must be coach-mcp-staging or coach-mcp-dryrun", out)
+        self.assertIn("live-check: --project must be one of LIVE_CHECK_PROJECTS: coach-mcp-test", out)
         code, out = self.lc("url", "--project", "my-live-server")
         self.assertEqual(code, 2)
         self.assertEqual(self.railway.calls(), [])
@@ -195,7 +209,7 @@ class RunTest(Base):
         marker = os.path.join(self.tmp, "started")
         code, out = self.lc("run", "--", sys.executable, "-B", "-c", f"open({marker!r}, 'w')")
         self.assertEqual(code, 2, out)
-        self.assertIn("FAIL run: no MCP_BEARER_TOKEN on Railway. Create one: DEPLOY_SERVICE=coach-mcp-staging "
+        self.assertIn("FAIL run: no MCP_BEARER_TOKEN on Railway. Create one: DEPLOY_SERVICE=coach-mcp-test "
                       "./scripts/deploy.sh --rotate-token", out)
         self.assertFalse(os.path.exists(marker))
 
@@ -204,13 +218,13 @@ class RunTest(Base):
         starter = f"open({marker!r}, 'w')"
         for extra in (["https://other.example/x"], ["sh -c 'curl \"https://other.example\"'"],
                       ["https://" + DOMAIN + "@other.example/"], ["http://other.example:8443/mcp"],
-                      # scheme without "//" and a host: curl may still find one (SEC F2)
+                      # scheme without "//" and a host: curl may still find one
                       ["https:/other.example/mcp"], ["http:other.example"], ["HTTPS:///other.example"],
                       ["https:" + chr(92) * 2 + "other.example"], ["x=https:other.example"]):
             with self.subTest(extra=extra):
                 code, out = self.lc("run", "--", sys.executable, "-B", "-c", starter, *extra)
                 self.assertEqual(code, 2, out)
-                self.assertIn("FAIL run: the command names a host that is not coach-mcp-staging's URL (not shown). "
+                self.assertIn("FAIL run: the command names a host that is not coach-mcp-test's URL (not shown). "
                               "Nothing was run.", out)
                 self.assertNotIn("other.example", out)
                 self.assertFalse(os.path.exists(marker))
@@ -448,7 +462,7 @@ class LogsTest(Base):
         self.assertIn("query parameter names: access_token, code, state", out)
 
     def test_railway_health_checks_are_set_aside(self):
-        # Live test R1 (17 Nov 2026): Railway's deploy health check reaches Caddy
+        # Railway's deploy health check reaches Caddy
         # from 100.64.0.0/10 with no edge header (client_ip = remote_ip).
         deploy = [caddy("/healthz", client_ip="100.64.0.3", remote_ip="100.64.0.3"),
                   caddy("/healthz", client_ip="100.64.0.9", remote_ip="100.64.0.9"),
@@ -523,7 +537,7 @@ class ProbeIpTest(Base):
         self.assertEqual(headers.get("cf-connecting-ip"), "203.0.113.11")
         self.assertIn("INFO probe-ip: 3 requests to a random /probe/ path with planted X-Real-IP, X-Forwarded-For "
                       "and CF-Connecting-IP", out)
-        self.assertIn("PASS T15: 3 of 3 requests found in Caddy's access log; client_ip is a planted address: no; "
+        self.assertIn("PASS probe-ip: 3 of 3 requests found in Caddy's access log; client_ip is a planted address: no; "
                       "client_ip class: public", out)
         self.assertNotIn("198.18.20.30", out)
 
@@ -534,7 +548,7 @@ class ProbeIpTest(Base):
             with self.subTest(addr=addr):
                 code, out, _ = self.run_probe(addr)
                 self.assertEqual(code, 1, out)
-                self.assertIn("FAIL T15: 3 of 3 requests found in Caddy's access log; " + text, out)
+                self.assertIn("FAIL probe-ip: 3 of 3 requests found in Caddy's access log; " + text, out)
 
     def test_private_fails(self):
         code, out, _ = self.run_probe("10.4.5.6")
@@ -545,7 +559,7 @@ class ProbeIpTest(Base):
     def test_not_found(self):
         code, out, _ = self.run_probe("198.18.20.30", delay_paths=True)
         self.assertEqual(code, 1, out)
-        self.assertIn("FAIL T15: the probe requests were not in the log within 1 s; run probe-ip again", out)
+        self.assertIn("FAIL probe-ip: the probe requests were not in the log within 1 s; run probe-ip again", out)
 
 
 class DataShapeTest(Base):

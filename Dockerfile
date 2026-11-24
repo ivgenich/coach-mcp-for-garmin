@@ -3,10 +3,13 @@
 # holds no secret: the Python server does the sign-in itself (OAuth 2.1 for the
 # Claude apps, or the optional static bearer header MCP_BEARER_TOKEN).
 
+# Base images pinned by tag and by the digest of the tag's multi-platform
+# index, so a re-pushed tag cannot change the build. Dependabot bumps both;
+# by hand: `docker buildx imagetools inspect caddy:<tag>` prints the digest.
 # Caddy release binary (static Go build) from the official image.
-FROM caddy:2.11.7 AS caddy
+FROM caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e AS caddy
 
-FROM python:3.12.15-slim
+FROM python:3.12.15-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 
 # Install from GitHub, not PyPI: the PyPI name "garmin-mcp" belongs to an
 # unrelated project (Tyler-Irving/garmin-mcp), and upstream's only tag, 0.1.0
@@ -15,8 +18,17 @@ FROM python:3.12.15-slim
 # Upstream caps mcp<2, but only mcp 2.x serves protocol 2026-07-28, so
 # garmin-mcp goes in with --no-deps and its dependencies (the list below is
 # upstream's pyproject at this commit) go in beside mcp==2.3.0, every package
-# pinned by constraints.txt. ext/mcp2_compat.py adapts mcp 2.x to the FastMCP
-# API upstream calls. Bump GARMIN_MCP_REF, the list and constraints.txt together.
+# pinned by constraints.txt and installed by hash from
+# config/requirements-core.txt. The last step re-reads that list against
+# constraints.txt with no package index: it installs nothing, and fails the
+# build if the hashed file misses a package. ext/mcp2_compat.py adapts mcp 2.x
+# to the FastMCP API upstream calls. Two packages are built from source: the
+# upstream tarball (hatchling) and fitparse's sdist (setuptools). Their build
+# backends come first, by hash, from config/requirements-build.txt, and both
+# builds run with --no-build-isolation, so pip fetches nothing unhashed; the
+# backends are uninstalled again before the re-check. Bump GARMIN_MCP_REF, the
+# list, constraints.txt, config/requirements-core.txt and (when upstream's
+# build-system changes) config/requirements-build.txt together.
 ARG GARMIN_MCP_REF=202913fde53c9d15890d661fc9748dc6d0d5af52
 
 ENV PYTHONUNBUFFERED=1 \
@@ -25,16 +37,22 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 COPY constraints.txt /tmp/constraints.txt
+COPY config/requirements-build.txt /tmp/requirements-build.txt
+COPY config/requirements-core.txt /tmp/requirements-core.txt
 COPY config/garmin-key-client.txt /tmp/garmin-key-client.txt
-RUN pip install --no-deps \
+RUN pip install --require-hashes --no-deps -r /tmp/requirements-build.txt \
+    && pip install --no-deps --no-build-isolation \
         "garmin-mcp @ https://github.com/Taxuspt/garmin_mcp/archive/${GARMIN_MCP_REF}.tar.gz" \
+    && pip install --require-hashes --no-deps --no-build-isolation -r /tmp/requirements-core.txt \
+    && pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt \
+    && pip uninstall --yes -r /tmp/requirements-build.txt \
+    && export PIP_NO_INDEX=1 \
     && pip install -c /tmp/constraints.txt \
         "python-dotenv==1.2.2" \
         "garminconnect==0.3.2" \
         "requests==2.33.0" \
         "fitparse>=1.2.0" \
-        "mcp==2.3.0" \
-    && pip install --require-hashes --no-deps -r /tmp/garmin-key-client.txt
+        "mcp==2.3.0"
 
 # The optional features' packages (ext/feature_config.py; both features are
 # off until their variable is set). Tracing (TRACING=on, docs/tracing.md): the
@@ -51,6 +69,19 @@ RUN pip install --require-hashes --no-deps -r /tmp/requirements-telemetry.txt \
     && if [ "$HISTORY" = 1 ]; then pip install --require-hashes --no-deps -r /tmp/requirements-history.txt; fi
 
 COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
+
+# Two unprivileged users: app runs the Python server (and the history worker),
+# caddy runs Caddy. entrypoint.sh starts as root only to give app the /data
+# volume (a volume made before this change holds root's files) and then starts
+# each program as its user with setpriv (util-linux, in the base image), so
+# Caddy cannot read the server's environment (OWNER_SECRET) in /proc. /data is
+# app's here too, for a container started without a volume.
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /home/app --create-home --shell /usr/sbin/nologin app \
+    && groupadd --system --gid 10002 caddy \
+    && useradd --system --uid 10002 --gid caddy --home-dir /home/caddy --create-home --shell /usr/sbin/nologin caddy \
+    && install -d -o app -g app -m 0700 /data \
+    && setpriv --reuid=app --regid=app --init-groups --no-new-privs -- true
 
 # Baked in so `railway ssh` and `docker compose exec` shells, which never run
 # entrypoint.sh, see them too: garmin-mcp-auth then writes its tokens and their
@@ -97,7 +128,7 @@ COPY config/enabled-tools.txt /opt/config/enabled-tools.txt
 RUN printf '%s\n' "import sys; sys.path.insert(0, '/opt/garmin-ext'); import mcp2_compat; sys.path.remove('/opt/garmin-ext'); mcp2_compat.register_finder()" \
         > "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/garmin_mcp2_compat.pth" \
     && garmin-mcp-auth --help >/dev/null \
-    && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)" \
+    && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version, worker_garmin; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); worker_garmin.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)" \
     && python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import telemetry, feature_config, garmin_guard; from opentelemetry.sdk.trace import TracerProvider; from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter" \
     && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue"; fi
 

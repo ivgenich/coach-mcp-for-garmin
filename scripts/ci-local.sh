@@ -121,7 +121,9 @@ fi
 if [ -x "$FULL/bin/python" ]; then
 	caddy=$(tool caddy)
 	step verify-env "$FULL/bin/python" -B scripts/ci-checks.py verify-env
-	step tests-full env REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 CADDY="${caddy:-}" "$FULL/bin/python" -B scripts/ci-unittest.py
+	# The pinned tools go first on PATH: the release-check tests run gitleaks.
+	step tests-full env PATH="$BIN:$PATH" REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 CADDY="${caddy:-}" \
+		"$FULL/bin/python" -B scripts/ci-unittest.py
 	if [ -n "$caddy" ]; then
 		step e2e "$FULL/bin/python" -B scripts/e2e-local.py --work "$CACHE/e2e" --caddy "$caddy" \
 			--server-port "${CI_E2E_SERVER_PORT:-8340}" --edge-port "${CI_E2E_EDGE_PORT:-8341}"
@@ -138,7 +140,7 @@ if [ -x "$HISTORYV/bin/python" ]; then
 	# With COACH_TEST_DATABASE_URL set, the Postgres tests must run too.
 	require_db=0
 	if [ -n "${COACH_TEST_DATABASE_URL:-}" ]; then require_db=1; fi
-	step tests-history env REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 REQUIRE_HISTORY=1 REQUIRE_DATABASE="$require_db" \
+	step tests-history env PATH="$BIN:$PATH" REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 REQUIRE_HISTORY=1 REQUIRE_DATABASE="$require_db" \
 		CADDY="$(tool caddy)" "$HISTORYV/bin/python" -B scripts/ci-unittest.py
 else
 	skip tests-history "no history venv (run --setup)"

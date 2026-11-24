@@ -99,6 +99,53 @@ class Arguments(unittest.TestCase):
             self.assertFalse(tool_errors.is_failure_text(text))
             text.encode("ascii")
 
+    def test_a_database_that_does_not_answer_is_the_fixed_text_for_every_read(self):
+        class Down(hs.MemoryHistoryStore):
+            def meta_get(self, key, default=None, *, conn=None):
+                raise hs.StoreError("history: cannot connect to the database")
+
+        svc = ht.HistoryService(Down(), lambda fp: None, today=lambda: dt.date(2026, 3, 25))
+        with self.assertLogs("garmin_ext.history", "WARNING") as logs:
+            self.assertEqual(svc.find_similar_weeks(), ht.TEXT_DB)
+            self.assertEqual(svc.search_history("bike"), ht.TEXT_DB)
+        self.assertIn("StoreError", "\n".join(logs.output))
+
+        class WeeksDown(hs.MemoryHistoryStore):
+            def weeks(self, *a, **kw):
+                raise hs.StoreError("history: database error")
+
+        store = WeeksDown()
+        store.meta_set(hs.META_ACCOUNT, "c" * 64)
+        svc = ht.HistoryService(store, lambda fp: None, today=lambda: dt.date(2026, 3, 25))
+        with self.assertLogs("garmin_ext.history", "WARNING"):
+            self.assertEqual(svc.find_similar_weeks(), ht.TEXT_DB)
+            self.assertEqual(svc.search_history("", kind="day", flags="rest_day"), ht.TEXT_DB)
+
+    def test_complete_needs_every_older_day_stored_and_final(self):
+        import history_extract as hx
+
+        today = dt.date(2026, 3, 25)
+        fp = "c" * 64
+        store = hs.MemoryHistoryStore()
+        store.meta_set(hs.META_ACCOUNT, fp)
+        start = today - dt.timedelta(days=60)
+        day = start
+        while day < today:
+            store.upsert_day(fp, day, {"mode": "key", "rhr": 50, "missing": []}, hx.is_final_day(day, today))
+            day += dt.timedelta(days=1)
+        svc = ht.HistoryService(store, lambda fp: None, today=lambda: today)
+        self.assertFalse(svc.index_block(fp)["complete"], "no floor and not a year back")
+        store.meta_set(hs.META_BACKFILL_FLOOR, start.isoformat())
+        self.assertTrue(svc.index_block(fp)["complete"])
+        # A day that stayed open (a source failed on every try) counts as missing.
+        store._days[(fp, start + dt.timedelta(days=5))]["final"] = False
+        self.assertFalse(svc.index_block(fp)["complete"])
+        store._days[(fp, start + dt.timedelta(days=5))]["final"] = True
+        # Probe days stored before the floor do not move the index start.
+        store.upsert_day(fp, start - dt.timedelta(days=21), {"mode": "key", "missing": []}, True)
+        block = svc.index_block(fp)
+        self.assertEqual((block["from"], block["complete"]), (start.isoformat(), True))
+
     def test_descriptions(self):
         for d in (ht.FIND_DESCRIPTION, ht.SEARCH_DESCRIPTION):
             self.assertLessEqual(len(d), 2048)

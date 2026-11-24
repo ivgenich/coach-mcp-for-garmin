@@ -3,7 +3,7 @@
 Before this module, "stop for 15 minutes" after a Garmin rate limit was only
 text for the model, and evals showed models retry anyway. The guard enforces
 it in code, and with history search on it also keeps the background worker
-(ROLE=worker) from competing with live tool calls (plan section 3):
+(ROLE=worker) from competing with live tool calls:
 
 - a cooldown, set by a rate_limited or login outcome from any caller:
   workers pause WORKER_PAUSE[group] (6 h, 24 h); live tool calls are refused
@@ -19,7 +19,9 @@ it in code, and with history search on it also keeps the background worker
   day; at the cap the worker waits for the next 12:00 local) and a quiet
   window: workers call Garmin only from 12:00 to 22:00 local time;
 - refresh_lock, around full mode's token refresh in each process
-  (garminconnect refreshes without one; install_refresh_lock()).
+  (garminconnect refreshes without one; install_refresh_lock()), and an
+  atomic, owner-only write of the token file garminconnect saves after a
+  refresh (install_atomic_token_dump()).
 
 The state lives behind the SharedState protocol: MemoryState here (one
 process; the default, and the only one with history search off), and the
@@ -34,8 +36,11 @@ Standard library only; thread-safe; nothing here logs a value.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import logging
+import os
+import tempfile
 import threading
 import time
 from typing import Callable, NamedTuple, Optional, Protocol, Tuple
@@ -464,4 +469,80 @@ def install_refresh_lock(lock, on_refreshed: Optional[Callable[[object], None]] 
     _refresh_session._coach_refresh_lock = True
     _refresh_session.__wrapped__ = original
     cls._refresh_session = _refresh_session
+    return True
+
+
+# --- full mode's token file ----------------------------------------------------------------------------
+
+TOKEN_FILE_NAME = "garmin_tokens.json"   # the name garminconnect gives the file inside a token folder
+TOKEN_FILE_MODE = 0o600
+
+
+def token_file(path):
+    """The file garminconnect's Client.dump(path) writes: `path` itself when it names a .json file that is not
+    a folder, else <path>/garmin_tokens.json (the same rule as garminconnect)."""
+    from pathlib import Path
+
+    p = Path(path).expanduser()
+    if p.is_dir() or not p.name.endswith(".json"):
+        p = p / TOKEN_FILE_NAME
+    return p
+
+
+def write_private_atomic(path, text: str) -> None:
+    """Write `text` to `path` so a reader (or a restart after a kill) sees the old file or the new one, never
+    a part: a temporary file in the same folder, mode 0600, flushed and fsynced, then os.replace(). The
+    temporary file is removed when anything fails; the error propagates."""
+    folder = os.path.dirname(os.fspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix="." + os.path.basename(os.fspath(path)) + ".", suffix=".tmp")
+    try:
+        os.fchmod(fd, TOKEN_FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    # The rename itself survives a power loss only once the folder is synced; best effort.
+    with contextlib.suppress(OSError):
+        dir_fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+
+def install_atomic_token_dump() -> bool:
+    """Make garminconnect's Client.dump(path) write the token file with write_private_atomic(): garminconnect
+    writes it with Path.write_text() after each token refresh, so a kill in the middle of that write could
+    leave a cut file and force a new login (with MFA). The file and folder rules stay garminconnect's. True
+    when installed (or already installed), False when garminconnect, Client.dump or Client.dumps is missing.
+    Idempotent."""
+    try:
+        from garminconnect import client as gc_client
+    except Exception:  # noqa: BLE001 - key mode images or the stdlib leg
+        return False
+    cls = getattr(gc_client, "Client", None)
+    original = getattr(cls, "dump", None) if cls is not None else None
+    if original is None or not callable(getattr(cls, "dumps", None)):
+        return False
+    if getattr(original, "_coach_atomic_dump", False):
+        return True
+
+    def dump(self, path):
+        target = token_file(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_private_atomic(target, self.dumps())
+
+    dump._coach_atomic_dump = True
+    dump.__wrapped__ = original
+    dump.__doc__ = original.__doc__
+    cls.dump = dump
     return True

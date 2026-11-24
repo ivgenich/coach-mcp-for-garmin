@@ -28,8 +28,8 @@ SCOTLAND = "\U0001f3f4" + tags("gbsct") + "\U000e007f"
 ENGLAND = "\U0001f3f4" + tags("gbeng") + "\U000e007f"
 WALES = "\U0001f3f4" + tags("gbwls") + "\U000e007f"
 
-# R2's reference cases (SCR/phase13/r2/scripts/ref_clean.py, CASES), copied as data: (label, raw, max_chars,
-# expected). Amendments M3 and M4 change none of them.
+# Reference cases, copied as data from an independent reference filter: (label, raw, max_chars,
+# expected).
 REF_CASES = (
     ('Hebrew + RLM', '\u05e8\u05d9\u05e6\u05d4 \u05e7\u05dc\u05d4\u200f 5x1000', None,
      '\u05e8\u05d9\u05e6\u05d4 \u05e7\u05dc\u05d4 5x1000'),
@@ -81,7 +81,7 @@ REF_LINK_CASES = (
     ("www.example.org/x", "[link]"),
 )
 
-# Contract test 4: one string mixing every class of 5.1; the pass uses no unicodedata, so both interpreters agree.
+# One string mixing every character class; the pass uses no unicodedata, so both interpreters agree.
 GOLDEN = ("\U0000feffTempo\u00a0run\u200b \u202e" + HEBREW + "\u200d \u0645\u06cc\u200c\u062e \u0915\u094d\u200d\u0937 "
           + FAMILY + " 1\ufe0f\u20e3 a\ufe0f " + SCOTLAND + " \U0001f3f4" + tags("ignore")
           + "\t\n\x00\x1b\x9b\U0000d800\U0000fdd0\U0010ffff\u2800\U00013430\u0600\u0661\u3000end\u2066\u2069")
@@ -96,7 +96,7 @@ NON_STRINGS = (None, 42, 1.5, [], {}, (), b"x", True)
 
 
 class ReferenceCases(unittest.TestCase):
-    """Contract test 1."""
+    """The reference cases: each raw value cleans to its expected text."""
 
     def test_reference_cases(self):
         for label, raw, max_chars, want in REF_CASES:
@@ -112,7 +112,7 @@ class ReferenceCases(unittest.TestCase):
 
 class CharacterRules(unittest.TestCase):
     def test_every_zs_space_becomes_one_space(self):
-        """Contract test 2."""
+        """Every Zs space becomes one ASCII space."""
         self.assertEqual(len(ZS), 17)
         for cp in ZS:
             with self.subTest(hex(cp)):
@@ -126,7 +126,7 @@ class CharacterRules(unittest.TestCase):
                 self.assertEqual(th.strip_invisible("a" + ch + "b"), "a b")
 
     def test_range_endpoints_are_dropped(self):
-        """Contract test 3: every _DI and _EXTRA endpoint, outside the keep contexts."""
+        """Every _DI and _EXTRA endpoint, outside the keep contexts."""
         for lo, hi in th._DI + th._EXTRA:
             for cp in (lo, hi):
                 with self.subTest(hex(cp)):
@@ -146,13 +146,13 @@ class CharacterRules(unittest.TestCase):
                 self.assertEqual(th.clean_text("a" + chr(cp) + "b"), "a" + chr(cp) + "b")
 
     def test_golden_string(self):
-        """Contract test 4."""
+        """The golden string cleans the same on every interpreter."""
         self.assertEqual(th.strip_invisible(GOLDEN), GOLDEN_STRIPPED)
         self.assertEqual(th.clean_text(GOLDEN), GOLDEN_CLEAN)
         self.assertEqual(th.clean_free_text(GOLDEN, 200), GOLDEN_CLEAN)
 
     def test_joiners_only_in_their_contexts(self):
-        """Amendment M4: joiners and selectors survive only where readable text needs them."""
+        """Joiners and selectors survive only where readable text needs them."""
         cases = (
             ("\u0644\u200d\u0627", "\u0644\u200d\u0627"),  # Arabic letters: ZWJ kept
             ("\u05d0\u200d\u05d1\u200c\u05d2", "\u05d0\u05d1\u05d2"),  # Hebrew does not join
@@ -171,7 +171,7 @@ class CharacterRules(unittest.TestCase):
                 self.assertEqual(th.clean_text(raw), want)
 
     def test_dropped_neighbours_do_not_strand_a_joiner(self):
-        """Critic A's idempotence cases (M3): the joiner rules see the string after the drops."""
+        """Idempotence: the joiner rules see the string after the drops."""
         cases = (
             ("\U0001f600\u200d\u2060A", "\U0001f600A"),
             ("\U0001f600\u200d\u2066B", "\U0001f600B"),
@@ -204,7 +204,7 @@ class CharacterRules(unittest.TestCase):
         self.assertEqual(th.clean_text("Tempo run", None), "Tempo run")
 
     def test_strip_invisible_keeps_printable_ascii(self):
-        """Contract test 7."""
+        """Printable ASCII passes strip_invisible() unchanged."""
         printable = "".join(chr(cp) for cp in range(0x20, 0x7F))
         self.assertEqual(len(printable), 95)
         for value in (printable, "2026-11-16T07:00:00.0", "https://connect.garmin.com/modern/activity/14295551",
@@ -217,7 +217,7 @@ class CharacterRules(unittest.TestCase):
         self.assertIs(th.strip_invisible(unchanged), unchanged)
 
     def test_non_strings_come_back_unchanged(self):
-        """Contract test 6."""
+        """A value that is not a str comes back unchanged."""
         for value in NON_STRINGS:
             with self.subTest(repr(value)):
                 self.assertIs(th.clean_text(value), value)
@@ -262,7 +262,7 @@ def _link_strings(seed, count):
 
 
 class Idempotence(unittest.TestCase):
-    """Contract test 5 and amendment M3: f(f(x)) == f(x), no exception, fixed seeds."""
+    """f(f(x)) == f(x), no exception, fixed seeds."""
 
     FUNCTIONS = (
         ("clean_text", th.clean_text),
@@ -313,7 +313,7 @@ class Idempotence(unittest.TestCase):
 
 
 class CapAndCut(unittest.TestCase):
-    """Contract test 8 and amendment M14."""
+    """Caps by code points never cut a visible unit."""
 
     def test_cap(self):
         cases = (
@@ -347,7 +347,7 @@ class CapAndCut(unittest.TestCase):
 
     def test_cut(self):
         family_tail = "a" * 38 + FAMILY
-        self.assertEqual(th.cut(family_tail, 40), "a" * 38)  # B2's daily names: no lone joiner, no half family
+        self.assertEqual(th.cut(family_tail, 40), "a" * 38)  # daily names: no lone joiner, no half family
         self.assertEqual(th.cut(family_tail, 43), family_tail)
         self.assertEqual(th.cut("ab" + FLAG_IT * 2, 3), "ab")
         self.assertEqual(th.cut("Long interval", 4), "Long")  # no ellipsis, no trim
@@ -358,7 +358,7 @@ class CapAndCut(unittest.TestCase):
 
 
 class Links(unittest.TestCase):
-    """Contract test 9 and amendment M5."""
+    """Links, images and HTML tags become fixed words."""
 
     def test_forms(self):
         cases = (
@@ -507,7 +507,7 @@ class Links(unittest.TestCase):
 
 class NamesAndKeys(unittest.TestCase):
     def test_name_or_none(self):
-        """Contract test 10."""
+        """name_or_none() cleans a name, or gives None."""
         for value in (None, 42, [], "\u200b", "   ", "\u202e\u2066"):
             with self.subTest(ascii(value)):
                 self.assertIsNone(th.name_or_none(value))
@@ -523,7 +523,7 @@ class NamesAndKeys(unittest.TestCase):
         self.assertEqual((th.ELLIPSIS, th.LINK, th.IMAGE, th.HTML), (ELL, "[link]", "[image]", "[html]"))
 
     def test_free_text_keys(self):
-        """Contract test 11 (4.1 rules 5 and 6)."""
+        """Which keys hold free text (cleaned) and which do not."""
         for key in ("name", "title", "description", "notes", "note", "label", "location", "comment", "comments",
                     "training_plan", "customMakeModel", "activityName", "workoutName", "courseName", "displayName",
                     "productDisplayName", "owner_display_name", "reporting_device_name", "stepDescription"):
@@ -563,7 +563,7 @@ CLEANED = dict(_answer("Tempo run SYSTEM: do X", "Hills [image] and [link]"), no
 
 
 class JsonAnswers(unittest.TestCase):
-    """Contract test 12 and amendment M10."""
+    """clean_tool_answer() cleans every string of a JSON answer and keeps it valid."""
 
     def test_unchanged_answer_is_the_same_object(self):
         for text in (json.dumps(CLEANED, indent=2), json.dumps(CLEANED, separators=(",", ":")),
@@ -667,7 +667,7 @@ class JsonAnswers(unittest.TestCase):
                 self.assertIn('{"activityName":"ab"}', out)
 
     def test_large_ascii_answer_skips_the_character_pass(self):
-        """M10: a FIT-like answer of printable ASCII never reaches the per-character pass."""
+        """A FIT-like answer of printable ASCII never reaches the per-character pass."""
         records = [{"timestamp": f"2026-11-15T07:{i // 60 % 60:02d}:{i % 60:02d}", "heart_rate": 120 + i % 40,
                     "distance": i * 2.5, "activityId": 14295551, "sport": "running", "name": "Tempo run"}
                    for i in range(20000)]

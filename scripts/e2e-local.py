@@ -78,7 +78,7 @@ REPO = os.path.dirname(HERE)
 SIGNIN = os.path.join(HERE, "test-signin.py")
 PROTOCOL = os.path.join(HERE, "test-protocol.py")
 PREFIX = "launch: config error: "
-# Section 7 of the build contract: what --check-config prints for the bad environment below.
+# What --check-config prints for the bad environment below.
 BAD_ENV_LINES = (
     ("A2", "PUBLIC_URL must start with https:// (http:// only for 127.0.0.1, localhost or [::1], and never on Railway)"),
     ("A3", "PUBLIC_URL must be an origin only (scheme, host, optional port): no path, query, fragment or user info"),
@@ -90,7 +90,7 @@ LOOPBACK_BIND = "default_bind 127.0.0.1"  # the one line the Caddy leg adds to t
 # A "rate limit:" line of ext/auth_http.py; the address is the bucket's caller.
 RATE_LIMIT_LINE = re.compile(r"rate limit: \S+ \S+ \([^)]*\) from (\S+), retry in \d+s")
 CALLER_ADDRESS = re.compile(r"203\.0\.113\.\d{1,3}|160\.79\.104\.9")  # test-signin.py's callers
-# The "tool error:" log lines of ext/launch.py's tool-error wrapper (step 1.3): S45's call
+# The "tool error:" log lines of ext/launch.py's tool-error wrapper: S45's call
 # without a Garmin login, test-protocol.py's impossible date, and the internal-error marker.
 TOOL_ERROR_LOGIN = "tool error: tool=get_activities group=login:"
 TOOL_ERROR_BAD_INPUT = "tool error: tool=get_daily_status group=bad_input:"
@@ -602,7 +602,7 @@ class E2E:
             live = leg in self.live_legs
             n = text.count("?[redacted]")
             step(f"control/{leg}-server-log", n >= 1, f"?[redacted] in the server log: {n} (want 1+)")
-            # Live test R1 (17 Nov 2026): one record, one line. Railway shows each
+            # One record, one line: Railway shows each
             # line as its own entry and scripts/live-check.py reads them one by one.
             whole = re.search(r"(?m)^INFO [\w.]+: sign-in: on, issuer \S+, static bearer (?:on|off)$", text)
             step(f"control/{leg}-one-line-records", whole is not None,
@@ -622,7 +622,7 @@ class E2E:
                  f"{'' if live else ', S36-S38 and S47'}), {unread} unreadable; naming a "
                  f"caller's address: {len(named) - len(other)}; naming another address: {len(other)} "
                  f"{sorted(set(other))}")
-            # Step 1.3: the wrapper logs one line per failed tool call. S45 calls
+            # The wrapper logs one line per failed tool call. S45 calls
             # get_activities without a Garmin login; test-protocol.py sends an
             # impossible date (two runs, two eras); none may be an internal error.
             n_login = joined.count(TOOL_ERROR_LOGIN)

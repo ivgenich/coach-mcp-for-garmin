@@ -63,3 +63,10 @@ list** the same way, since claude.ai keeps the old descriptions too.
 | `get_race_predictions` | Race time predictions | yes | no |
 | `get_personal_record` | Personal records | yes | no |
 | `get_progress_summary_between_dates` | Totals per sport between two dates | yes | no |
+
+With history search on (`HISTORY_SEARCH=on`, Railway only for now), the server also has
+`find_similar_weeks` (past weeks most like a given week) and `search_history` (stored days and
+weeks that match words, flags or dates), in both modes. They read only your own Postgres and
+never call Garmin. They are not in `config/enabled-tools.txt`: the switch adds them, and
+`GARMIN_ENABLED_TOOLS`, when set, can narrow them away like any other tool.
+[History search](history-search.md).

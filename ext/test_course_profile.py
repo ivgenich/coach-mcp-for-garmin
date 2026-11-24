@@ -101,19 +101,27 @@ class Points(unittest.TestCase):
         out = cp._distance_elevation(pts)
         self.assertAlmostEqual(out[-1][0], 190.6, delta=1)  # 2 x 0.001 deg at 31 N
 
+    def test_a_point_without_coordinates_does_not_break_the_distance(self):
+        # [A, B (no coordinates), C, D]: A to C is measured from A, so the total equals the gap-free route's.
+        full = [{"latitude": 31.0, "longitude": -100.0 + i * 0.001, "elevation": i} for i in range(4)]
+        gap = [dict(p) for p in full]
+        gap[1] = {"elevation": 1}
+        self.assertAlmostEqual(cp._distance_elevation(gap)[-1][0], cp._distance_elevation(full)[-1][0], places=6)
+        self.assertAlmostEqual(cp._distance_elevation(gap)[-1][0], 285.9, delta=1)  # 3 x 0.001 deg at 31 N
+
     def test_too_few_points_raises(self):
         with self.assertRaises(ValueError):
             cp.analyze_course({"geoPoints": [{"distance": 0, "elevation": 1}]})
 
     def test_too_few_points_is_no_data(self):
-        # M2: NoData (a ValueError) reaches the tool-error wrapper, which groups it as no data.
+        # NoData (a ValueError) reaches the tool-error wrapper, which groups it as no data.
         with self.assertRaises(sc.NoData) as ctx:
             cp.analyze_course({"geoPoints": [{"distance": 0, "elevation": 1}, {"distance": 10}]})
         self.assertEqual(tool_errors.classify_exception(ctx.exception)[0], tool_errors.NO_DATA)
 
 
 class CourseName(unittest.TestCase):
-    """The course name is typed in Garmin: cleaned where it is read (contract 4.7)."""
+    """The course name is typed in Garmin: cleaned where it is read."""
 
     def name_of(self, value):
         data = course([(1000, 0)])
@@ -205,7 +213,7 @@ class Tool(unittest.TestCase):
         self.assertTrue(self.call(course_id=7).startswith("Error: course 7 not found"))
 
     def test_errors_leave_the_tool(self):
-        # D6 and M2: no catch-all. A Garmin error and NoData reach launch.py's tool-error wrapper, which answers
+        # No catch-all. A Garmin error and NoData reach launch.py's tool-error wrapper, which answers
         # each with a fixed text (and logs a bug's traceback under a ref).
         garmin_error = type("GarminConnectConnectionError", (Exception,), {"__module__": "garminconnect.exceptions"})
         self.client.client.error = garmin_error("API Error 503 - Service Unavailable")

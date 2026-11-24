@@ -3,8 +3,9 @@
 History search (`HISTORY_SEARCH=on`, see [history-search.md](history-search.md)) fills its
 index in the background. The work runs as jobs in a Postgres queue, done by a separate
 worker service, and a small scheduler adds the day's jobs once a day. This page explains how
-that works and how to set up the two extra services on Railway, from the dashboard (web or
-phone). Nothing here runs on your computer.
+that works and how to set up the two extra services on Railway: you create them and set their
+variables in the dashboard, then deploy them from your clone with the Railway CLI, the same way
+`scripts/deploy.sh` deploys the app.
 
 With history search off (the default) none of this exists: no worker, no scheduler, no
 database.
@@ -18,8 +19,10 @@ database.
 | scheduler (Railway cron) | yes | `ROLE=enqueue`, a cron schedule | none | none |
 | Postgres (with pgvector) | Railway template | | its own | none (private network) |
 
-All three of ours are built from the same repository with the build argument `HISTORY=1`
-(the service variable `HISTORY=1`; Railway passes service variables to the build).
+All three of ours are built from the same checkout of this repository with the build argument
+`HISTORY=1` (the service variable `HISTORY=1`; Railway passes service variables to the build, so
+set it before a service's first build). Deploy all three from the same commit: each of them
+updates the database tables when it starts.
 
 - The **app** answers the history tools from Postgres. It never runs jobs. At startup it
   adds the catch-up jobs in the background, so a first deploy starts indexing without
@@ -32,7 +35,7 @@ All three of ours are built from the same repository with the build argument `HI
 
 ## Set it up on Railway
 
-Do these in order. Each step that changes production waits for your "go".
+Do these in order, in the folder of your clone that `scripts/deploy.sh` deploys from.
 
 1. **Postgres.** In the project: New, Database, PostgreSQL, using a template with the
    pgvector extension. Keep it on the private network (no public TCP proxy). Turn backups
@@ -40,10 +43,14 @@ Do these in order. Each step that changes production waits for your "go".
    [Stopping, redeploying, forgetting](#stopping-redeploying-forgetting)).
 2. **App.** On the existing service, add the variables `HISTORY=1`, `HISTORY_SEARCH=on` and
    `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (a reference variable: pick it from the
-   list). With `GARMIN_AUTH=full` also add `HISTORY_TOKEN_KEY` (below). Redeploy.
-3. **Worker.** New, GitHub Repo, the same repository and branch. In Variables, use "Shared
-   variables" or copy from the app: `GARMIN_AUTH`, `REPORT_TZ`, `HISTORY=1`,
-   `HISTORY_SEARCH=on`, `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`, then add `ROLE=worker`.
+   list). With `GARMIN_AUTH=full` also add `HISTORY_TOKEN_KEY` (below). Then run
+   `./scripts/deploy.sh`, which builds the app again with `HISTORY=1`.
+3. **Worker.** In the project: New, Empty Service, and name it `worker`. Create it in the
+   dashboard, not with `railway add`, which would link your folder to the new service (then
+   `railway service link coach-mcp-for-garmin` links it back). Before the first deploy, in
+   Variables, use "Shared variables" or copy from the app: `GARMIN_AUTH`, `REPORT_TZ`,
+   `HISTORY=1`, `HISTORY_SEARCH=on`, `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`, then add
+   `ROLE=worker`.
    - Key mode (`GARMIN_AUTH=key`): add `GARMIN_PERSONAL_API_KEY` too. The worker gets its
      own 24-hour access token and caches it in a temporary folder (no volume needed).
    - Full mode (`GARMIN_AUTH=full`): add the same `HISTORY_TOKEN_KEY` as the app. Do not
@@ -51,9 +58,12 @@ Do these in order. Each step that changes production waits for your "go".
    - Optional: `WORKER_CONCURRENCY` (1 to 4, default 1). More threads only help the
      embedding work: Garmin calls share one bucket whatever the number of workers.
    - In Settings, Networking: no domain. No volume. Replicas: 1 is enough.
-4. **Scheduler.** New, GitHub Repo, the same repository again. Variables as the worker's,
-   but `ROLE=enqueue` instead of `ROLE=worker` (no Garmin key or token key needed: it never
-   calls Garmin). In Settings, Cron Schedule: for example `15 9 * * *` (09:15 UTC daily).
+   - Then deploy it from your clone: `railway up --ci --service worker`.
+4. **Scheduler.** New, Empty Service again, named `scheduler`. Its variables: `REPORT_TZ`,
+   `HISTORY=1`, `HISTORY_SEARCH=on`, `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` and
+   `ROLE=enqueue`. No `GARMIN_AUTH`, Garmin key or token key: it never calls Garmin. In
+   Settings, Cron Schedule: for example `15 9 * * *` (09:15 UTC daily). Deploy it from your
+   clone: `railway up --detach --service scheduler`, then watch its build in the dashboard.
    The time hardly matters: the worker calls Garmin only from 12:00 to 22:00 in `REPORT_TZ`,
    and the jobs say "index what is missing", not "index this hour".
 5. Check the logs: the worker says `worker: on, 1 thread(s), handlers from ...`; the
@@ -156,8 +166,8 @@ SELECT key, attempts, last_error_group, finished_at FROM history.jobs WHERE stat
 
 `last_error_group` is a fixed name: `rate_limited`, `login`, `unavailable`, `no_data`,
 `bad_input`, `internal`, `lease_expired`, `token_stale`, `profile_missing`, `quiet_window`, `live_busy`,
-`bucket`, `cooldown`, `guard_unavailable` or a handler's own (for example
-`account_mismatch`).
+`bucket`, `cooldown`, `daily_cap`, `guard_unavailable` or a handler's own (for example
+`account_mismatch`, or `prepare_stale` when a day changed while its Garmin data was fetched).
 
 To run a failed job again after fixing the cause, delete its row; the next sweep adds it
 again:
@@ -171,13 +181,15 @@ DELETE FROM history.jobs WHERE status = 'failed' AND key = 'index_day:2026-11-23
 - **Redeploy or restart.** The worker finishes its running job on SIGTERM when it can; if
   the platform kills it first, the lease runs out and another run picks the job up.
   Nothing is lost.
+- **Update.** Deploy the same commit to all three: in your clone, `./scripts/deploy.sh` (the
+  app), then `railway up --ci --service worker` and `railway up --detach --service scheduler`.
 - **Pause indexing.** Remove the worker service, or set its replicas to 0. Jobs wait in the
   queue.
-- **Forget.** Set `HISTORY_FORGET=yes` on the app and the worker (see
+- **Forget.** Set `HISTORY_FORGET=yes` on the app, the worker and the scheduler (see
   [history-search.md](history-search.md#forgetting)). The app deletes the schema `history`, which holds
   the stored history and also the job queue, the guard's row and the stored Garmin token.
   While the flag is set the worker stays idle and the scheduler adds nothing, so neither
-  recreates the tables. Remove the flag from both afterwards.
+  recreates the tables. Remove the flag from all three afterwards.
 - **Turn it off.** Delete the worker and scheduler services, set `HISTORY_SEARCH=off` on the
   app (or remove it), and delete the Postgres service if you no longer want the data.
   In full mode the app deletes the sealed Garmin token row (`history.garmin_token`) at its next
@@ -191,6 +203,6 @@ DELETE FROM history.jobs WHERE status = 'failed' AND key = 'index_day:2026-11-23
 
 ## Cost
 
-The worker is small and mostly idle (about $1-3 a month on Railway's usage pricing), the
-scheduler runs for a few seconds a day (near $0). Measured figures go in
-[history-search.md](history-search.md) once production has run for a while.
+Estimates on Railway's usage pricing: the worker is small and mostly idle, about $1-3 a
+month; the scheduler runs for a few seconds a day, near $0; the Postgres about $3-5. In all,
+about $4-8 a month on top of the app.

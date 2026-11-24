@@ -36,7 +36,7 @@ def fit_failure(activity_id):
         return f"Error downloading FIT data for activity {activity_id}: {str(e)}"
 
 
-# EV-SEC-2: a long id, a colon, a line break, an id longer than classify_text's 4,000-character window, and an id
+# A long id, a colon, a line break, an id longer than classify_text's 4,000-character window, and an id
 # past int()'s 4,300-digit limit.
 FIT_TEXTS = tuple(fit_failure(i) for i in ("1" * 47, "1:2", "x\nrate limit", "a" * 5000, "1" * 5000, "garmin login"))
 
@@ -175,7 +175,7 @@ class Constants(unittest.TestCase):
             self.assertIn(te.GROUP_PHRASE[group], text)
 
     def test_texts_and_details(self):
-        self.assertEqual(te.FAILURE_RE.pattern, r"^Error(?: [^\n]{1,200}?)?: ")  # fixer EV-SEC-2 (4.2: [^:\n]{1,80})
+        self.assertEqual(te.FAILURE_RE.pattern, r"^Error(?: [^\n]{1,200}?)?: ")  # the head may hold colons (was [^:\n]{1,80})
         self.assertEqual(te.PLAIN_FAILURE_PREFIXES, (
             "Invalid date format:", "Date range too large", "end_date must be on or after start_date",
             "Provide both start_date and end_date", "Unexpected response format", "fitparse library is not installed"))
@@ -199,7 +199,7 @@ class Constants(unittest.TestCase):
 
 
 class FailureText(unittest.TestCase):
-    """Contract test 1."""
+    """Which texts count as failures."""
 
     def test_failure_forms(self):
         forms = ("Error: x", "Error retrieving activities: x", "  Error fetching course details: API Error 401",
@@ -221,7 +221,7 @@ class FailureText(unittest.TestCase):
                 self.assertFalse(te.is_failure_text(text))
 
 
-# Contract 5.6 samples: (text, group, detail).
+# Samples: (text, group, detail).
 SAMPLES = (
     ("Error retrieving activities: Garmin login failed. Run 'garmin-mcp-auth' to authenticate, then restart the "
      "server.", te.LOGIN, None),
@@ -253,7 +253,7 @@ SAMPLES = (
     ("ToolError: Unknown tool: no_such_tool", te.BAD_INPUT, te.DETAIL_UNKNOWN_TOOL),
 )
 
-# One text per row of the table, top to bottom, plus the anchored rows of M7.
+# One text per row of the table, top to bottom, plus the anchored bad-input rows.
 ROWS = (
     ("Garmin authentication failed: expired. Re-run 'garmin-mcp-auth'", te.LOGIN, None),
     ("GarminConnectAuthenticationError: x", te.LOGIN, None),
@@ -359,7 +359,7 @@ KEYWORDS = ("garmin login", "rate limit", "API Error 404", "timeout", "unauthori
 
 
 class ClassifyText(unittest.TestCase):
-    """Contract test 2 and amendment M7."""
+    """classify_text(): the table, the anchored rows and the caller echoes."""
 
     def test_contract_samples(self):
         for text, group, detail in SAMPLES:
@@ -392,7 +392,7 @@ class ClassifyText(unittest.TestCase):
         )
         for form, detail in forms:
             for word in KEYWORDS:
-                for value in (word, "x\n" + word, "x\r\n" + word + "\n"):  # EVE-2: a line break in the value
+                for value in (word, "x\n" + word, "x\r\n" + word + "\n"):  # a line break in the value
                     text = form.format(value)
                     with self.subTest(text):
                         self.assertEqual(te.classify_text(text), (te.BAD_INPUT, detail))
@@ -414,7 +414,7 @@ class ClassifyText(unittest.TestCase):
         self.assertEqual(te.classify_text(te.NO_SLEEP_LOG), (te.NO_DATA, None))
 
     def test_caller_fit_id_never_picks_the_group(self):
-        """EV-SEC-2 and M7: upstream's FIT tools write the caller's id before their colon."""
+        """Upstream's FIT tools write the caller's id before their colon."""
         for word in KEYWORDS:
             for activity_id in (word, "x\n" + word, "12: " + word, word + " " + "a" * 5000, "1" * 5000 + word):
                 text = fit_failure(activity_id)
@@ -460,7 +460,7 @@ class ClassifyText(unittest.TestCase):
 
 
 class ClassifyException(unittest.TestCase):
-    """Contract test 3 and amendment M2."""
+    """classify_exception(): only failures from Garmin, the network or known failures get the table."""
 
     def assertGroup(self, exc, group, detail=None):
         result = te.classify_exception(exc)
@@ -473,14 +473,14 @@ class ClassifyException(unittest.TestCase):
         group, detail, root, text = te.classify_exception(exc)
         self.assertEqual((group, detail), (te.BAD_INPUT, "activity_id must be a whole number"))
         self.assertIs(root, exc)
-        self.assertEqual(text, "ValidationError: activity_id must be a whole number")  # EV-SEC-3: field names only
+        self.assertEqual(text, "ValidationError: activity_id must be a whole number")  # field names only
         wrapped = raised(lambda: raise_it(ToolError("Error executing tool get_activity: 1 validation error"), exc))
         self.assertEqual(self.assertGroup(wrapped, te.BAD_INPUT, "activity_id must be a whole number")[3],
                          "ValidationError: activity_id must be a whole number")
         self.assertGroup(OldValidationError([INT_ERROR]), te.BAD_INPUT, "activity_id must be a whole number")
 
     def test_validation_values_never_reach_the_chain_text(self):
-        """EV-SEC-3 and D16: the chain text is the log line's text; pydantic's message holds the rejected value."""
+        """The chain text is the log line's text; pydantic's message holds the rejected value."""
         value = "TEST-ONLY-" + secrets.token_hex(6)
 
         class LoudValidationError(ValidationError):
@@ -659,7 +659,7 @@ class ClassifyException(unittest.TestCase):
 
 
 class ValidationDetail(unittest.TestCase):
-    """Contract test 9."""
+    """validation_detail() names the fields, never the values."""
 
     def test_problem_words(self):
         words = {"missing": "is required", "int_parsing": "must be a whole number",
@@ -717,7 +717,7 @@ class ValidationDetail(unittest.TestCase):
 
 
 class ClientText(unittest.TestCase):
-    """Contract test 4."""
+    """client_text(): the fixed text of each group."""
 
     def test_texts(self):
         for group, want in CLIENT_TEXTS.items():
@@ -771,7 +771,7 @@ class ClientText(unittest.TestCase):
 
 
 class RoundTrip(unittest.TestCase):
-    """Contract test 5 (4.2 rule 9)."""
+    """A client text classifies back to its own group and detail."""
 
     def test_groups_round_trip(self):
         for group in te.GROUPS:
@@ -796,7 +796,7 @@ class RoundTrip(unittest.TestCase):
 
 
 class NoInternals(unittest.TestCase):
-    """Contract test 6: the client text never carries the original failure's text."""
+    """The client text never carries the original failure's text."""
 
     def test_no_internals(self):
         token = "TEST-ONLY-" + secrets.token_urlsafe(32)
@@ -836,7 +836,7 @@ class SourcePhrase(unittest.TestCase):
 
 
 class NewRef(unittest.TestCase):
-    """Contract test 8."""
+    """new_ref(): 8 lowercase hex characters, new each time."""
 
     def test_new_ref(self):
         refs = {te.new_ref() for _ in range(100)}
@@ -848,7 +848,7 @@ class NewRef(unittest.TestCase):
 
 
 class Redact(unittest.TestCase):
-    """Contract test 7 and amendment M6."""
+    """redact(): secrets, tokens and emails never reach a log line."""
 
     def test_patterns(self):
         token = "TEST-ONLY-" + secrets.token_urlsafe(32)
@@ -858,8 +858,8 @@ class Redact(unittest.TestCase):
             (f"auth: bearer {short}.x", "auth: Bearer <redacted>"),
             (f"refresh_token={token}&x=1", "refresh_token=<redacted>&x=1"),
             (f"client_secret: {short}x", "client_secret: <redacted>"),
-            ('body {"password": "hunter22x"}', 'body {"password": "<redacted>"}'),  # gitleaks:allow (fake value, M6)
-            ("{'access_token': 'abc123def456'}", "{'access_token': '<redacted>'}"),  # gitleaks:allow (fake value, M6)
+            ('body {"password": "hunter22x"}', 'body {"password": "<redacted>"}'),  # gitleaks:allow (fake value)
+            ("{'access_token': 'abc123def456'}", "{'access_token': '<redacted>'}"),  # gitleaks:allow (fake value)
             ("mail someone@mail.example now", "mail <email> now"),
             (f"id {token} end", "id <redacted> end"),
             ("Garmin rate limit: wait", "Garmin rate limit - wait"),
@@ -874,7 +874,7 @@ class Redact(unittest.TestCase):
                 self.assertEqual(te.redact(raw), want)
 
     def test_key_values_with_any_characters(self):
-        """EVE-3: the value runs to a delimiter, and a key may end a longer name."""
+        """The value runs to a delimiter, and a key may end a longer name."""
         hexes = secrets.token_hex(5)
         odd = "p@ss!" + secrets.token_hex(3) + "#99"
         cases = (
@@ -898,7 +898,7 @@ class Redact(unittest.TestCase):
                     self.assertNotIn(secret, te.redact(raw))
 
     def test_linear_time(self):
-        """EVE-1 and EV-SEC-1: the contract's address pattern took 32 s for 100,000 word characters (quadratic);
+        """The old address pattern took 32 s for 100,000 word characters (quadratic);
         each of these takes milliseconds. A large limit turns the input cut off, so the patterns alone are timed."""
         runs = ("Error retrieving stats: " + "a" * 200_000, "x " + "a." * 100_000, "x " + "a+" * 100_000,
                 "a@" * 100_000, "token=" * 30_000, "bearer " * 30_000, ("a" * 38 + " ") * 5_000)
@@ -979,12 +979,12 @@ KEY_MODE_TEXTS = {
 
 
 def fake_api_key():
-    """CI's fake Personal API key form (KEY contract K7, CI D22): "fk!" and 24 hex characters, made at run time."""
+    """CI's fake Personal API key form : "fk!" and 24 hex characters, made at run time."""
     return "fk!" + secrets.token_hex(12)
 
 
 class KeyModeClientText(unittest.TestCase):
-    """KEY contract K7, first half: key mode changes the LOGIN and NO_DATA texts only, after their first words."""
+    """Key mode changes the LOGIN and NO_DATA texts only, after their first words."""
 
     def test_texts(self):
         for group in te.GROUPS:
@@ -1027,7 +1027,7 @@ class KeyModeClientText(unittest.TestCase):
 
 
 class RegisterSecret(unittest.TestCase):
-    """KEY contract K7, second half: register_secret, the ApiKey row and api_?key (D14)."""
+    """Key mode's redaction: register_secret, the ApiKey row and api_?key."""
 
     def setUp(self):
         self.saved = te._SECRETS
@@ -1085,7 +1085,7 @@ class RegisterSecret(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_UPSTREAM, "needs upstream garmin_mcp")
 class UpstreamTexts(unittest.TestCase):
-    """Contract test 10: an upstream bump that rewords these texts fails here."""
+    """An upstream bump that rewords these texts fails here."""
 
     @staticmethod
     def source(*names):

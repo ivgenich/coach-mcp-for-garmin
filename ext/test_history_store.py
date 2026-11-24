@@ -89,6 +89,31 @@ class StoreContract:
         row = s.days(FP, D, D)[0]
         self.assertEqual((row["numbers"]["hrv"], row["numbers"]["hrv_7d"]), (63, 59))
 
+    def test_an_answered_source_replaces_stored_values_with_null(self):
+        s = self.store
+        s.upsert_day(FP, D, day(hrv=60, hrv_7d=58, rhr=48, stress_avg=30), True)
+        # hrv answered with no reading this time: its fields become null; stats failed: its fields stay.
+        s.upsert_day(FP, D, day(hrv=None, hrv_7d=None, rhr=None, stress_avg=None, missing=["stats"]), True,
+                     rechecked=True)
+        n = s.days(FP, D, D)[0]["numbers"]
+        self.assertEqual((n["hrv"], n["hrv_7d"]), (None, None))
+        self.assertEqual((n["rhr"], n["stress_avg"]), (48, 30))
+        self.assertEqual(n["missing"], [])
+        # stats answered with nothing: now its fields are null too.
+        s.upsert_day(FP, D, day(hrv=None, hrv_7d=None, rhr=None, stress_avg=None), True, rechecked=True)
+        n = s.days(FP, D, D)[0]["numbers"]
+        self.assertEqual((n["rhr"], n["stress_avg"]), (None, None))
+        self.assertEqual(n["sleep_seconds"], 27000)
+
+    def test_open_days_are_the_stored_days_not_final(self):
+        s = self.store
+        s.upsert_day(FP, D, day(), False)
+        s.upsert_day(FP, D - dt.timedelta(days=1), day(), True)
+        s.upsert_day(FP, D - dt.timedelta(days=3), day(), False)
+        s.upsert_day(OTHER, D - dt.timedelta(days=2), day(), False)
+        self.assertEqual(s.open_days(FP, D - dt.timedelta(days=5), D), [D - dt.timedelta(days=3), D])
+        self.assertEqual(s.open_days(FP, D - dt.timedelta(days=2), D - dt.timedelta(days=1)), [])
+
     def test_a_source_missing_twice_stays_missing(self):
         s = self.store
         s.upsert_day(FP, D, day(hrv=None, missing=["hrv"]), False)

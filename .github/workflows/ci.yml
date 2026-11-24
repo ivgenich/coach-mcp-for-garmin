@@ -63,6 +63,8 @@ jobs:
           cache-dependency-path: |
             constraints.txt
             Dockerfile
+            config/requirements-build.txt
+            config/requirements-core.txt
             config/garmin-key-client.txt
             config/requirements-telemetry.txt
       - name: Caddy at the image's version, and gitleaks for the release-check tests
@@ -114,6 +116,8 @@ jobs:
           cache-dependency-path: |
             constraints.txt
             Dockerfile
+            config/requirements-build.txt
+            config/requirements-core.txt
             config/requirements-telemetry.txt
             config/requirements-history.txt
       - name: The image's pins plus the history pins (HISTORY=1), in a venv of its own
@@ -157,6 +161,8 @@ jobs:
           cache-dependency-path: |
             constraints.txt
             Dockerfile
+            config/requirements-build.txt
+            config/requirements-core.txt
             evals/requirements.txt
             config/requirements-telemetry.txt
             config/requirements-history.txt

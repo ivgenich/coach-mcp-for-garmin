@@ -3,13 +3,16 @@
 
     python -B scripts/ci-checks.py install-full [--dry-run]
         Install upstream garmin-mcp and the image's packages into this Python
-        exactly as the Dockerfile does: the upstream tarball at
-        GARMIN_MCP_REF with --no-deps, then the Dockerfile's
-        `pip install -c constraints.txt ...` list, then any hashed
-        `pip install --require-hashes --no-deps -r <file>` (the file the
-        Dockerfile COPYs there, e.g. config/garmin-key-client.txt). All are
-        read from the Dockerfile, so the full test leg can never drift from
-        the image.
+        exactly as the Dockerfile does, every pip step in the Dockerfile's
+        order: the hashed build backends (config/requirements-build.txt), the
+        upstream tarball at GARMIN_MCP_REF with --no-deps
+        --no-build-isolation, each hashed `pip install --require-hashes
+        --no-deps -r <file>` (the file the Dockerfile COPYs there, e.g.
+        config/requirements-core.txt), the `pip uninstall` of the build
+        backends, and last the `pip install -c constraints.txt ...` list with
+        PIP_NO_INDEX=1, which installs nothing. So every package comes in by
+        hash, as in the image. All are read from the Dockerfile, so the full
+        test leg can never drift from the image.
     python -B scripts/ci-checks.py verify-env [--freeze FILE --pip-check FILE]
         The installed packages are exactly constraints.txt (plus upstream at
         the Dockerfile's GARMIN_MCP_REF, and pip itself), and `pip check`
@@ -28,7 +31,9 @@
         config/requirements-history.txt) pin every package with a hash, at
         the version constraints.txt pins when it pins it too (the telemetry
         file must be in constraints.txt whole), and every package of theirs
-        has a reviewed licence in LICENSES.
+        has a reviewed licence in LICENSES. The build backends' file
+        (config/requirements-build.txt) pins every package with a hash and
+        shares none with constraints.txt (the Dockerfile uninstalls them).
     python -B scripts/ci-checks.py licenses
         The reviewed licences in LICENSES are allowed (ALLOWED_LICENSES, or
         an exception with a reason in LICENSE_EXCEPTIONS), and each feature
@@ -72,6 +77,8 @@ import unicodedata
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCKERFILE = os.path.join(ROOT, "Dockerfile")
 CONSTRAINTS = os.path.join(ROOT, "constraints.txt")
+# The image's build backends: installed by hash before its two source builds, uninstalled after them.
+BUILD_REQUIREMENTS = os.path.join(ROOT, "config", "requirements-build.txt")
 CI_TOOLS = os.path.join(ROOT, "scripts", "ci-tools.sh")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "ci.yml")
 VERSION_FILE = os.path.join(ROOT, "ext", "version.py")
@@ -204,39 +211,67 @@ def dockerfile_copies(text: str) -> dict[str, str]:
     return copies
 
 
-def dockerfile_installs(text: str) -> tuple[str, list[str], list[list[str]]]:
-    """(the upstream requirement, the list after `pip install -c /tmp/constraints.txt`,
-    the arguments of each hashed `pip install --require-hashes ... -r FILE`, FILE
-    mapped back to the repository file the Dockerfile copies there)."""
+def dockerfile_installs(text: str) -> list[tuple[list[str], dict[str, str]]]:
+    """Every pip step of the Dockerfile's RUN lines, in order, as (pip arguments after `pip`, extra
+    environment): `pip install` and `pip uninstall`, files mapped back to the repository file the Dockerfile
+    copies there, the upstream URL with GARMIN_MCP_REF filled in, and PIP_NO_INDEX=1 after `export
+    PIP_NO_INDEX=1` in the same RUN. Lines with other shell words (the HISTORY=1 `if`) are not steps.
+    Raises ValueError for a pip command CI does not know, or when the upstream install, the hashed
+    installs and the offline `-c constraints.txt` re-check are missing or out of order."""
     ref = dockerfile_ref(text)
     copies = dockerfile_copies(text)
     joined = re.sub(r"\\\n", " ", text)
-    upstream, reqs, hashed = None, None, []
+    want = f"{UPSTREAM} @ {UPSTREAM_URL.format(ref='${GARMIN_MCP_REF}')}"
+    steps: list[tuple[list[str], dict[str, str]]] = []
+    upstream_at = reqs_at = None
+    hashed_at: list[int] = []
+
+    def mapped(words: list[str]) -> list[str]:
+        missing = [w for w in words if w.startswith("/") and w not in copies]
+        if missing:
+            raise ValueError(f"the Dockerfile installs {missing[0]}, which no one-file COPY puts there")
+        return [copies.get(w, w) for w in words]
+
     for line in joined.splitlines():
         if not line.startswith("RUN "):
             continue
+        env: dict[str, str] = {}
         for command in line[4:].split("&&"):
             words = shlex.split(command)
-            if words[:2] != ["pip", "install"]:
+            if words == ["export", "PIP_NO_INDEX=1"]:
+                env = {"PIP_NO_INDEX": "1"}
                 continue
-            if words[:3] == ["pip", "install", "--no-deps"]:
-                upstream = [w for w in words[3:] if w.startswith(UPSTREAM + " @ ")]
+            if words[:1] != ["pip"]:
+                continue
+            if words[:3] == ["pip", "uninstall", "--yes"] and words[3:4] == ["-r"] and len(words) == 5:
+                steps.append((["uninstall", "--yes", "-r"] + mapped(words[4:]), dict(env)))
+            elif words[:2] != ["pip", "install"]:
+                raise ValueError(f"the Dockerfile runs a pip command CI does not know: {command.strip()!r}")
+            elif want in words:
+                if words[2:] not in (["--no-deps", want], ["--no-deps", "--no-build-isolation", want]):
+                    raise ValueError(f"the Dockerfile must run `pip install --no-deps [--no-build-isolation] "
+                                     f"\"{want}\"`, nothing else in that step")
+                upstream_at = len(steps)
+                steps.append((words[1:-1] + [want.replace("${GARMIN_MCP_REF}", ref)], dict(env)))
             elif words[:4] == ["pip", "install", "-c", CONSTRAINTS_IN_IMAGE]:
-                reqs = words[4:]
+                if env.get("PIP_NO_INDEX") != "1":
+                    raise ValueError("the Dockerfile must run `export PIP_NO_INDEX=1` before "
+                                     f"`pip install -c {CONSTRAINTS_IN_IMAGE} ...`")
+                reqs_at = len(steps)
+                steps.append((["install", "-c", CONSTRAINTS] + words[4:], dict(env)))
             elif "--require-hashes" in words and "-r" in words:
-                args = [copies.get(w, w) for w in words[2:]]
-                missing = [w for w in words[2:] if w.startswith("/") and w not in copies]
-                if missing:
-                    raise ValueError(f"the Dockerfile installs {missing[0]}, which no one-file COPY puts there")
-                hashed.append(args)
+                hashed_at.append(len(steps))
+                steps.append((["install"] + mapped(words[2:]), dict(env)))
             else:
                 raise ValueError(f"the Dockerfile runs a pip install CI does not know: {command.strip()!r}")
-    want = f"{UPSTREAM} @ {UPSTREAM_URL.format(ref='${GARMIN_MCP_REF}')}"
-    if not upstream or upstream != [want]:
+    if upstream_at is None:
         raise ValueError(f"the Dockerfile must run `pip install --no-deps \"{want}\"`")
-    if not reqs:
+    if reqs_at is None or len(steps[reqs_at][0]) <= 3:
         raise ValueError(f"the Dockerfile must run `pip install -c {CONSTRAINTS_IN_IMAGE} <requirements>`")
-    return want.replace("${GARMIN_MCP_REF}", ref), reqs, hashed
+    if not any(i < reqs_at for i in hashed_at):
+        raise ValueError(f"the Dockerfile must install the hashed packages before `pip install -c "
+                         f"{CONSTRAINTS_IN_IMAGE} ...`, so that step installs nothing from the index")
+    return steps
 
 
 def constraints() -> dict[str, str]:
@@ -304,6 +339,21 @@ def feature_pin_problems(pins: dict[str, str]) -> list[str]:
     return problems
 
 
+def build_pin_problems(pins: dict[str, str]) -> list[str]:
+    """pin-drift for BUILD_REQUIREMENTS: hash-pinned, and no package constraints.txt pins (`pins`): the
+    Dockerfile uninstalls every package of it after the builds, which would remove an image package."""
+    rel = os.path.relpath(BUILD_REQUIREMENTS, ROOT)
+    try:
+        file_pins, problems = hashed_pins(BUILD_REQUIREMENTS)
+    except OSError as e:
+        return [f"{rel}: cannot read it ({e.strerror})"]
+    for name in sorted(set(file_pins) & set(pins)):
+        problems.append(f"{rel} pins {name}, which constraints.txt pins too: the Dockerfile uninstalls the build "
+                        "backends after the builds, so the image would lose it")
+    say(f"pin-drift: {rel}: {len(file_pins)} hash-pinned packages")
+    return problems
+
+
 def license_ids(expression: str) -> set[str]:
     """The SPDX ids of an expression ("MPL-2.0 AND (Apache-2.0 OR MIT)"), lowercased."""
     return {w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
@@ -347,14 +397,15 @@ def metadata_families(meta) -> set[str]:
 
 def cmd_install_full(args) -> int:
     try:
-        upstream, reqs, hashed = dockerfile_installs(read(DOCKERFILE))
+        steps = dockerfile_installs(read(DOCKERFILE))
     except (OSError, ValueError) as e:
         return finish("install-full", [str(e)])
-    pip = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
-    for cmd in [pip + ["--no-deps", upstream], pip + ["-c", CONSTRAINTS] + reqs] + [pip + h for h in hashed]:
-        say("install-full: " + " ".join(shlex.quote(c) for c in cmd[1:]))
-        if not args.dry_run and subprocess.run(cmd, check=False).returncode != 0:
-            return finish("install-full", ["pip install failed"])
+    for words, env in steps:
+        cmd = [sys.executable, "-m", "pip", words[0], "--disable-pip-version-check"] + words[1:]
+        shown = " ".join(f"{k}={v}" for k, v in env.items())
+        say("install-full: " + (shown + " " if shown else "") + " ".join(shlex.quote(c) for c in cmd[1:]))
+        if not args.dry_run and subprocess.run(cmd, check=False, env={**os.environ, **env}).returncode != 0:
+            return finish("install-full", [f"pip {words[0]} failed"])
     return finish("install-full", [])
 
 
@@ -493,9 +544,9 @@ def cmd_pin_drift(args) -> int:
     except OSError as e:
         return finish("pin-drift", [str(e)])
     pairs = (
-        ("Caddy", re.findall(r"^FROM caddy:(\S+) AS caddy$", docker, re.M),
+        ("Caddy", re.findall(r"^FROM caddy:([^@\s]+)(?:@sha256:[0-9a-f]{64})? AS caddy$", docker, re.M),
          re.findall(r"^caddy\s+(\S+)\s", tools, re.M), "scripts/ci-tools.sh"),
-        ("Python", re.findall(r"^FROM python:(\d+\.\d+\.\d+)-slim$", docker, re.M),
+        ("Python", re.findall(r"^FROM python:(\d+\.\d+\.\d+)-slim(?:@sha256:[0-9a-f]{64})?$", docker, re.M),
          re.findall(r"^\s+FULL_PYTHON:\s+\"(\d+\.\d+\.\d+)\"(?:\s+#.*)?$", workflow, re.M),
          ".github/workflows/ci.yml"),
     )
@@ -511,6 +562,7 @@ def cmd_pin_drift(args) -> int:
     except (OSError, ValueError) as e:
         return finish("pin-drift", problems + [str(e)])
     problems += feature_pin_problems(pins)
+    problems += build_pin_problems(pins)
     return finish("pin-drift", problems)
 
 

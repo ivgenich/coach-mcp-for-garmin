@@ -1,0 +1,11 @@
+coach-mcp-for-garmin
+Copyright (c) 2026 ivgenich
+Licensed under the MIT License (see LICENSE).
+
+Third-party code
+
+This repository does not include the code of Taxuspt/garmin_mcp
+(https://github.com/Taxuspt/garmin_mcp), the MCP server it runs. The Docker
+build downloads it at a pinned commit. garmin_mcp is MIT licensed, Copyright (c)
+2025 Alexandre Domingues; its own license applies to it. The same holds for the
+Python packages the build installs, such as garminconnect (MIT).

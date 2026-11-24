@@ -12,6 +12,7 @@ Every key, secret and token here is built at run time.
 """
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -33,48 +34,129 @@ DEPLOY = os.path.join(ROOT, "scripts", "deploy.sh")
 BASH = shutil.which("bash")
 HAVE_PTY = pty is not None and os.name == "posix" and BASH is not None
 
-# The fake CLI. FAKE_UNLINKED=1: no project is linked yet; after init the
-# project has no service until add runs, and variable list then fails with the
-# text of the real Railway CLI 5.70 ("Project has no services.", exit 1), or
-# with FAKE_NOSERVICE_TEXT. FAKE_HC=1: the environment config already has the
-# /healthz health check.
-FAKE_RAILWAY = r"""#!/usr/bin/env bash
-log() { printf '%s\n' "$*" >> "$FAKE_LOG"; }
-sha1() { if command -v sha1sum >/dev/null 2>&1; then sha1sum; else shasum; fi; }
-case "$1 ${2:-}" in
-  "--version "*) echo "railway 5.70.0" ;;
-  "whoami "*) echo "Logged in as test" ;;
-  "status "*)
-    if [[ -n ${FAKE_UNLINKED:-} && ! -e "$FAKE_LOG.init" ]]; then echo "No linked project found. Run railway link to connect to a project"; exit 1; fi
-    echo "Project: test" ;;
-  "init "*)
-    : > "$FAKE_LOG.init"
-    # One log field per argument, so a test can see how the arguments were split.
-    line="init"; for a in "${@:2}"; do line+=" [$a]"; done; log "$line" ;;
-  "add "*) : > "$FAKE_LOG.added"; log "$*" ;;
-  "variable list")
-    if [[ -n ${FAKE_UNLINKED:-} && ! -e "$FAKE_LOG.added" ]]; then echo "${FAKE_NOSERVICE_TEXT:-Project has no services.}"; exit 1; fi
-    if [[ " $* " == *" --kv "* ]]; then cat "$FAKE_VARS"; else echo "vars"; fi ;;
-  "variable set")
-    if [[ " $* " == *" --stdin "* ]]; then
-      v="$(cat)"; log "variable set $3 --stdin sha=$(printf '%s' "$v" | sha1 | cut -c1-12) len=${#v}"
-    else log "$*"; fi ;;
-  "volume list") echo "data /data" ;;
-  "domain "*) echo "Service Domain created: https://test-app.up.railway.app" ;;
-  "environment config")
-    if [[ -n ${FAKE_HC:-} || -e "$FAKE_LOG.hc" ]]; then echo '{"services":{"x":{"deploy":{"healthcheckPath": "/healthz"}}}}'; else echo '{}'; fi ;;
-  "environment edit")
-    log "$*"
-    # FAKE_EDIT_NOOP=1: Railway CLI 5.70 with no terminal (seen live on 17 Nov
-    # 2026): nothing is applied and the exit code is still 0.
-    if [[ -n ${FAKE_EDIT_NOOP:-} ]]; then echo '{"committed":false,"message":"No changes to apply","staged":false}'
-    else : > "$FAKE_LOG.hc"; echo '{"committed":true,"staged":true}'; fi ;;
-  "up --ci") log "up --ci" ;;
-  *) log "UNEXPECTED $*"; exit 3 ;;
-esac
+# The fake CLI, a python3 script. It keeps the project in a state file and the
+# folder links in $HOME/.railway/config.json, as the real CLI does. The
+# _Sandbox switches set the starting point: FAKE_UNLINKED=1 (no project and no
+# link), FAKE_LINK_PARENT=1 (the link belongs to the parent folder),
+# FAKE_LINKED_NAME=<name> (the linked service has another name),
+# FAKE_NO_SERVICE_LINK=1 (the project is linked, its service is not),
+# FAKE_NO_SERVICE=1 (the project has no service yet), FAKE_NO_VOLUME=1,
+# FAKE_LINK_GONE=1 (the linked service is no longer in the project),
+# FAKE_OTHER_VOLUME=1 (only another service has a /data volume), FAKE_HC=1
+# (the service checks /healthz), FAKE_HC_OTHER=1 (only another service does).
+# FAKE_EDIT_NOOP=1: the health check edit applies nothing and exits 0;
+# FAKE_SSH_FAIL=1: railway ssh exits 1.
+FAKE_RAILWAY = r"""#!/usr/bin/env python3
+import hashlib, json, os, sys
+
+LOG = os.environ["FAKE_LOG"]
+STATE = LOG + ".state"
+CONF = os.path.join(os.environ["HOME"], ".railway", "config.json")
+
+
+def log(line):
+    with open(LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+state, conf = load(STATE), load(CONF) if os.path.exists(CONF) else {}
+args = sys.argv[1:]
+cwd = os.getcwd()
+
+
+def flag(name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def by(key, value):
+    return next((s for s in state["services"] if s[key] == value), None)
+
+
+def link():
+    return (conf.get("projects") or {}).get(cwd)
+
+
+head = " ".join(args[:2])
+if args[0] == "--version":
+    print("railway 5.70.0")
+elif args[0] == "whoami":
+    print("Logged in as test")
+elif head == "status --json":
+    if not state["project"]:
+        sys.exit("No linked project")
+    print(json.dumps({"id": state["project"]["id"], "name": state["project"]["name"], "workspace": {"name": "w"},
+                      "services": {"edges": [{"node": s} for s in state["services"]]}}, indent=2))
+elif args[0] == "init":
+    state["project"] = {"id": "p-new", "name": flag("--name")}
+    conf.setdefault("projects", {})[cwd] = {"projectPath": cwd, "project": "p-new"}
+    log("init" + "".join(" [%s]" % a for a in args[1:]))
+elif args[0] == "add":
+    name = flag("--service")
+    state["services"].append({"id": "s-" + name, "name": name})
+    link()["service"] = "s-" + name
+    log(" ".join(args))
+elif head == "service link":
+    link()["service"] = by("name", args[2])["id"]
+    log(" ".join(args))
+elif head == "variable list":
+    if flag("--service") and not by("name", flag("--service")):
+        sys.exit("Service not found")
+    if "--kv" in args:
+        with open(os.environ["FAKE_VARS"], encoding="utf-8") as f:
+            sys.stdout.write(f.read())
+elif head == "variable set":
+    if "--stdin" in args:
+        v = sys.stdin.read()
+        log("variable set %s --stdin sha=%s len=%d svc=%s"
+            % (args[2], hashlib.sha1(v.encode()).hexdigest()[:12], len(v), flag("--service")))
+    else:
+        log(" ".join(args))
+elif head == "volume list":
+    print(json.dumps({"volumes": [{"mountPath": m, "serviceName": n} for n, m in state["volumes"]]}))
+elif args[0] == "volume":
+    log(" ".join(args))
+elif args[0] == "domain":
+    log(" ".join(args))
+    print(json.dumps({"domain": "https://test-app.up.railway.app"}))
+elif head == "environment config":
+    print(json.dumps({"services": {by("name", n)["id"]: {"deploy": {"healthcheckPath": "/healthz"}}
+                                   for n in state["hc"]}}))
+elif head == "environment edit":
+    log(" ".join(args))
+    if os.environ.get("FAKE_EDIT_NOOP"):
+        print('{"committed":false,"message":"No changes to apply","staged":false}')
+    else:
+        state["hc"].append(flag("--service-config"))
+        print('{"committed":true,"staged":true}')
+elif args[0] in ("up", "ssh"):
+    log(" ".join(args))
+    if args[0] == "ssh" and os.environ.get("FAKE_SSH_FAIL"):
+        sys.exit(1)
+else:
+    log("UNEXPECTED " + " ".join(args))
+    sys.exit(3)
+save(STATE, state)
+if conf:
+    save(CONF, conf)
 """
 
+SERVICE = "coach-mcp-for-garmin"
+
 PROMPT = b"Garmin Personal API key"
+MODE_PROMPT = b"Garmin mode, full or key"
+TZ_PROMPT = b"Time zone, an IANA name"
+LOGIN_PROMPT = b"Run the Garmin login now?"
 TZ = {"REPORT_TZ": "Europe/London"}
 
 
@@ -111,6 +193,7 @@ class _Sandbox:
         with open(os.path.join(self.root, "vars"), "w", encoding="utf-8") as f:
             f.write(vars_text)
         self.log_path = os.path.join(self.root, "log")
+        self._start(extra)
         self.env = {
             "PATH": bindir + os.pathsep + "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
             "HOME": self.root,
@@ -120,6 +203,37 @@ class _Sandbox:
             "LC_ALL": "C",
         }
         self.env.update(extra)
+
+    def _start(self, extra):
+        """The project and the folder link the fake CLI starts from (see FAKE_RAILWAY)."""
+        def on(name):
+            return bool(extra.get(name))
+        here = os.path.realpath(self.root)
+        name = extra.get("FAKE_LINKED_NAME") or extra.get("DEPLOY_SERVICE") or SERVICE
+        services = [] if on("FAKE_NO_SERVICE") else [{"id": "s1", "name": name}]
+        if extra.get("FAKE_LINKED_NAME") and extra.get("DEPLOY_SERVICE"):
+            services.append({"id": "s2", "name": extra["DEPLOY_SERVICE"]})
+        services.append({"id": "s9", "name": "other-app"})
+        volumes = [] if on("FAKE_NO_VOLUME") else [["other-app", "/data"]] if on("FAKE_OTHER_VOLUME") else [[name, "/data"]]
+        hc = ["other-app"] if on("FAKE_HC_OTHER") else [name] if on("FAKE_HC") else []
+        state = {"project": {"id": "p1", "name": "test-project"}, "services": services, "volumes": volumes, "hc": hc}
+        conf = {"projects": {here: {"projectPath": here, "project": "p1", "service": "s1"}},
+                "user": {"token": "not-a-real-token"}}
+        if on("FAKE_LINK_PARENT"):
+            parent = os.path.dirname(here)
+            conf["projects"] = {parent: dict(conf["projects"][here], projectPath=parent)}
+        if on("FAKE_NO_SERVICE_LINK") or on("FAKE_NO_SERVICE"):
+            del conf["projects"][here]["service"]
+        if on("FAKE_LINK_GONE"):
+            conf["projects"][here]["service"] = "s-gone"
+        if on("FAKE_UNLINKED"):
+            state = {"project": None, "services": [], "volumes": [], "hc": []}
+            conf = {"user": conf["user"]}
+        with open(self.log_path + ".state", "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.makedirs(os.path.join(self.root, ".railway"))
+        with open(os.path.join(self.root, ".railway", "config.json"), "w", encoding="utf-8") as f:
+            json.dump(conf, f)
 
     def log(self):
         if not os.path.exists(self.log_path):
@@ -141,9 +255,12 @@ def run(vars_text, extra, args=()):
         box.close()
 
 
-def run_pty(vars_text, extra, typed, args=()):
-    """Run deploy.sh with a pseudo-terminal as stdin, stdout and stderr; type
-    `typed` and Enter 0.3 s after the key prompt shows."""
+def run_pty(vars_text, extra, typed=None, args=(), answers=()):
+    """Run deploy.sh with a pseudo-terminal as stdin, stdout and stderr. For
+    each (prompt, text) of `answers`, in order, type text and Enter 0.3 s after
+    the prompt shows; `typed` answers the key prompt."""
+    if typed is not None:
+        answers = [(PROMPT, typed)] + list(answers)
     box = _Sandbox(vars_text, extra)
     master, slave = pty.openpty()
     try:
@@ -152,7 +269,8 @@ def run_pty(vars_text, extra, typed, args=()):
         os.close(slave)
         slave = None
         out = b""
-        sent = False
+        todo = list(answers)
+        seen = 0
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.2)
@@ -164,10 +282,11 @@ def run_pty(vars_text, extra, typed, args=()):
                 if not chunk:
                     break
                 out += chunk
-                if not sent and PROMPT in out:
+                if todo and todo[0][0] in out[seen:]:
+                    prompt, text = todo.pop(0)
+                    seen = out.index(prompt, seen) + len(prompt)
                     time.sleep(0.3)
-                    os.write(master, typed.encode() + b"\n")
-                    sent = True
+                    os.write(master, text.encode() + b"\n")
             elif proc.poll() is not None:
                 break
         try:
@@ -242,7 +361,7 @@ class DeployScriptFakeRailway(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
     def test_06b_key_under_20_characters_refused(self):
-        """Live test B1: the paste did not land and a 1-character key was stored and deployed."""
+        """A paste that did not land (a 1-character key) is refused, not stored and deployed."""
         for short in ("v", "x" * 19):
             with self.subTest(len(short)):
                 rc, out, log = run_pty("", {"GARMIN_AUTH": "key", **TZ}, short)
@@ -328,16 +447,15 @@ class DeployScriptFakeRailway(unittest.TestCase):
                    out, log)
 
     def test_20b_first_deploy_adds_the_service(self):
-        # Railway CLI 5.70 (seen live on 17 Nov 2026): a new project has no
-        # service, and `railway variable list` says so and exits 1.
+        # railway init makes a project with no service: the script adds it.
         rc, out, log = run("", {"GARMIN_AUTH": "full", **TZ, "FAKE_UNLINKED": "1"})
         self.check(rc == 0 and "add --service coach-mcp-for-garmin\n" in log and "up --ci" in log
                    and "Could not read" not in out, out, log)
 
-    def test_20c_older_no_service_text_also_adds_the_service(self):
-        rc, out, log = run("", {"GARMIN_AUTH": "full", **TZ, "FAKE_UNLINKED": "1",
-                                "FAKE_NOSERVICE_TEXT": "No service linked"})
-        self.check(rc == 0 and "add --service coach-mcp-for-garmin\n" in log and "up --ci" in log, out, log)
+    def test_20c_linked_project_without_the_service_adds_it(self):
+        rc, out, log = run("", {"GARMIN_AUTH": "full", **TZ, "FAKE_NO_SERVICE": "1"})
+        self.check(rc == 0 and "init" not in log and "add --service coach-mcp-for-garmin\n" in log
+                   and "up --ci" in log, out, log)
 
     def test_21_linked_folder_workspace_unused(self):
         workspace = "ws-" + secrets.token_hex(4)
@@ -382,7 +500,7 @@ class DeployScriptFakeRailway(unittest.TestCase):
         rc, out, log = run(vars_text, {"FAKE_HC": "1"})
         self.check(rc == 1 and "REPORT_TZ is required" in out and "variable set" not in log, out, log)
 
-    # Review R4: key mode serves only config/enabled-tools-key.txt, and the server refuses to start
+    # Key mode serves only config/enabled-tools-key.txt, and the server refuses to start
     # when GARMIN_ENABLED_TOOLS names another tool, so deploy.sh stops before it changes anything.
     FULL_ONLY = ("get_activity_splits", "get_cycling_ftp")
 
@@ -410,7 +528,7 @@ class DeployScriptFakeRailway(unittest.TestCase):
                    and "variable set" not in log and "up --ci" not in log, out, log)
 
     def test_22i2_a_mixed_case_entry_without_a_dash_is_never_shown(self):
-        # Lower-cased, this would have the shape of a tool name (review C2).
+        # Lower-cased, this would have the shape of a tool name.
         junk = "kP" + secrets.token_hex(8) + "_tY" + secrets.token_hex(8)
         rc, out, log = run(self.existing_key + "GARMIN_ENABLED_TOOLS=get_stats," + junk + "\n", {"FAKE_HC": "1"})
         self.check(rc == 1 and "an entry that is not a tool name (it is not shown)" in out
@@ -418,7 +536,7 @@ class DeployScriptFakeRailway(unittest.TestCase):
                    out, log)
 
     def test_22i3_a_list_of_only_commas_is_refused(self):
-        # The server refuses it ("names no tools"), so deploy.sh stops first (review C3).
+        # The server refuses it ("names no tools"), so deploy.sh stops first.
         for value in (",", " , ,"):
             with self.subTest(value=value):
                 rc, out, log = run(self.existing_key + "GARMIN_ENABLED_TOOLS=" + value + "\n", {"FAKE_HC": "1"})
@@ -436,6 +554,94 @@ class DeployScriptFakeRailway(unittest.TestCase):
         rc, out, log = run(self.existing_full + "GARMIN_ENABLED_TOOLS=" + enabled + "\n", {"FAKE_HC": "1"})
         self.check(rc == 0 and "up --ci" in log and "does not have" not in out
                    and "it narrows config/enabled-tools.txt (every name must be in that file)" in out, out, log)
+
+
+    # The linked project and service: printed first, checked before anything changes.
+    def test_25_prints_the_linked_project_and_service(self):
+        rc, out, log = run(self.existing_full, {"FAKE_HC": "1"})
+        self.check(rc == 0 and "Linked project: test-project" in out
+                   and "Linked service: coach-mcp-for-garmin" in out
+                   and out.index("Linked service:") < out.index("Volume at /data"), out, log)
+
+    def test_26_a_link_from_a_parent_folder_is_refused(self):
+        rc, out, log = run(self.existing_full, {"FAKE_LINK_PARENT": "1"})
+        self.check(rc == 1 and "has no Railway link of its own" in out and "Nothing was changed" in out
+                   and "railway init --name coach-mcp-for-garmin" in out and log == "", out, log)
+
+    def test_27_another_linked_service_is_refused(self):
+        rc, out, log = run(self.existing_full, {"FAKE_LINKED_NAME": "my-coach"})
+        self.check(rc == 1 and "linked to the service 'my-coach'" in out and "DEPLOY_SERVICE='my-coach'" in out
+                   and "railway service link coach-mcp-for-garmin" in out and log == "", out, log)
+        # Named, it deploys that service, and every call that changes it names it.
+        rc, out, log = run(self.existing_full, {"FAKE_LINKED_NAME": "my-coach", "DEPLOY_SERVICE": "my-coach",
+                                                "FAKE_HC": "1"})
+        self.check(rc == 0 and "up --ci --service my-coach" in log, out, log)
+
+    def test_27b_a_linked_service_missing_from_the_project_is_refused(self):
+        rc, out, log = run(self.existing_full, {"FAKE_LINK_GONE": "1"})
+        self.check(rc == 1 and "no longer in the project" in out and "Nothing was changed" in out
+                   and log == "", out, log)
+
+    def test_28_an_unlinked_existing_service_is_linked_not_added_again(self):
+        rc, out, log = run(self.existing_full, {"FAKE_NO_SERVICE_LINK": "1", "FAKE_HC": "1"})
+        self.check(rc == 0 and "service link coach-mcp-for-garmin" in log and "add " not in log
+                   and "Linked service: none" in out and "up --ci" in log, out, log)
+
+    def test_29_every_change_names_the_service(self):
+        rc, out, log = run("", {"GARMIN_AUTH": "full", **TZ, "FAKE_NO_VOLUME": "1"})
+        lines = [line for line in log.splitlines() if line.startswith(("variable set", "up", "domain", "volume"))]
+        self.check(rc == 0 and lines, out, log)
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertTrue("--service coach-mcp-for-garmin" in line or "svc=coach-mcp-for-garmin" in line
+                                or "--service s1 add --mount-path /data" in line, line)
+
+    def test_30_another_services_volume_or_health_check_does_not_count(self):
+        rc, out, log = run(self.existing_full, {"FAKE_OTHER_VOLUME": "1", "FAKE_HC_OTHER": "1"})
+        self.check(rc == 0 and "volume --service s1 add --mount-path /data" in log
+                   and "environment edit --service-config coach-mcp-for-garmin" in log, out, log)
+        rc, out, log = run(self.existing_full, {"FAKE_HC": "1"})
+        self.check(rc == 0 and "Already attached." in out and "Already /healthz." in out
+                   and "volume" not in log and "environment edit" not in log, out, log)
+
+    # A first deploy checks its inputs before it creates anything.
+    def test_31_first_deploy_without_inputs_creates_nothing(self):
+        for extra, needle in (({**TZ}, "GARMIN_AUTH is required"), ({"GARMIN_AUTH": "full"}, "REPORT_TZ is required"),
+                              ({"GARMIN_AUTH": "key", **TZ}, "needs GARMIN_PERSONAL_API_KEY")):
+            for start in ("FAKE_UNLINKED", "FAKE_NO_SERVICE"):
+                with self.subTest(extra=extra, start=start):
+                    rc, out, log = run("", {**extra, start: "1"})
+                    self.check(rc == 1 and needle in out and "Nothing was changed" in out and log == "", out, log)
+
+    @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
+    def test_32_first_deploy_in_a_terminal_asks_for_the_mode_and_zone(self):
+        rc, out, log = run_pty("", {"FAKE_UNLINKED": "1"}, answers=[
+            (MODE_PROMPT, "fu" + "lll"), (MODE_PROMPT, " Full "), (TZ_PROMPT, "Nowhere/Atlantis"),
+            (TZ_PROMPT, "Europe/London"), (LOGIN_PROMPT, "n")])
+        self.check(rc == 0 and "Type full or key." in out and "not a time zone name" in out
+                   and out.count("Nowhere/Atlantis") == 1 and out.count("fulll") == 1  # the terminal's echo only
+                   and log.index("variable set --skip-deploys GARMIN_AUTH=full") > log.index("init")
+                   and "REPORT_TZ=Europe/London" in log and "ssh" not in log
+                   and "garmin-mcp-auth --token-path /data/tokens" in out, out, log)
+
+    @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
+    def test_33_full_first_deploy_offers_the_garmin_login(self):
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "full", **TZ}, answers=[(LOGIN_PROMPT, "")])
+        self.check(rc == 0 and "ssh --service coach-mcp-for-garmin -- garmin-mcp-auth --token-path /data/tokens"
+                   in log and log.index("up --ci") < log.index("ssh") and "Garmin login done." in out, out, log)
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "full", **TZ, "FAKE_SSH_FAIL": "1"}, answers=[(LOGIN_PROMPT, "y")])
+        self.check(rc == 0 and "The Garmin login did not finish" in out and "railway ssh" in out, out, log)
+
+    @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
+    def test_34_a_full_mode_redeploy_does_not_offer_the_login(self):
+        rc, out, log = run_pty(self.existing_full, {"FAKE_HC": "1"})
+        self.check(rc == 0 and LOGIN_PROMPT.decode() not in out and "ssh" not in log, out, log)
+
+    def test_35_railway_link_overrides_are_refused(self):
+        for name in ("RAILWAY_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID"):
+            with self.subTest(name=name):
+                rc, out, log = run(self.existing_full, {name: "x"})
+                self.check(rc == 1 and name + " is set" in out and log == "", out, log)
 
 
 class DeployScriptStatic(unittest.TestCase):

@@ -250,18 +250,26 @@ class HistoryService:
         return fp, None
 
     def index_block(self, fp: str) -> Dict[str, Any]:
+        """complete: every day from the index start to yesterday is stored, every one older than the last
+        FINAL_AFTER_DAYS is final (a day whose source failed counts as missing), and the index reaches a year
+        back or the backfill floor (the account start). Days stored before the floor (its probes) are left out."""
+        import history_extract as hx
         import history_store as hs
 
         cov = self.store.coverage(fp)
         today = self.today()
         yesterday = today - dt.timedelta(days=1)
         start, end = cov.get("from"), cov.get("to")
+        floor = self.store.meta_get(hs.META_BACKFILL_FLOOR)
+        if start and floor and floor > start:
+            start = floor
         complete = False
         if start and end:
             missing = self.store.missing_days(fp, _d(start), yesterday)
-            floor = self.store.meta_get(hs.META_BACKFILL_FLOOR)
+            settled = today - dt.timedelta(days=hx.FINAL_AFTER_DAYS)
+            still_open = self.store.open_days(fp, _d(start), settled) if _d(start) <= settled else []
             reached = _d(start) <= today - dt.timedelta(days=364) or bool(floor)
-            complete = not missing and reached
+            complete = not missing and not still_open and reached
         block = {"from": start, "to": end, "weeks": cov.get("final_weeks", cov.get("weeks", 0)),
                  "days": cov.get("days_with_data", cov.get("days", 0)), "complete": complete,
                  "stale": bool(end) and _d(end) < yesterday - dt.timedelta(days=STALE_DAYS)}
@@ -390,6 +398,15 @@ class HistoryService:
                 raise BadInput("date_to must be on or after date_from")
         except BadInput as exc:
             return bad_input_text(str(exc))
+        try:
+            return self._find_similar_weeks(ref_day, focus, k, lo, hi)
+        except _db_errors() as exc:  # every database read: a fixed text; anything else is a bug for launch
+            return self._db_failure(exc)
+
+    def _find_similar_weeks(self, ref_day: Optional[dt.date], focus: str, k: int, lo: Optional[dt.date],
+                            hi: Optional[dt.date]) -> str:
+        import history_retrieval as hr
+
         fp, text = self._account()
         if text:
             return text
@@ -444,8 +461,6 @@ class HistoryService:
 
     def search_history(self, query: str = "", kind: str = "week", flags: str = "", date_from: str = "",
                        date_to: str = "", order: str = "relevance", k: Any = DEFAULT_K) -> str:
-        import history_retrieval as hr
-
         try:
             kind = _choice(kind, "kind", ("week", "day"), "week")
             order = _choice(order, "order", ("relevance", "newest"), "relevance")
@@ -461,6 +476,15 @@ class HistoryService:
                 raise BadInput("give query words or flags")
         except BadInput as exc:
             return bad_input_text(str(exc))
+        try:
+            return self._search_history(words, kind, wanted, lo, hi, order, k)
+        except _db_errors() as exc:  # every database read: a fixed text; anything else is a bug for launch
+            return self._db_failure(exc)
+
+    def _search_history(self, words: str, kind: str, wanted: List[str], lo: Optional[dt.date],
+                        hi: Optional[dt.date], order: str, k: int) -> str:
+        import history_retrieval as hr
+
         fp, text = self._account()
         if text:
             return text

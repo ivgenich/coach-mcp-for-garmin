@@ -11,12 +11,13 @@ Please report a security problem privately, not in a public issue.
 3. Never include real tokens, owner secrets, Garmin passwords, API keys or health data. Use
    made-up values.
 
-If you see no **Report a vulnerability** button, open an issue that says only that you have a
-security report to send, with no details, and the maintainer will reply with a private way to
+If you see no **Report a vulnerability** button, open an issue (the **Question** form) that says
+only that you have a security report to send, with no details, and the maintainer will reply with a private way to
 send it.
 
 This is a personal project, maintained on a best-effort basis. Expect a first answer within 14
-days. A fix goes into the newest release, and the CHANGELOG describes it once the fix is out.
+days. A fix goes into the newest release (until the first release is out, into the `main`
+branch), and the CHANGELOG describes it once the fix is out.
 
 ## Supported versions
 
@@ -24,7 +25,8 @@ days. A fix goes into the newest release, and the CHANGELOG describes it once th
 |---|---|
 | The newest 1.x release | Yes |
 | Older 1.x releases | No: update to the newest 1.x release |
-| Copies from before 1.0.0 | No |
+| The `main` branch, until 1.0.0 is released | Yes |
+| Copies from before 1.0.0, once 1.0.0 is released | No |
 
 ## Scope
 
@@ -35,9 +37,9 @@ In scope, this repository's code and configuration:
 - The read-only tool policy: any way to make the server expose or run a tool that changes Garmin
   data.
 - Leaks of secrets, tokens, Garmin credentials or keys, or health data through tool answers,
-  errors, logs, files or telemetry. With tracing on, Grafana and Langfuse receive metadata only
-  (tool names, timings, error groups, token counts and cost), never health values or text
-  ([Tracing](docs/tracing.md)).
+  errors, logs, files or telemetry. With tracing on, the server's traces carry metadata only
+  (tool names, timings, error groups), never health values or text; the eval runs, which only
+  the maintainer runs, can add token counts and cost in Langfuse ([Tracing](docs/tracing.md)).
 - The edge configuration (`Caddyfile`), the container image built from this repository
   (`Dockerfile`, `entrypoint.sh`), and the deploy files and scripts (`compose.yaml`,
   `scripts/deploy.sh`).
@@ -63,11 +65,30 @@ Out of scope:
 - Denial of service by traffic volume, and reports from automated scanners with no demonstrated
   impact.
 
+## How the sign-in behaves
+
+Details a report may depend on:
+
+- **Refresh tokens rotate on every use.** A refresh token that comes back after it was used
+  revokes its whole sign-in, with one exception: the same client sending the same refresh token
+  again within 30 seconds (a retry after a lost answer) gets the same new pair back, as long as
+  that new pair is still unused. The server keeps that window in memory only, so after a restart
+  or a redeploy any second use of a refresh token revokes the sign-in, and the client signs in
+  again.
+- **Origin.** On `/mcp`, a request with an `Origin` header gets `403` unless the origin is the
+  server's own (`PUBLIC_URL`), `https://claude.ai`, `https://claude.com`, or one listed in
+  `ALLOWED_ORIGINS` (comma-separated). Requests without `Origin` (Claude's servers, Claude Code
+  and other programs) are not affected. `ORIGIN_CHECK=off` turns the check off.
+- **Authorization responses** carry `iss` (RFC 9207), and the server's metadata says so.
+- **The container.** The Python server runs as the unprivileged user `app` and Caddy as the user
+  `caddy`; only the start script runs as root, to give `app` the files on `/data`
+  ([How it works](docs/how-it-works.md#what-runs-where)).
+
 ## Known advisories
 
 - **PYSEC-2026-3467** (CVE-2026-54447): garminconnect 0.3.4 and older save the Garmin login
   tokens in a file that other users of the same machine can read; 0.3.5 fixes it. This server
   pins garminconnect 0.3.2, the exact version upstream garmin_mcp requires. Here the risk is
-  contained: the server runs alone in its container, `garmin-mcp-auth` makes the token folder
-  and its files owner-only after a login, and the server makes the folder owner-only (0700) on
-  every start. The pin is reviewed again by 15 February 2027, or sooner when upstream moves.
+  contained: the server runs alone in its container as its own user, `garmin-mcp-auth` makes
+  the token folder and its files owner-only after a login, and the server makes the folder
+  owner-only (0700) on every start. The pin is reviewed again by 15 February 2027, or sooner when upstream moves.

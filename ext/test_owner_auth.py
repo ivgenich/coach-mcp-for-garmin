@@ -11,7 +11,7 @@ Secrets are fake values made at run time. Assertion messages carry status and
 error codes only, never a secret. Clocks are fake: they start at the current
 time (rounded up to a whole second, so expiry arithmetic is exact) and only
 move forward. Expiry tests check that the provider refuses on its own clock,
-because the SDK checks the real time (F22).
+because the SDK checks the real time.
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def why(response):
 
 
 class FakeClock:
-    """Starts at the current time, rounded up to a whole second, and only moves forward (F22)."""
+    """Starts at the current time, rounded up to a whole second, and only moves forward."""
 
     def __init__(self):
         self.now = float(math.ceil(time.time()))
@@ -370,7 +370,10 @@ class Discovery(SignInCase):
             "revocation_endpoint": PUBLIC + "/revoke",
             "revocation_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
             "code_challenge_methods_supported": ["S256"],
+            "authorization_response_iss_parameter_supported": True,   # RFC 9207
         })
+        self.assertEqual(response.headers["cache-control"], "public, max-age=3600")
+        self.assertEqual(int(response.headers["content-length"]), len(response.content))
 
     def test_both_resource_metadata_documents_are_the_same(self):
         expected = {"resource": RESOURCE, "authorization_servers": [PUBLIC], "bearer_methods_supported": ["header"]}
@@ -387,7 +390,7 @@ class Discovery(SignInCase):
         self.assertEqual(response.headers["www-authenticate"], WWW_AUTHENTICATE)
 
     def test_public_url_spelling_is_the_sdks(self):
-        # F15 end to end: PUBLIC_URL as typed, normalized by auth_config, equals what the SDK serves.
+        # End to end: PUBLIC_URL as typed, normalized by auth_config, equals what the SDK serves.
         for typed, origin in (("HTTPS://Coach.Example.COM:443/", PUBLIC),
                               ("https://coach.example.com:8443", "https://coach.example.com:8443"),
                               ("http://LOCALHOST:80", "http://localhost"),
@@ -403,6 +406,7 @@ class Discovery(SignInCase):
                 client = self.new_client(auth)
                 metadata = client.get("/.well-known/oauth-authorization-server").json()
                 self.assertEqual(metadata["issuer"], origin)
+                self.assertIs(metadata["authorization_response_iss_parameter_supported"], True)
                 self.assertEqual(metadata["token_endpoint"], origin + "/token")
                 self.assertEqual(client.get("/.well-known/oauth-protected-resource").json()["resource"],
                                  origin + "/mcp")
@@ -412,6 +416,168 @@ class Discovery(SignInCase):
             owner_auth.build(self.config(public_url="https://Coach.example.com"), clock=self.clock)
         self.assertIn("PUBLIC_URL", str(caught.exception))
         self.assertNotIn(self.owner_secret, str(caught.exception))
+
+
+class Origins(SignInCase):
+    """/mcp and the Origin header (MCP spec, Streamable HTTP): 403 when present and not allowed."""
+
+    def setUp(self):
+        super().setUp()
+        self.token = self.sign_in()["tokens"]["access_token"]
+
+    def test_no_origin_passes(self):
+        self.assert_mcp(self.token, 200)
+        self.assert_mcp(None, 401)
+
+    def test_allowed_origins_pass_in_any_spelling(self):
+        for origin in (PUBLIC, "https://claude.ai", "https://claude.com", "HTTPS://Claude.AI:443",
+                       "https://claude.com/"):
+            with self.subTest(origin=origin):
+                self.assert_mcp(self.token, 200, headers={"Origin": origin})
+
+    def test_other_origins_get_403_before_the_token_check(self):
+        for origin in ("https://evil.example", "null", "http://claude.ai", "https://claude.ai:8443",
+                       "https://claude.ai.evil.example", "http://127.0.0.1:8000", "https://user@claude.ai", "x"):
+            with self.subTest(origin=origin):
+                for token in (self.token, None):
+                    response = self.assert_mcp(token, 403, headers={"Origin": origin})
+                    self.assertEqual(response.json(), {"error": "forbidden", "error_description": "Origin not allowed"})
+                    self.assertNotIn("www-authenticate", response.headers)
+        warnings = [line for line in self.logs.auth_lines("WARNING") if line.startswith("mcp: refused")]
+        self.assertIn("mcp: refused a request from origin 'https://evil.example'", warnings[0])
+
+    def test_allowed_origins_setting(self):
+        auth = self.build(extra_origins=("http://localhost:6274",))
+        token = self.sign_in_on(auth)
+        self.assert_mcp(token, 200, auth=auth, headers={"Origin": "http://localhost:6274"})
+        self.assert_mcp(token, 403, auth=auth, headers={"Origin": "http://localhost:6275"})
+
+    def test_the_check_can_be_turned_off(self):
+        # The header is still removed: the SDK's own guard would refuse every non-loopback Origin.
+        auth = self.build(origin_check=False)
+        token = self.sign_in_on(auth)
+        self.assert_mcp(token, 200, auth=auth, headers={"Origin": "https://evil.example"})
+
+    def test_other_paths_are_not_checked(self):
+        response = self.client.get("/.well-known/oauth-authorization-server", headers={"Origin": "https://evil.example"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+
+    def sign_in_on(self, auth):
+        saved = (self.auth, self.client)
+        self.auth, self.client = auth, self.new_client(auth)
+        try:
+            return self.sign_in()["tokens"]["access_token"]
+        finally:
+            self.auth, self.client = saved
+
+
+@unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
+class OriginCheckAsgi(unittest.TestCase):
+    """OriginCheck as a bare ASGI middleware: every Origin header counts, and the SDK never sees one."""
+
+    def call(self, headers, path="/mcp", enabled=True, middleware=None):
+        seen = []
+
+        async def app(scope, receive, send):
+            seen.append(scope["headers"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        if middleware is None:
+            middleware = owner_auth.OriginCheck(app, allowed=frozenset({PUBLIC}), enabled=enabled)
+        else:
+            middleware.app = app
+        scope = {"type": "http", "method": "POST", "path": path, "headers": headers}
+        asyncio.run(middleware(scope, receive, send))
+        return sent[0]["status"], seen
+
+    def test_each_refused_origin_is_logged_once(self):
+        middleware = owner_auth.OriginCheck(None, allowed=frozenset({PUBLIC}))
+        with self.assertLogs("garmin_ext.auth", "WARNING") as logs:
+            for origin in (b"https://a.example", b"https://a.example", b"https://b.example\n"):
+                self.assertEqual(self.call([(b"origin", origin)], middleware=middleware)[0], 403)
+        self.assertEqual([r.getMessage() for r in logs.records], [
+            "mcp: refused a request from origin 'https://a.example' (not PUBLIC_URL, Claude or ALLOWED_ORIGINS)",
+            "mcp: refused a request from origin 'https://b.example' (not PUBLIC_URL, Claude or ALLOWED_ORIGINS)"])
+
+    def test_a_second_bad_origin_header_is_refused(self):
+        with self.assertLogs("garmin_ext.auth", "WARNING"):
+            status, seen = self.call([(b"origin", PUBLIC.encode()), (b"origin", b"https://evil.example")])
+        self.assertEqual((status, seen), (403, []))
+
+    def test_an_allowed_origin_is_removed_before_the_app(self):
+        status, seen = self.call([(b"host", b"127.0.0.1:8000"), (b"Origin", PUBLIC.encode())])
+        self.assertEqual((status, seen), (200, [[(b"host", b"127.0.0.1:8000")]]))
+
+    def test_other_paths_keep_the_header(self):
+        headers = [(b"origin", b"https://evil.example")]
+        self.assertEqual(self.call(headers, path="/token"), (200, [headers]))
+
+    def test_mcp_with_a_trailing_slash_is_checked_too(self):
+        with self.assertLogs("garmin_ext.auth", "WARNING"):
+            self.assertEqual(self.call([(b"origin", b"https://evil.example")], path="/mcp/")[0], 403)
+
+
+@unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
+class IssuerParameterAsgi(unittest.TestCase):
+    """IssuerParameter as a bare ASGI middleware (RFC 9207)."""
+
+    def call(self, path, start, body=b"", method="GET"):
+        async def app(scope, receive, send):
+            await send(start)
+            await send({"type": "http.response.body", "body": body})
+
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        middleware = owner_auth.IssuerParameter(app, issuer=PUBLIC, consent_url=PUBLIC + "/consent")
+        asyncio.run(middleware({"type": "http", "method": method, "path": path, "headers": []}, receive, send))
+        return sent
+
+    def location(self, location, status=302):
+        start = {"type": "http.response.start", "status": status, "headers": [(b"location", location.encode())]}
+        return dict(self.call("/authorize", start)[0]["headers"])[b"location"].decode()
+
+    def test_error_redirects_get_iss(self):
+        self.assertEqual(self.location(CALLBACK + "?error=invalid_request&state=s"),
+                         CALLBACK + "?error=invalid_request&state=s&iss=https%3A%2F%2Fcoach.example.com")
+        self.assertEqual(self.location("https://app.example/cb", status=303),
+                         "https://app.example/cb?iss=https%3A%2F%2Fcoach.example.com")
+
+    def test_the_consent_page_and_an_existing_iss_are_left_alone(self):
+        for location in (PUBLIC + "/consent?req=abc", CALLBACK + "?error=x&iss=other"):
+            with self.subTest(location=location):
+                self.assertEqual(self.location(location), location)
+
+    def test_metadata_gets_the_flag_and_a_right_length(self):
+        body = json.dumps({"issuer": PUBLIC}).encode()
+        start = {"type": "http.response.start", "status": 200,
+                 "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]}
+        first, second = self.call("/.well-known/oauth-authorization-server", start, body)
+        new = second["body"]
+        self.assertEqual(json.loads(new), {"issuer": PUBLIC, "authorization_response_iss_parameter_supported": True})
+        self.assertEqual(dict(first["headers"])[b"content-length"], str(len(new)).encode())
+
+    def test_other_answers_pass_unchanged(self):
+        for status, body in ((200, b"not json"), (500, b'{"a":1}')):
+            start = {"type": "http.response.start", "status": status, "headers": []}
+            with self.subTest(status=status):
+                sent = self.call("/.well-known/oauth-authorization-server", start, body)
+                self.assertEqual(sent[-1]["body"], body)
 
 
 # --- registration ----------------------------------------------------------------------------------
@@ -439,7 +605,7 @@ class Registration(SignInCase):
                       % client["client_id"], self.logs.auth_lines("INFO"))
 
     def test_basic_auth_method_becomes_post(self):
-        # F2: the SDK needs client_id in the /token form, so a Basic-only client could never refresh.
+        # The SDK needs client_id in the /token form, so a Basic-only client could never refresh.
         client = self.register(token_endpoint_auth_method="client_secret_basic")
         self.assertEqual(client["token_endpoint_auth_method"], "client_secret_post")
         self.assertTrue(client.get("client_secret"))
@@ -447,7 +613,7 @@ class Registration(SignInCase):
         self.sign_in(client)
 
     def test_public_loopback_client_gets_no_secret_key_at_all(self):
-        # S6 (F2): the 201 of a "none" client has no client_secret key, not even null.
+        # S6: the 201 of a "none" client has no client_secret key, not even null.
         response = self.client.post("/register", json={"redirect_uris": ["http://localhost:1/callback"],
                                                        "token_endpoint_auth_method": "none",
                                                        "client_name": "Claude Code"})
@@ -460,7 +626,7 @@ class Registration(SignInCase):
         self.assertEqual(body["scope"], "offline_access")
 
     def test_grants_become_exactly_the_two(self):
-        # F10, S9.
+        # S9.
         for asked in (["authorization_code", "client_credentials"], ["authorization_code"],
                       ["refresh_token", "implicit", "authorization_code", JWT_BEARER]):
             with self.subTest(asked=asked):
@@ -515,7 +681,7 @@ class Registration(SignInCase):
         self.assertEqual(self.store.counts(), (0, 0))
 
     def test_a_chunked_body_over_64_kib_without_a_length_gets_413(self):
-        # F17: the bytes actually streamed are counted.
+        # The bytes actually streamed are counted.
         def chunks():
             yield b'{"redirect_uris": ["' + CALLBACK.encode() + b'"], "client_name": "'
             for _ in range(70):
@@ -534,7 +700,7 @@ class Registration(SignInCase):
         self.assertEqual(response.status_code, 201, why(response))
 
     def test_unparseable_bodies_reach_the_sdk_unchanged(self):
-        # F17: deep nesting (RecursionError in json.loads), non-JSON and non-objects get the SDK's 400, not a 500.
+        # Deep nesting (RecursionError in json.loads), non-JSON and non-objects get the SDK's 400, not a 500.
         for body in (b"[" * 30000 + b"]" * 30000, b'{"a": ' + b"[" * 30000 + b"]" * 30000 + b"}",
                      b"not json", b"[1, 2]", b'"text"', b"\xff\xfe", b""):
             with self.subTest(size=len(body)):
@@ -550,7 +716,7 @@ class Registration(SignInCase):
 
 @unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
 class RegistrationFilterAsgi(unittest.TestCase):
-    """RegistrationFilter as a bare ASGI middleware, message by message (F17)."""
+    """RegistrationFilter as a bare ASGI middleware, message by message."""
 
     def drive(self, messages, *, path="/register", method="POST", headers=(), max_body=64, scope_type="http",
               read_after=False):
@@ -707,7 +873,7 @@ class ExtraRedirectOriginOnly(SignInCase):
 
 
 class Eviction(SignInCase):
-    """MAX_CLIENTS with eviction: idle clients first (tier 1), then 7-day idle ones (F11)."""
+    """MAX_CLIENTS with eviction: idle clients first (tier 1), then 7-day idle ones."""
 
     def test_an_idle_client_is_evicted_at_the_cap(self):
         with mock.patch.object(auth_config, "MAX_CLIENTS", 3):
@@ -783,6 +949,7 @@ class Authorize(SignInCase):
         self.assertEqual(query.get("state"), state)
         if description is not None:
             self.assertEqual(query["error_description"], description)
+        self.assertEqual(query["iss"], PUBLIC)   # RFC 9207, on the SDK's own error redirects too
 
     def test_a_valid_request_goes_to_the_consent_page(self):
         verifier, challenge = pkce()
@@ -826,7 +993,7 @@ class Authorize(SignInCase):
         self.assertEqual(self.pending_count(), 0)
 
     def test_state_and_scope_bounds(self):
-        # F12: refused before anything is stored.
+        # Refused before anything is stored.
         self.start(self.claude)
         response = self.authorize(self.claude, challenge=pkce()[1], state="s" * 1024)
         self.assertEqual(response.status_code, 302)
@@ -840,7 +1007,7 @@ class Authorize(SignInCase):
         self.assertEqual(self.pending_count(), 3)
 
     def test_scope_is_lenient(self):
-        # D2: claude.ai was seen asking for "claudeai"; it is echoed, not checked.
+        # claude.ai was seen asking for "claudeai"; it is echoed, not checked.
         flow = self.sign_in(self.claude, scope="claudeai")
         self.assertEqual(flow["tokens"]["scope"], "claudeai")
         flow = self.sign_in(self.claude, scope=None)
@@ -859,7 +1026,7 @@ class Authorize(SignInCase):
         self.assertNotIn("location", response.headers)
 
     def test_a_client_keeps_its_newest_five_pending_requests(self):
-        # F5: past MAX_PENDING_PER_CLIENT the client's own oldest goes.
+        # Past MAX_PENDING_PER_CLIENT the client's own oldest goes.
         flows = []
         for _ in range(auth_config.MAX_PENDING_PER_CLIENT):
             flows.append(self.start(self.claude))
@@ -871,7 +1038,7 @@ class Authorize(SignInCase):
         self.assertEqual(self.pending_count(self.claude["client_id"]), auth_config.MAX_PENDING_PER_CLIENT)
 
     def test_a_full_pending_table_refuses_and_deletes_nothing(self):
-        # F5: another client's rows are never deleted to make room.
+        # Another client's rows are never deleted to make room.
         other = self.register()
         with mock.patch.object(auth_config, "MAX_PENDING", 3):
             for _ in range(3):
@@ -886,7 +1053,7 @@ class Authorize(SignInCase):
 
 
 class Loopback(SignInCase):
-    """Claude Code: an http loopback redirect matches on any port, everything else exact (D4, S21, S22, F15)."""
+    """Claude Code: an http loopback redirect matches on any port, everything else exact (S21, S22)."""
 
     def test_any_port_on_the_registered_path(self):
         cli = self.public_client("http://localhost:1/callback")
@@ -918,7 +1085,7 @@ class Loopback(SignInCase):
                 self.assertNotIn("location", response.headers)
 
     def test_an_empty_path_is_slash(self):
-        # F15: a registered "http://localhost" has no path; a requested one with a port has "/".
+        # A registered "http://localhost" has no path; a requested one with a port has "/".
         cli = self.public_client("http://localhost")
         for uri in ("http://localhost:5555", "http://localhost:5555/"):
             with self.subTest(uri=uri):
@@ -989,7 +1156,7 @@ class ClientModel(unittest.TestCase):
 
 
 class Consent(SignInCase):
-    """GET and POST /consent: every rule in contract 6.3.5 (S11-S17, F3, F16)."""
+    """GET and POST /consent: every rule (S11-S17)."""
 
     def setUp(self):
         super().setUp()
@@ -1035,9 +1202,9 @@ class Consent(SignInCase):
                          'type="password" name="secret" autocomplete="current-password" required',
                          '<button type="submit" name="action" value="deny" formnovalidate>'):
             self.assertIn(expected, text)
-        self.assertLess(text.index('value="approve"'), text.index('value="deny"'))   # F16: Enter approves
+        self.assertLess(text.index('value="approve"'), text.index('value="deny"'))   # Enter approves
         self.assertNotIn('class="warn"', text)
-        self.assertNotIn("form-action", response.headers["content-security-policy"])   # F3
+        self.assertNotIn("form-action", response.headers["content-security-policy"])
 
     def test_started_minutes_ago(self):
         for wait, text in ((59, "less than a minute"), (1, "1 minute"), (65, "2 minutes")):
@@ -1076,8 +1243,9 @@ class Consent(SignInCase):
         # S14, then S15: single use.
         response = self.post_consent(self.pending, secret=self.owner_secret)
         query = self.assert_redirect(response)
-        self.assertEqual(sorted(query), ["code", "state"])   # no iss (D13)
+        self.assertEqual(sorted(query), ["code", "iss", "state"])
         self.assertEqual(query["state"], self.flow["state"])
+        self.assertEqual(query["iss"], PUBLIC)   # RFC 9207: the metadata's issuer, exactly
         self.assertTrue(query["code"].startswith("ac_"))
         self.assertEqual(self.sql("SELECT COUNT(*) FROM codes WHERE code_hash = ?",
                                   auth_store.hash_secret(query["code"]))[0][0], 1)
@@ -1089,13 +1257,13 @@ class Consent(SignInCase):
     def test_deny(self):
         # S16: no secret needed.
         query = self.assert_redirect(self.post_consent(self.pending, action="deny"))
-        self.assertEqual(query, {"error": "access_denied", "state": self.flow["state"]})
+        self.assertEqual(query, {"error": "access_denied", "state": self.flow["state"], "iss": PUBLIC})
         self.assertIn("consent: denied for client " + self.claude["client_id"], self.logs.auth_lines("INFO"))
         self.assert_page(self.get_page(), 400)
         self.assertEqual(self.sql("SELECT COUNT(*) FROM codes")[0][0], 0)
 
     def test_three_wrong_secrets_end_the_request(self):
-        # S12, F16.
+        # S12.
         wrong = fake_secret()
         for n in (1, 2):
             response = self.post_consent(self.pending, secret=wrong)
@@ -1105,7 +1273,7 @@ class Consent(SignInCase):
             self.assertNotIn(wrong, response.text)
             self.assertIn("consent: wrong owner secret (%d of 3)" % n, self.logs.auth_lines("WARNING"))
         query = self.assert_redirect(self.post_consent(self.pending, secret=wrong))
-        self.assertEqual(query, {"error": "access_denied", "state": self.flow["state"]})
+        self.assertEqual(query, {"error": "access_denied", "state": self.flow["state"], "iss": PUBLIC})
         self.assertIn("consent: wrong owner secret (3 of 3)", self.logs.auth_lines("WARNING"))
         self.assert_page(self.get_page(), 400)
         self.assert_page(self.post_consent(self.pending, secret=self.owner_secret), 400)
@@ -1116,7 +1284,7 @@ class Consent(SignInCase):
         self.assertIn("code", self.assert_redirect(self.post_consent(self.pending, secret=self.owner_secret)))
 
     def test_a_cross_site_post_is_refused_and_the_request_stays_usable(self):
-        # S13 (D5).
+        # S13: a form posted from another site.
         for site in ("cross-site", "same-site", "Cross-Site"):
             with self.subTest(site=site):
                 self.assert_page(self.post_consent(self.pending, secret=self.owner_secret, site=site), 403)
@@ -1128,7 +1296,7 @@ class Consent(SignInCase):
                                                                       site=None)))
 
     def test_a_missing_action_with_a_secret_approves(self):
-        # F16: a scripted submit, or Enter in a browser that sends no button.
+        # A scripted submit, or Enter in a browser that sends no button.
         self.assertIn("code", self.assert_redirect(self.post_consent(self.pending, secret=self.owner_secret,
                                                                       action=None)))
 
@@ -1215,7 +1383,7 @@ class Consent(SignInCase):
 
 
 class Codes(SignInCase):
-    """/token with authorization codes: single use, reuse revokes (AZ-4, F13), expiry on our clock."""
+    """/token with authorization codes: single use, reuse revokes, expiry on our clock."""
 
     def setUp(self):
         super().setUp()
@@ -1251,7 +1419,7 @@ class Codes(SignInCase):
                       self.logs.auth_lines("WARNING"))
 
     def test_losing_the_exchange_race_revokes(self):
-        # F13: two exchanges that both passed load_authorization_code.
+        # Two exchanges that both passed load_authorization_code.
         flow = self.approve(self.start(self.claude))
 
         async def race():
@@ -1300,7 +1468,7 @@ class Codes(SignInCase):
 
 
 class Refresh(SignInCase):
-    """Refresh rotation, the F4 replay window, reuse revocation, expiry and scope (S28-S31)."""
+    """Refresh rotation, the replay window, reuse revocation, expiry and scope (S28-S31)."""
 
     def setUp(self):
         super().setUp()
@@ -1323,10 +1491,11 @@ class Refresh(SignInCase):
         self.assertIn("token: refresh for client " + self.claude["client_id"], self.logs.auth_lines("INFO"))
         self.assert_mcp(t2["access_token"], 200)
 
-    def test_a_replay_within_120_s_returns_the_same_pair(self):
-        # F4 rule 5: at 31 s and at 119 s (and at the 120 s edge), and the grant stays alive.
+    def test_a_replay_within_30_s_returns_the_same_pair(self):
+        # At 10 s and at 29 s (and at the 30 s edge), and the grant stays alive.
+        self.assertEqual(auth_config.REFRESH_REUSE_GRACE, 30)
         t2 = self.rotate(self.claude, self.rt1)
-        for wait, age in ((31, 31), (88, 119), (1, 120)):
+        for wait, age in ((10, 10), (19, 29), (1, 30)):
             self.clock.advance(wait)
             again = self.rotate(self.claude, self.rt1)
             self.assertEqual((again["access_token"], again["refresh_token"]), (t2["access_token"], t2["refresh_token"]))
@@ -1339,7 +1508,7 @@ class Refresh(SignInCase):
         self.assertNotEqual(t3["refresh_token"], t2["refresh_token"])
 
     def test_three_concurrent_refreshes_get_the_same_pair(self):
-        # F4 rule 5: each thread has its own TestClient, so each request runs on its own event loop.
+        # Each thread has its own TestClient, so each request runs on its own event loop.
         barrier = threading.Barrier(3)
         results = [None] * 3
 
@@ -1364,7 +1533,7 @@ class Refresh(SignInCase):
         self.assertEqual(self.grant_reasons(), [None])
 
     def test_loads_that_interleave_with_a_rotation(self):
-        # F4 rule 4: all three loads see an unused token before any exchange runs.
+        # All three loads see an unused token before any exchange runs.
         async def interleave():
             client = await self.provider.get_client(self.claude["client_id"])
             loaded = [await self.provider.load_refresh_token(client, self.rt1) for _ in range(3)]
@@ -1376,7 +1545,7 @@ class Refresh(SignInCase):
         self.assertEqual(self.grant_reasons(), [None])
 
     def test_using_rt2_then_replaying_rt1_revokes(self):
-        # S30, F4 rule 3.
+        # S30.
         t2 = self.rotate(self.claude, self.rt1)
         t3 = self.rotate(self.claude, t2["refresh_token"])
         response = self.refresh(self.claude, self.rt1)
@@ -1387,16 +1556,16 @@ class Refresh(SignInCase):
         self.assert_mcp(t3["access_token"], 401)
         self.assertEqual(self.refresh(self.claude, t3["refresh_token"]).status_code, 400)
 
-    def test_a_replay_at_121_s_revokes(self):
+    def test_a_replay_at_31_s_revokes(self):
         t2 = self.rotate(self.claude, self.rt1)
-        self.clock.advance(121)
+        self.clock.advance(31)
         self.assertEqual(self.refresh(self.claude, self.rt1).status_code, 400)
         self.assertEqual(self.grant_reasons(), ["refresh token reuse"])
         self.assert_mcp(t2["access_token"], 401)
         self.assertEqual(self.refresh(self.claude, t2["refresh_token"]).status_code, 400)
 
     def test_a_replay_after_a_restart_revokes(self):
-        # The replay map lives in memory only (F4 rule 3).
+        # The replay map lives in memory only.
         t2 = self.rotate(self.claude, self.rt1)
         restarted = self.build()
         http = self.new_client(restarted)
@@ -1431,7 +1600,7 @@ class Refresh(SignInCase):
         self.assertEqual(self.grant_reasons(), ["refresh token reuse", None, None])
 
     def test_a_refresh_token_expires_after_30_days(self):
-        # F22: the SDK's real-time check would pass; the provider refuses on its own clock.
+        # The SDK's real-time check would pass; the provider refuses on its own clock.
         self.clock.advance(auth_config.REFRESH_TTL)
         self.assertGreater(self.sql("SELECT expires_at FROM tokens WHERE kind = 'refresh'")[0][0], time.time())
 
@@ -1447,7 +1616,7 @@ class Refresh(SignInCase):
         self.assertEqual((response.status_code, response.json()["error"]), (400, "invalid_grant"))
 
     def test_the_replay_window_belongs_to_one_client(self):
-        # F4 rule 2, behind the SDK's own client check: even a direct call never
+        # Behind the SDK's own client check: even a direct call never
         # hands this client's pair to another client, and revokes nothing.
         t2 = self.rotate(self.claude, self.rt1)
         other = self.register()
@@ -1470,7 +1639,7 @@ class Refresh(SignInCase):
         self.rotate(self.claude, t2["refresh_token"])
 
     def test_an_access_token_expires_after_an_hour(self):
-        # F22.
+        # Expiry on the provider's clock, not the SDK's real-time check.
         access = self.flow["tokens"]["access_token"]
         self.clock.advance(auth_config.ACCESS_TTL)
         self.assert_mcp(access, 401)
@@ -1478,7 +1647,7 @@ class Refresh(SignInCase):
         self.rotate(self.claude, self.rt1)
 
     def test_a_scope_the_grant_does_not_hold_is_refused(self):
-        # F18, S31: the SDK's invalid_scope; the refused request does not use the token.
+        # S31: the SDK's invalid_scope; the refused request does not use the token.
         response = self.refresh(self.claude, self.rt1, scope="other")
         self.assertEqual((response.status_code, response.json()["error"]), (400, "invalid_scope"))
         self.assertEqual(self.rotate(self.claude, self.rt1)["scope"], "offline_access")
@@ -1546,7 +1715,7 @@ class Revoke(SignInCase):
 
 
 class StaticBearer(SignInCase):
-    """The opt-in MCP_BEARER_TOKEN header (S33-S35, F21)."""
+    """The opt-in MCP_BEARER_TOKEN header (S33-S35)."""
 
     with_static_bearer = True
 
@@ -1571,7 +1740,7 @@ class StaticBearer(SignInCase):
                          ("static-bearer", [], None, RESOURCE, "owner"))
 
     def test_it_survives_an_owner_secret_change(self):
-        # F21: rotating OWNER_SECRET signs out OAuth clients, not the static bearer.
+        # Rotating OWNER_SECRET signs out OAuth clients, not the static bearer.
         changed = self.build(owner_secret=fake_secret())
         self.assert_mcp(self.bearer, 200, auth=changed)
 
@@ -1631,7 +1800,7 @@ class TokenResource(SignInCase):
 
 
 class OwnerSecretChange(SignInCase):
-    """D10: a new OWNER_SECRET at startup revokes every grant, pending request and unused code."""
+    """A new OWNER_SECRET at startup revokes every grant, pending request and unused code."""
 
     def test_a_new_secret_revokes_everything(self):
         claude = self.register()
@@ -1684,9 +1853,13 @@ class Wiring(SignInCase):
         self.assertTrue(settings.revocation_options.enabled)
 
     def test_asgi_middleware(self):
-        self.assertEqual(owner_auth.asgi_middleware(self.auth), [(owner_auth.RegistrationFilter, {
-            "allowed_grants": ("authorization_code", "refresh_token"), "valid_scopes": ("offline_access",),
-            "max_body": 65536})])
+        self.assertEqual(owner_auth.asgi_middleware(self.auth), [
+            (owner_auth.RegistrationFilter, {"allowed_grants": ("authorization_code", "refresh_token"),
+                                             "valid_scopes": ("offline_access",), "max_body": 65536}),
+            (owner_auth.OriginCheck, {"allowed": frozenset({PUBLIC, "https://claude.ai", "https://claude.com"}),
+                                      "enabled": True}),
+            (owner_auth.IssuerParameter, {"issuer": PUBLIC, "consent_url": PUBLIC + "/consent"}),
+        ])
 
     def test_register_routes_adds_two_routes_bound_to_their_auth(self):
         calls = []
@@ -1788,7 +1961,7 @@ class SelfCheck(SignInCase):
 
 
 class NoSecretsInLogs(SignInCase):
-    """A full in-process flow, every server-side log record captured at DEBUG: no secret appears (section 8, F23)."""
+    """A full in-process flow, every server-side log record captured at DEBUG: no secret appears."""
 
     with_static_bearer = True
 

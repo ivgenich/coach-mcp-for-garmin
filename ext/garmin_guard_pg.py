@@ -1,6 +1,6 @@
-"""The Garmin call guard's shared state in Postgres (plan section 3), and the same rules in memory.
+"""The Garmin call guard's shared state in Postgres, and the same rules in memory.
 
-garmin_guard.GarminGuard (B1) asks its SharedState for: get_cooldown() -> (until, group) or (None, None),
+garmin_guard.GarminGuard asks its SharedState for: get_cooldown() -> (until, group) or (None, None),
 set_cooldown(until, group) (never shortens), clear_cooldown(group), heartbeat_live(force=False), last_live(),
 take_token(now) -> bool and take_token_decision(now) -> Decision (the guard prefers the Decision: its reason and
 retry_at become GuardBlocked's group and until, so the daily cap waits for the next 12:00 local, not 5 s). With history on, every process (the MCP server and each worker) uses PgSharedState, so a

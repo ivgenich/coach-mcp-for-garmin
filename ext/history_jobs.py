@@ -1,27 +1,38 @@
 """History search: the job handlers the worker runs (index_day, build_week, sweep, rebuild).
 
 worker.load_handlers() imports this module and calls register_jobs(register). A handler is handler(job, ctx)
-(worker.Context: store, queue, guard, garmin, telemetry, conn). Every write uses ctx.conn, the job's own
-transaction, and follow-up jobs are enqueued in it too (the outbox), so a crash leaves all or nothing. Garmin
-calls go through ctx.garmin (the worker's GuardedGarmin: call guard, token bucket, quiet window).
+(worker.Context: store, queue, guard, garmin, telemetry, conn, prepared). index_day and build_week also have a
+prepare step (register(..., prepare=)) that the worker runs before it opens the job's transaction: the Garmin
+calls happen there, so no database transaction stays open while a call waits for the guard. The handler then
+runs in the job's transaction (ctx.conn) with the answers in ctx.prepared; every write and every follow-up job
+(the outbox) uses ctx.conn, so a crash leaves all or nothing. Garmin calls go through ctx.garmin (the worker's
+GuardedGarmin: call guard, token bucket, quiet window).
 
-- index_day {"date", "backfill"?, "recheck"?, "empty_run"?}: 4 Garmin calls (stats, sleep, HRV, the day's
-  activities) -> the day's numbers (history_extract.day_numbers), upsert, then embed_doc for the day, build_week
-  when the week's 7 days are final, and (backfill) the next older missing day. A day already final is not
-  fetched again unless "recheck". The backfill stops after 14 empty days in a row (account start).
+- index_day {"date", "backfill"?, "recheck"?, "empty_run"?, "probe"?}: 4 Garmin calls (stats, sleep, HRV, the
+  day's activities) -> the day's numbers (history_extract.day_numbers), upsert, then embed_doc for the day,
+  build_week when the week's 7 days are final, and (backfill) the next older missing day. A day already final
+  is not fetched again unless "recheck". The backfill stops after EMPTY_STOP_DAYS answered empty days in a row
+  (every source answered, none had data: the account start or a long break) and stores that day as the
+  backfill floor. A day with a failed source never counts, and the stop is skipped while an older stored day
+  has data. The floor is provisional: each sweep probes a few days before it (PROBE_DAYS, each one once), and a
+  probe that finds data removes the floor and the backfill goes on from there.
 - build_week {"start" (a Monday), "cascade"?, "fetch_load"?}: the week's numbers from its stored days, plus one
   get_training_status in full mode (kept in the row, so rebuilds call nothing), then embed_doc for the week and
   build_week for the next week while cascade > 0 (its HRV and volume comparisons read this week).
 - sweep {"late"?}: retention, the last 3 days (late syncs), the newest missing day (starts the backfill
-  chain), weeks whose days are all final but whose row is missing or not final, and with "late" the empty or
-  partial days of the last 30 days once more. Sets the lag gauge.
+  chain), up to REFETCH_PER_SWEEP older days that are still not final (a source failed on every attempt; a day
+  already fetched again once only on the late sweep), the floor probes, weeks whose days are all final but
+  whose row is missing or not final, and with "late" the empty or partial days of the last 30 days once more.
+  Sets the lag gauge.
 - rebuild {}: re-derives every week and re-embeds every day and week from stored numbers, no Garmin calls (after
   a rules, text or numbers version change; scheduled_jobs() decides).
 
 A Garmin login or rate-limit failure is re-raised (the worker waits for the shared cooldown and uses no attempt);
-a network failure is re-raised for a retry, and from the third attempt on the source is stored as missing and
-the day stays non-final. Any other failure marks only that source missing for the day. A different Garmin
-account stops indexing (worker.Permanent("account_mismatch")). Logs: counts, dates of jobs, fixed group names.
+Garmin unavailable (a 5xx answer, a network failure, a timeout) is re-raised for a retry with backoff, and from
+the third attempt on the source is stored as missing and the day stays non-final, so a later sweep fetches it
+again. An HTTP 403 is not retried: the source is stored as missing and the day can be final. Garmin's "no data"
+is an answer (the source is not missing). Any other failure marks only that source missing for the day. A different Garmin account stops indexing
+(worker.Permanent("account_mismatch")). Logs: counts, dates of jobs, fixed group names.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 import history_docs
@@ -37,7 +49,6 @@ import history_store as hs
 import key_mode
 import status_common as sc
 import tool_errors
-import weekly_status as ws
 
 LOG = logging.getLogger("garmin_ext.history")
 
@@ -46,8 +57,15 @@ LATE_SWEEP_DAYS = 30
 RECENT_DAYS = hx.FINAL_AFTER_DAYS
 CASCADE_WEEKS = 3                 # the HRV 28-day average reads 3 weeks back
 NOT_FINAL_WAIT_S = 6 * 3600       # build_week whose days are not final yet
-DEGRADE_FROM_ATTEMPT = 2          # 0-based attempts: from the 3rd try a network failure is stored as missing
+DEGRADE_FROM_ATTEMPT = 2          # 0-based attempts: from the 3rd try Garmin unavailable is stored as missing
 STOP_GROUPS = (tool_errors.LOGIN, tool_errors.RATE_LIMITED)
+REFETCH_PER_SWEEP = 5             # older non-final days fetched again per sweep (4 Garmin calls each)
+PROBE_DAYS = (7, 21, 49, 98)      # days before the backfill floor each sweep checks once for older data
+PREPARE_LOST_WAIT_S = 60          # the day's row changed between the prepare step and the transaction
+# tool_errors puts an HTTP 403 in the unavailable group with the 5xx answers. A 403 does not go away on a retry:
+# it is a failed source, never retried. These are tool_errors' own 403 / 5xx spellings.
+_HTTP_403 = re.compile(r"api error 403(?!\d)|\(403\)", re.IGNORECASE)
+_HTTP_5XX = re.compile(r"api error 5\d\d(?!\d)|\(5\d\d\)", re.IGNORECASE)
 
 
 def _now() -> dt.datetime:
@@ -124,12 +142,24 @@ def _account(ctx: Any) -> Optional[str]:
 _FAILED = object()
 
 
+def _forbidden(chain_text: str) -> bool:
+    """True when an unavailable failure is Garmin's HTTP 403 (and no 5xx): retrying it will not help."""
+    return bool(_HTTP_403.search(chain_text)) and not _HTTP_5XX.search(chain_text)
+
+
 class _Calls:
-    """Garmin calls of one job: a failed source -> None, an empty answer -> {} / [], a stop group -> raised."""
+    """Garmin calls of one job: a failed source -> None, an empty answer -> {} / [], a stop group -> raised.
+
+    Garmin's "no data" (a 404 and the like) is an answer: the source gives {} / [], so it is not stored as
+    missing. Garmin unavailable (5xx, network, timeout) is raised on the first attempts so the worker retries
+    the job with backoff; from DEGRADE_FROM_ATTEMPT on the source is missing and `degraded` keeps the day
+    non-final. An HTTP 403 is not retried and does not keep the day open: that source is missing, and the day
+    never counts as answered empty. `groups` lists the group of every source that failed or had no data."""
 
     def __init__(self, ctx: Any, job: Any):
         self.ctx, self.job = ctx, job
         self.degraded = False
+        self.groups: List[str] = []
 
     def call(self, fn: Callable[..., Any]) -> Any:
         try:
@@ -137,14 +167,22 @@ class _Calls:
         except Exception as exc:  # noqa: BLE001 - grouped below; the text is never logged
             if _passthrough(exc):
                 raise
-            group, _detail, _root, full = tool_errors.classify_exception(exc)
+            group, _detail, _root, chain_text = tool_errors.classify_exception(exc)
             if group in STOP_GROUPS:
                 raise
-            if group == tool_errors.UNAVAILABLE and sc.is_systemic_error(full):
+            if group == tool_errors.UNAVAILABLE and not _forbidden(chain_text):
                 if getattr(self.job, "attempts", 0) < DEGRADE_FROM_ATTEMPT:
                     raise
                 self.degraded = True
+            self.groups.append(group)
+            if group == tool_errors.NO_DATA:
+                return None              # answered with nothing: method() / activities() give {} / []
             return _FAILED
+
+    @property
+    def answered(self) -> bool:
+        """True when every source answered; Garmin's "no data" for a source counts as an answer."""
+        return all(g == tool_errors.NO_DATA for g in self.groups)
 
     def method(self, name: str, *args: Any) -> Any:
         client = self.ctx.garmin
@@ -154,7 +192,7 @@ class _Calls:
     def activities(self, day: str) -> Any:
         client = self.ctx.garmin
         params = {"startDate": day, "endDate": day, "start": "0", "limit": str(hx.ACTIVITY_LIMIT)}
-        data = self.call(lambda: ws._activities_call(client)(params=params))
+        data = self.call(lambda: sc.activities_call(client)(params=params))
         return None if data is _FAILED else ([] if data is None else data)
 
 
@@ -172,31 +210,58 @@ def _floor(store: Any, today: dt.date, conn: Any) -> dt.date:
 
 
 def fetch_day(ctx: Any, job: Any, day: dt.date) -> tuple:
-    """(payloads by source, degraded) for one day: 4 Garmin calls."""
+    """(payloads by source, degraded, answered) for one day: 4 Garmin calls. answered: every source answered
+    (Garmin's "no data" counts as an answer); degraded: Garmin was unavailable for a source on every attempt."""
     calls = _Calls(ctx, job)
     iso = day.isoformat()
     payloads: Dict[str, Any] = {}
     for source, name in (("stats", "get_stats"), ("sleep", "get_sleep_data"), ("hrv", "get_hrv_data")):
         payloads[source] = calls.method(name, iso)
     payloads["activities"] = calls.activities(iso)
-    return payloads, calls.degraded
+    return payloads, calls.degraded, calls.answered
 
 
-def index_day(job: Any, ctx: Any) -> None:
+def _index_target(job: Any, ctx: Any) -> tuple:
+    """(day, today, account fingerprint, stored row or None, fetch needed) for an index_day job."""
     p = job.payload or {}
     day = _date(p.get("date"))
     today = _now().date()
     if day >= today:
         raise _permanent(tool_errors.BAD_INPUT)
-    store, conn = ctx.store, ctx.conn
     fp = _account(ctx)
-    rows = store.days(fp, day, day, conn=conn) if fp else []
+    rows = ctx.store.days(fp, day, day, conn=ctx.conn) if fp else []
     row = rows[0] if rows else None
-    empty_day = True
-    if row is not None and row["final"] and not p.get("recheck"):
-        empty_day = row["empty"]
+    return day, today, fp, row, not (row is not None and row["final"] and not p.get("recheck"))
+
+
+def prepare_index_day(job: Any, ctx: Any) -> Optional[Dict[str, Any]]:
+    """Run by the worker before the job's transaction: the day's Garmin calls (none for a day already final)."""
+    day, _today, _fp, _row, fetch = _index_target(job, ctx)
+    return {"day": day.isoformat(), "fetched": fetch_day(ctx, job, day) if fetch else None}
+
+
+def _prepared_fetch(ctx: Any, key: str, value: str) -> Optional[tuple]:
+    prepared = getattr(ctx, "prepared", None)
+    if isinstance(prepared, dict) and prepared.get(key) == value:
+        return prepared.get("fetched")
+    return None
+
+
+def index_day(job: Any, ctx: Any) -> None:
+    p = job.payload or {}
+    store, conn = ctx.store, ctx.conn
+    day, today, fp, row, fetch = _index_target(job, ctx)
+    if not fetch:
+        empty_day = hx.is_answered_empty(row["numbers"])
     else:
-        payloads, degraded = fetch_day(ctx, job, day)
+        fetched = _prepared_fetch(ctx, "day", day.isoformat())
+        if fetched is None:
+            if getattr(ctx, "prepared", None) is not None:
+                # The prepare step found the day final and fetched nothing, and the row has changed since (it was
+                # removed or reopened). Garmin is never called inside the transaction: run the job again shortly.
+                raise _defer(PREPARE_LOST_WAIT_S, "prepare_stale")
+            fetched = fetch_day(ctx, job, day)   # called directly (no prepare step, no worker transaction)
+        payloads, degraded, answered = fetched
         pid = hx.profile_id(payloads)
         if pid is not None:
             fp, status = hs.account_check(store, pid)      # its own transaction: a mismatch flag must stay
@@ -210,10 +275,14 @@ def index_day(job: Any, ctx: Any) -> None:
             _note_mode(store, mode, conn)
             empty_day = hx.is_empty_day(numbers)
             _after_day(ctx, fp, day, empty_day)
+            if p.get("probe") and not empty_day:
+                _probe_found_data(ctx, fp, today)
         else:
             # No account yet and Garmin named none (an empty day): nothing to key the row by. The day stays
             # missing; the sweep comes back to it once a day with data has set the fingerprint.
             empty_day = hx.is_empty_day(hx.day_numbers(day, payloads, sc.zone(), _mode()))
+        # Only a day whose every source answered counts toward the backfill stop.
+        empty_day = empty_day and answered
     if p.get("backfill"):
         _continue_backfill(ctx, fp, day, today, int(p.get("empty_run") or 0) + 1 if empty_day else 0)
 
@@ -248,17 +317,41 @@ def _after_day(ctx: Any, fp: str, day: dt.date, empty_day: bool) -> None:
                  {"start": monday.isoformat(), "cascade": CASCADE_WEEKS, "fetch_load": True})
 
 
+def _older_data(store: Any, fp: Optional[str], day: dt.date, today: dt.date, conn: Any) -> bool:
+    """True when a stored day before `day` (inside the backfill window) has data: a break, not the start."""
+    if not fp:
+        return False
+    first = today - dt.timedelta(days=hx.BACKFILL_DAYS)
+    return any(not r["empty"] for r in store.days(fp, first, day - dt.timedelta(days=1), conn=conn))
+
+
 def _continue_backfill(ctx: Any, fp: Optional[str], day: dt.date, today: dt.date, empty_run: int) -> None:
     store, conn = ctx.store, ctx.conn
-    if empty_run >= hx.EMPTY_STOP_DAYS:
+    if empty_run >= hx.EMPTY_STOP_DAYS and not _older_data(store, fp, day, today, conn):
         store.meta_set(hs.META_BACKFILL_FLOOR, day.isoformat(), conn=conn)
-        LOG.info("history: backfill stopped after %d empty days in a row", empty_run)
+        LOG.info("history: backfill stopped after %d answered empty days in a row", empty_run)
         return
     floor = _floor(store, today, conn)
     missing = store.missing_days(fp or "", floor, day - dt.timedelta(days=1), conn=conn)
     if missing:
         nxt = missing[-1].isoformat()
         _enqueue(ctx, "index_day", f"index_day:{nxt}", {"date": nxt, "backfill": True, "empty_run": empty_run})
+
+
+def _probe_found_data(ctx: Any, fp: str, today: dt.date) -> None:
+    """A probe before the backfill floor found data: the floor was a long break, not the account start. The
+    floor is removed and the backfill goes on from it."""
+    store, conn = ctx.store, ctx.conn
+    stop = store.meta_get(hs.META_BACKFILL_FLOOR, conn=conn)
+    if not stop:
+        return
+    store.meta_set(hs.META_BACKFILL_FLOOR, "", conn=conn)
+    LOG.info("history: data found before the backfill floor; the backfill goes on")
+    try:
+        old = dt.date.fromisoformat(stop)
+    except ValueError:
+        return
+    _continue_backfill(ctx, fp, old, today, 0)
 
 
 # --- build_week -------------------------------------------------------------------------------------------------
@@ -284,7 +377,9 @@ def compute_week(store: Any, fp: str, start: dt.date, mode: str, load: Optional[
     return numbers, final
 
 
-def build_week(job: Any, ctx: Any) -> None:
+def _week_target(job: Any, ctx: Any) -> tuple:
+    """(start, today, account fingerprint or None, stored load or None, training status needed) for a build_week
+    job; jobqueue.Defer while its days are not final yet."""
     p = job.payload or {}
     start = _date(p.get("start"))
     if start.weekday() != 0:
@@ -292,18 +387,39 @@ def build_week(job: Any, ctx: Any) -> None:
     store, conn = ctx.store, ctx.conn
     fp = _account(ctx)
     if not fp:
-        return
+        return start, None, None, None, False
     today = _now().date()
     end = start + dt.timedelta(days=6)
     week_rows = store.days(fp, start, end, conn=conn)
     complete = len(week_rows) == 7 and all(r["final"] for r in week_rows)
     if not complete and not (hx.is_final_day(end, today) and all(r["final"] for r in week_rows)):
         raise _defer(NOT_FINAL_WAIT_S, "not_final")
-    mode = _mode()
     existing = store.weeks(fp, start, start, conn=conn)
     load = _stored_load(existing[0]["numbers"]) if existing else None
-    if mode == "full" and load is None and p.get("fetch_load", True):
-        raw = _Calls(ctx, job).method("get_training_status", end.isoformat())
+    need = _mode() == "full" and load is None and bool(p.get("fetch_load", True))
+    return start, today, fp, load, need
+
+
+def prepare_build_week(job: Any, ctx: Any) -> Optional[Dict[str, Any]]:
+    """Run by the worker before the job's transaction: the week's training status call, when it is needed."""
+    start, _today, _fp, _load, need = _week_target(job, ctx)
+    if not need:
+        return None
+    end = start + dt.timedelta(days=6)
+    return {"start": start.isoformat(), "fetched": (_Calls(ctx, job).method("get_training_status", end.isoformat()),)}
+
+
+def build_week(job: Any, ctx: Any) -> None:
+    p = job.payload or {}
+    store, conn = ctx.store, ctx.conn
+    start, today, fp, load, need = _week_target(job, ctx)
+    if not fp:
+        return
+    end = start + dt.timedelta(days=6)
+    mode = _mode()
+    if need:
+        got = _prepared_fetch(ctx, "start", start.isoformat())
+        raw = got[0] if got is not None else _Calls(ctx, job).method("get_training_status", end.isoformat())
         load = hx.load_numbers(raw, mode) if raw is not None else None
     numbers, final = compute_week(store, fp, start, mode, load, today, conn)
     store.upsert_week(fp, start, numbers, final, conn=conn)
@@ -358,6 +474,16 @@ def sweep(job: Any, ctx: Any) -> None:
         iso = missing[-1].isoformat()
         _enqueue(ctx, "index_day", f"index_day:{iso}", {"date": iso, "backfill": True})
         queued += 1
+    # Older days still not final (Garmin was unavailable for a source on every attempt): a few each day, the
+    # ones never fetched again first, then the newest; a day already fetched again only on the late sweep, so a
+    # day Garmin keeps failing costs a few calls a week, not a day.
+    still_open = sorted((d for d, r in rows.items() if d < recent_from and not r["final"]
+                         and (p.get("late") or not r["rechecked"])),
+                        key=lambda d: (rows[d]["rechecked"], -d.toordinal()))
+    for d in still_open[:REFETCH_PER_SWEEP]:
+        _enqueue(ctx, "index_day", f"index_day:{d.isoformat()}", {"date": d.isoformat(), "recheck": True})
+        queued += 1
+    queued += _probe_floor(ctx, fp, today)
     if p.get("late"):
         late_from = today - dt.timedelta(days=LATE_SWEEP_DAYS)
         for d, r in sorted(rows.items()):
@@ -381,6 +507,27 @@ def sweep(job: Any, ctx: Any) -> None:
         _gauge(ctx, "coach.history.lag_days", max(0, (yesterday - max(finals)).days))
     LOG.info("history: sweep queued %d job(s), retention removed %d day(s) and %d week(s)", queued,
              removed.get("days", 0), removed.get("weeks", 0))
+
+
+def _probe_floor(ctx: Any, fp: str, today: dt.date) -> int:
+    """index_day probes for the PROBE_DAYS before the backfill floor that have no row yet (each is fetched
+    once, then stored); a probe with data removes the floor (_probe_found_data). Returns how many it queued."""
+    store, conn = ctx.store, ctx.conn
+    stop = store.meta_get(hs.META_BACKFILL_FLOOR, conn=conn)
+    if not stop:
+        return 0
+    try:
+        floor = dt.date.fromisoformat(stop)
+    except ValueError:
+        return 0
+    first = today - dt.timedelta(days=hx.BACKFILL_DAYS)
+    days = [floor - dt.timedelta(days=n) for n in PROBE_DAYS if floor - dt.timedelta(days=n) >= first]
+    queued = 0
+    for d in days:
+        if store.missing_days(fp, d, d, conn=conn):
+            _enqueue(ctx, "index_day", f"index_day:{d.isoformat()}", {"date": d.isoformat(), "probe": True})
+            queued += 1
+    return queued
 
 
 # --- rebuild ----------------------------------------------------------------------------------------------------
@@ -434,7 +581,7 @@ def scheduled_jobs(store: Any, today: Optional[dt.date] = None) -> List[tuple]:
 
 def register_jobs(register: Callable[..., Any]) -> None:
     """Called by worker.load_handlers()."""
-    register("index_day", index_day, garmin=True)
-    register("build_week", build_week, garmin=True)
+    register("index_day", index_day, garmin=True, prepare=prepare_index_day)
+    register("build_week", build_week, garmin=True, prepare=prepare_build_week)
     register("sweep", sweep, garmin=False)
     register("rebuild", rebuild, garmin=False)

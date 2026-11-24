@@ -365,7 +365,7 @@ class ServerOverrides(ShimState):
             with self.subTest(mode=mode):
                 info = asyncio.run(server_info(mode))
                 self.assertEqual((info.name, info.version), want)
-        # launch.py overrides the version too (KEY contract D17): this project's, in both eras.
+        # launch.py overrides the version too: this project's, in both eras.
         mcp2_compat.set_server_overrides(name="coach-mcp-for-garmin", version="1.0.0")
         app = self.FastMCP("Garmin Connect v1.0")
         for mode in ("legacy", "auto"):
@@ -649,7 +649,7 @@ def _client_run(app, body):
 
 @unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
 class ToolLoop(ShimState):
-    """D12: an async tool that takes no Context runs on one shared background
+    """An async tool that takes no Context runs on one shared background
     event loop (thread mcp2-compat-tool-loop), so a tool that blocks, as
     upstream's do for each Garmin call, does not stall the server's loop."""
 
@@ -977,7 +977,7 @@ class ToolLoop(ShimState):
         asyncio.run(body())
 
     def test_contextvars_are_copied_to_the_tool_loop(self):
-        # F14: a copy of the caller's context, as run_coroutine_threadsafe makes.
+        # A copy of the caller's context, as run_coroutine_threadsafe makes.
         marker = contextvars.ContextVar("marker", default="unset")
 
         @self.app.tool()
@@ -1070,7 +1070,7 @@ UPSTREAM_MODULES = (
 
 @unittest.skipUnless(HAVE_MCP2 and HAVE_UPSTREAM, "needs mcp 2.x and upstream garmin_mcp")
 class UpstreamToolsOnTheToolLoop(ShimState):
-    """F7: on the real launch.main() path (stdio, no Garmin login, run()
+    """On the real launch.main() path (stdio, no Garmin login, run()
     stubbed), upstream's async tools are wrapped for the tool loop, and a call
     of get_activities runs there."""
 

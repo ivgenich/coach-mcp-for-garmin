@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from zoneinfo import ZoneInfo
 
 import jobqueue
@@ -40,7 +41,7 @@ class Key(unittest.TestCase):
                 self.assertEqual(str(cm.exception), wg.ERR_TOKEN_KEY)
 
     def test_typed_counting_and_repeated_keys_are_refused(self):
-        """Review fix S3: 16 different byte values was the only test, so a typed phrase, the bytes 0..31 and a
+        """16 different byte values was the only test, so a typed phrase, the bytes 0..31 and a
         repeated 16-byte block passed. The rule is feature_config.weak_key, shared with --check-config."""
         import feature_config
 
@@ -87,6 +88,7 @@ class FakeConn:
     def execute(self, sql, params=None):
         db = self.db
         if sql is wg._SQL_PUT:
+            db["put_params"] = sorted(params)
             db["row"] = (params["n"], params["s"])
             row = None
         elif sql is wg._SQL_GET:
@@ -136,6 +138,18 @@ class StoreAndPublisher(unittest.TestCase):
         other = wg.PgTokenStore("", bytes(32), connect=lambda: FakeConn(self.db))
         self.assertIsNone(other.get())
         self.assertNotIn("di_token", repr(self.store))
+
+    def test_no_digest_is_written_and_the_old_column_only_becomes_nullable(self):
+        self.store.put(TOKEN)
+        self.assertEqual(self.db["put_params"], ["n", "s"])
+        self.assertNotIn("digest", wg._SQL_PUT)
+        # An older build still running in a rolling deploy (or a rollback) writes digest: keep the column.
+        self.assertNotIn("DROP COLUMN", wg.TOKEN_DDL)
+        self.assertIn("    digest      text,\n", wg.TOKEN_DDL)
+        self.assertIn("ALTER TABLE history.garmin_token ALTER COLUMN digest DROP NOT NULL;", wg.TOKEN_DDL)
+        # Guarded: no lock and no error when the column is already nullable or absent.
+        self.assertIn("column_name = 'digest' AND is_nullable = 'NO'", wg.TOKEN_DDL)
+        self.assertNotIn("%", wg.TOKEN_DDL)
 
     def test_publisher_stores_only_changes_and_calls_refresh(self):
         refreshed = []
@@ -198,6 +212,50 @@ class FakeGarmin:
         return {"for": self.display_name, "cdate": cdate}
 
 
+class SelfCheck(unittest.TestCase):
+    def test_passes_with_the_installed_garminconnect(self):
+        if importlib.util.find_spec("garminconnect") is None:
+            with self.assertRaises(RuntimeError):
+                wg.selfcheck()
+            return
+        wg.selfcheck()
+
+    def test_fails_when_a_private_name_is_gone(self):
+        import sys
+        import types
+
+        for missing in ("_token_expires_soon", "_refresh_session"):
+            names = {n: (lambda self: None) for n in wg.CLIENT_NAMES if n != missing}
+            pkg = types.ModuleType("garminconnect")
+            mod = types.ModuleType("garminconnect.client")
+            mod.Client = type("Client", (), names)
+            pkg.client = mod
+            with self.subTest(missing=missing), \
+                    unittest.mock.patch.dict(sys.modules, {"garminconnect": pkg, "garminconnect.client": mod}):
+                with self.assertRaises(RuntimeError) as cm:
+                    wg.selfcheck()
+                self.assertIn(missing, str(cm.exception))
+
+    def test_a_client_without_the_expiry_check_warns_once_and_defers(self):
+        class OldClient(FakeClient):
+            _token_expires_soon = None
+
+        class OldGarmin(FakeGarmin):
+            def __init__(self):
+                self.client = OldClient()
+                self.display_name = None
+
+        wg._WARNED.clear()
+        self.addCleanup(wg._WARNED.clear)
+        client = wg.StoredTokenGarmin(lambda: TOKEN, factory=OldGarmin)
+        with self.assertLogs("garmin_ext.worker", "WARNING") as logs:
+            for _ in range(3):
+                with self.assertRaises(wg.TokenStale):
+                    client.ready()
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("_token_expires_soon", logs.output[0])
+
+
 class StoredToken(unittest.TestCase):
     def test_missing_bad_or_expiring_token_defers(self):
         for text, expiring in ((None, False), ("", False), ("bad", False), (TOKEN, True)):
@@ -232,7 +290,7 @@ class StoredToken(unittest.TestCase):
             made[0].client._refresh_session()
 
     def test_reloads_when_the_held_token_nears_expiry(self):
-        """Review fix S1: the new client built for a fresh token used to keep display_name None (the profile
+        """The new client built for a fresh token used to keep display_name None (the profile
         counted as loaded), so get_stats failed and the sleep URL read .../dailySleepData/None. Now its
         profile loads again, through the guard as a call of its own."""
         made = []
@@ -254,7 +312,7 @@ class StoredToken(unittest.TestCase):
         self.assertEqual(len(guard.events), 8, "two profile calls and two data calls, each guarded")
 
     def test_no_display_name_never_calls_garmin_and_marks_nothing_final(self):
-        """Review fix S1: a profile without a display name raises ProfileMissing (a Defer: the job waits, no
+        """A profile without a display name raises ProfileMissing (a Defer: the job waits, no
         day is stored), and a client without one never makes a data call."""
         made = []
 
@@ -339,7 +397,7 @@ class Guarded(unittest.TestCase):
         self.assertEqual(guard.events, [("before", "worker")])
 
     def test_only_reads_pass(self):
-        """Review fix: an allowlist (get_*, download_*, connectapi GET), not every public method."""
+        """An allowlist (get_*, download_*, connectapi GET), not every public method."""
         class Inner:
             def __getattr__(self, name):
                 raise AssertionError(f"reached Garmin: {name}")
@@ -358,7 +416,7 @@ class Guarded(unittest.TestCase):
                     client.connectapi("/activity-service/activity/1", **kwargs)
         with self.assertRaises(PermissionError):
             client.connectapi("/x", "POST")
-        # Review fix S3: connectapi takes only params=; headers= (X-HTTP-Method-Override) and every other
+        # Connectapi takes only params=; headers= (X-HTTP-Method-Override) and every other
         # keyword are refused, and get_* / download_* refuse keywords that carry a body, headers or a method.
         for kwargs in ({"headers": {"X-HTTP-Method-Override": "DELETE"}}, {"method": "GET"}, {"api": True},
                        {"params": {}, "headers": {}}):
@@ -384,7 +442,7 @@ class Guarded(unittest.TestCase):
         self.assertEqual(client.download_activity(1), b"fit")
 
     def test_private_names_are_not_reachable(self):
-        """Review fix S3: gc._inner (or any name starting with "_") used to hand out the unguarded client."""
+        """gc._inner (or any name starting with "_") used to hand out the unguarded client."""
         class Inner:
             def get_stats(self, cdate):
                 return 1
@@ -402,7 +460,7 @@ class Guarded(unittest.TestCase):
             client.__dict__   # noqa: B018 - no instance dict to reach the state through
 
     def test_the_profile_call_is_guarded_as_its_own_call(self):
-        """Review fix: the stored-token client's first call loads the profile; that call takes its own token."""
+        """The stored-token client's first call loads the profile; that call takes its own token."""
         made = []
 
         def factory():
@@ -465,7 +523,7 @@ def logging_state():
 
 
 class WorkerLogPrivacy(unittest.TestCase):
-    """Review fix S2: garminconnect logs a failed call as "API call failed for path
+    """Garminconnect logs a failed call as "API call failed for path
     '/usersummary-service/usersummary/daily/<display name>': API Error 500 - {<Garmin's answer>}" with a
     traceback, and the worker's plain logging.basicConfig printed it. worker.configure_logging() hides it."""
 
@@ -520,7 +578,7 @@ class Clock:
 
 
 class MultiCallJobWithTheRealGuard(unittest.TestCase):
-    """Review fix S1: a job of several Garmin calls used to be deferred at call 2 (the 5 s bucket) and restarted
+    """A job of several Garmin calls used to be deferred at call 2 (the 5 s bucket) and restarted
     from call 1 each time, so it never finished. Now the short wait happens inside the job."""
 
     def setUp(self):
@@ -529,10 +587,10 @@ class MultiCallJobWithTheRealGuard(unittest.TestCase):
         import worker
 
         self.gg, self.worker = garmin_guard, worker
-        tz = ZoneInfo("Asia/Jerusalem")
+        tz = ZoneInfo("Europe/Berlin")
         self.clock = Clock(dt.datetime(2026, 11, 24, 13, tzinfo=tz).timestamp())
         self.shared = garmin_guard_pg.LocalSharedState(tz, clock=self.clock)
-        self.guard = garmin_guard.GarminGuard(shared=self.shared, zone="Asia/Jerusalem", clock=self.clock)
+        self.guard = garmin_guard.GarminGuard(shared=self.shared, zone="Europe/Berlin", clock=self.clock)
         self.calls = []
         test = self
 
@@ -590,7 +648,7 @@ class MultiCallJobWithTheRealGuard(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_a_lost_lease_cuts_a_real_wait_short(self):
-        """Review fix S3: _wait waited on the stop event only, so a lost lease ran out a wait of up to 30 s.
+        """_wait waited on the stop event only, so a lost lease ran out a wait of up to 30 s.
         A real (not simulated) 20 s bucket wait now ends within about a second of the lease loss."""
         class Blocked(Exception):
             pass

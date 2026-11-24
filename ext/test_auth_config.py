@@ -89,7 +89,7 @@ class Defaults(unittest.TestCase):
                                                "https://claude.com/api/mcp/auth_callback"))
         self.assertEqual(ac.GRANT_TYPES, ("authorization_code", "refresh_token"))
         self.assertEqual(ac.VALID_SCOPES, ("offline_access",))
-        self.assertEqual((ac.ACCESS_TTL, ac.REFRESH_TTL, ac.REFRESH_REUSE_GRACE), (3600, 30 * 86400, 120))
+        self.assertEqual((ac.ACCESS_TTL, ac.REFRESH_TTL, ac.REFRESH_REUSE_GRACE), (3600, 30 * 86400, 30))
         self.assertEqual((ac.CODE_TTL, ac.PENDING_TTL, ac.MAX_SECRET_FAILURES), (300, 600, 3))
         self.assertEqual((ac.MAX_PENDING, ac.MAX_PENDING_PER_CLIENT, ac.MAX_CLIENTS), (1000, 5, 200))
         # V1-3: every stored client may hold its full share of consent requests,
@@ -142,12 +142,12 @@ class PublicUrl(unittest.TestCase):
         cases = {
             "https://Coach.Example.COM/": "https://coach.example.com",
             "HTTPS://coach.example.com": "https://coach.example.com",
-            "https://coach.example.com:443": "https://coach.example.com",   # F15
+            "https://coach.example.com:443": "https://coach.example.com",   # default port dropped
             "https://coach.example.com:443/": "https://coach.example.com",
             "https://coach.example.com:8443": "https://coach.example.com:8443",
             "  https://coach.example.com  ": "https://coach.example.com",
             "http://127.0.0.1:8334": "http://127.0.0.1:8334",
-            "http://localhost:80": "http://localhost",                      # F15
+            "http://localhost:80": "http://localhost",                      # default port dropped
             "http://LOCALHOST:8000/": "http://localhost:8000",
             "http://[::1]:8000": "http://[::1]:8000",
             "https://your-app.up.railway.app": "https://your-app.up.railway.app",
@@ -308,6 +308,76 @@ class AuthDb(unittest.TestCase):
         self.assertEqual((errors, config.db_path), ([], "/var/lib/coach/auth.db"))
 
 
+class Origins(unittest.TestCase):
+    """ALLOWED_ORIGINS and ORIGIN_CHECK: the /mcp Origin check (owner_auth.OriginCheck)."""
+
+    def test_defaults(self):
+        config, errors = ac.config_from_environ(good_env())
+        self.assertEqual((errors, config.extra_origins, config.origin_check), ([], (), True))
+        self.assertEqual(config.allowed_origins,
+                         frozenset({"https://coach.example.com", "https://claude.ai", "https://claude.com"}))
+        self.assertEqual(ac.CLAUDE_ORIGINS, ("https://claude.ai", "https://claude.com"))
+
+    def test_entries_are_normalized_and_deduplicated(self):
+        config, errors = ac.config_from_environ(good_env(
+            ALLOWED_ORIGINS=" HTTP://LocalHost:6274 , ,https://App.example.com:443/,https://app.example.com"))
+        self.assertEqual(errors, [])
+        self.assertEqual(config.extra_origins, ("http://localhost:6274", "https://app.example.com"))
+        self.assertIn("http://localhost:6274", config.allowed_origins)
+
+    def test_bad_entries_are_numbered_without_the_value(self):
+        for value in ("bad.example", "https://bad.example/path", "ftp://bad.example", "null",
+                      "https://u@bad.example", "https://bad.example?x", "https://bad.example:0",
+                      "https://bad.example:99999", "https://bad host", "*"):
+            with self.subTest(value=value):
+                config, errors = ac.config_from_environ(good_env(ALLOWED_ORIGINS="https://ok.example," + value))
+                self.assertIsNone(config)
+                self.assertEqual(errors, [ac.ERR_A13.format(n=2)])
+                self.assertNotIn(value, errors[0])
+
+    def test_plain_http_only_on_loopback_and_never_on_railway(self):
+        for value in ("http://localhost:6274", "http://127.0.0.1:8080", "http://[::1]:3000"):
+            with self.subTest(value=value):
+                config, errors = ac.config_from_environ(good_env(ALLOWED_ORIGINS=value))
+                self.assertEqual(errors, [])
+                self.assertEqual(len(config.extra_origins), 1)
+        for value in ("http://app.example.com", "http://10.0.0.5:8080", "http://localhost.example.com"):
+            with self.subTest(value=value):
+                config, errors = ac.config_from_environ(good_env(ALLOWED_ORIGINS="https://ok.example," + value))
+                self.assertIsNone(config)
+                self.assertEqual(errors, [ac.ERR_A13.format(n=2)])
+        env = good_env(ALLOWED_ORIGINS="http://localhost:6274", RAILWAY_SERVICE_ID="svc")
+        self.assertEqual(ac.config_from_environ(env)[1], [ac.ERR_A13.format(n=1)])
+
+    def test_at_most_ten(self):
+        many = ",".join("https://o%d.example" % n for n in range(11))
+        self.assertEqual(ac.config_from_environ(good_env(ALLOWED_ORIGINS=many))[1], [ac.ERR_A14])
+
+    def test_origin_check_switch(self):
+        for value, enabled in (("", True), ("on", True), (" ON ", True), ("off", False), ("Off", False)):
+            with self.subTest(value=value):
+                config, errors = ac.config_from_environ(good_env(ORIGIN_CHECK=value))
+                self.assertEqual((errors, config.origin_check), ([], enabled))
+        for value in ("no", "0", "false", "disabled"):
+            with self.subTest(value=value):
+                self.assertEqual(ac.config_from_environ(good_env(ORIGIN_CHECK=value))[1], [ac.ERR_A15])
+
+    def test_normal_origin(self):
+        cases = {
+            "https://claude.ai": "https://claude.ai",
+            "HTTPS://CLAUDE.AI:443": "https://claude.ai",
+            "http://localhost:80": "http://localhost",
+            "http://[::1]:8000": "http://[::1]:8000",
+            "https://claude.ai/": "https://claude.ai",
+            "null": None, "": None, "https://claude.ai//": None, "https://claude.ai#x": None,
+            "https://claude.ai\n": None, "https://[::1": None, "https://claude.ai:x": None, "file:///x": None,
+            "https://cl%61ude.ai": None, "https://" + "a" * 600: None,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw[:30]):
+                self.assertEqual(ac.normal_origin(raw), expected)
+
+
 class RedirectUris(unittest.TestCase):
     def errors(self, value):
         return ac.config_from_environ(good_env(ALLOWED_REDIRECT_URIS=value))[1]
@@ -404,7 +474,7 @@ class NoSecretInErrors(unittest.TestCase):
                  "https://" + "a" * 5000, "%", "https://x:-1", "https://x:1.5", "[::1]", "//x"]
         for value in weird:
             for key in ("PUBLIC_URL", "RAILWAY_PUBLIC_DOMAIN", "OWNER_SECRET", "MCP_BEARER_TOKEN", "AUTH_DB",
-                        "ALLOWED_REDIRECT_URIS", "GARMIN_MCP_TRANSPORT"):
+                        "ALLOWED_REDIRECT_URIS", "GARMIN_MCP_TRANSPORT", "ALLOWED_ORIGINS", "ORIGIN_CHECK"):
                 with self.subTest(key=key, value=value[:20]):
                     config, errors = ac.config_from_environ(good_env(**{key: value}))
                     self.assertTrue(config is None or not errors)
@@ -413,7 +483,7 @@ class NoSecretInErrors(unittest.TestCase):
 
 
 class EdgeHeader(unittest.TestCase):
-    """K19: EDGE_CLIENT_IP_HEADER (KEY contract D20; DEPLOY's three lines, word for word)."""
+    """EDGE_CLIENT_IP_HEADER (the three lines the deploy docs quote, word for word)."""
 
     def test_texts(self):
         self.assertEqual(ac.EDGE_ENV, "EDGE_CLIENT_IP_HEADER")
@@ -456,7 +526,7 @@ class EdgeHeader(unittest.TestCase):
             self.assertTrue(ac.on_railway({name: "x"}), name)
 
     def test_deploy_neutral_texts(self):
-        # D21: Docker users see their own remedy too.
+        # Docker users see their own remedy too.
         self.assertIn("with Docker the tunnel's https://<hostname>", ERR_A1)
         self.assertIn("with Docker see docs/deploy-docker.md", ERR_A4)
         self.assertTrue(ERR_A4.startswith("OWNER_SECRET is not set: "))

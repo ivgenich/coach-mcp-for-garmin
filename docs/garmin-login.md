@@ -44,6 +44,9 @@ your GitHub account.
 
 Your Garmin email and password exist only inside this SSH session; they are never stored.
 
+On a first deploy in `full` mode, `./scripts/deploy.sh` offers to run this login for you once the
+server is up (answer Enter or `y`). To run it yourself, in your clone:
+
 ```bash
 railway ssh
 garmin-mcp-auth --token-path /data/tokens   # Garmin email, password, MFA code

@@ -24,7 +24,7 @@ GOLDEN = Path(__file__).resolve().parent / "golden"
 
 @dataclass(frozen=True)
 class Case:
-    """A local stand-in for evals.cases.Case (B3), with the contract's fields."""
+    """A local stand-in for evals.cases.Case, with its fields."""
     id: str = "X01"
     group: str = "T"
     title: str = ""
@@ -648,7 +648,7 @@ class LiveRun20261124(unittest.TestCase):
 
 
 class RunnerFields(unittest.TestCase):
-    """Optional transcript fields the runner (B2) writes: answers, max_turns and other stops, the fake db."""
+    """Optional transcript fields the runner writes: answers, max_turns and other stops, the fake db."""
 
     def test_every_answer_is_read(self):
         case = Case(expect={"must_mention": ["15 minutes"], "no_call_after_error": ["rate_limited"]})
@@ -701,13 +701,13 @@ class RunnerFields(unittest.TestCase):
 
 
 class RealCases(unittest.TestCase):
-    """The checks run on every committed case (evals.cases, B3) without raising."""
+    """The checks run on every committed case (evals.cases) without raising."""
 
     def test_every_case_grades(self):
         try:
             from evals.cases import Expect, load_cases
             cases = load_cases()
-        except Exception as e:  # the cases are another builder's; their own tests cover loading
+        except Exception as e:  # noqa: BLE001 - evals/tests/test_cases.py covers loading
             self.skipTest(f"evals.cases not loadable: {e}")
         self.assertTrue(cases)
         for case in cases:

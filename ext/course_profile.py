@@ -51,21 +51,22 @@ def _distance_elevation(geo_points: Sequence[Dict[str, Any]]) -> List[Tuple[floa
     """(cumulative distance m, elevation m) per point, distance strictly increasing.
 
     Uses the points' own cumulative "distance" when every point has one, else
-    sums great-circle distances. Points without elevation, and points that
-    don't move the distance forward, are dropped.
+    sums great-circle distances, each measured from the last point that had
+    coordinates (a point without them is skipped, not a break in the route).
+    Points without elevation, and points that don't move the distance
+    forward, are dropped.
     """
     use_own = bool(geo_points) and all(p.get("distance") is not None for p in geo_points)
     out: List[Tuple[float, float]] = []
     dist = 0.0
-    prev = None
+    prev = None  # the last point with coordinates
     for p in geo_points:
         if use_own:
             dist = float(p["distance"])
-        elif prev is not None and None not in (
-            p.get("latitude"), p.get("longitude"), prev.get("latitude"), prev.get("longitude")
-        ):
-            dist += _haversine_m(prev, p)
-        prev = p
+        elif p.get("latitude") is not None and p.get("longitude") is not None:
+            if prev is not None:
+                dist += _haversine_m(prev, p)
+            prev = p
         ele = p.get("elevation")
         if ele is None:
             continue

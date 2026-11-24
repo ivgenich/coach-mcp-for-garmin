@@ -1,0 +1,36 @@
+# Weekly update pull requests for the pinned pieces: GitHub Actions (full commit
+# SHAs), the Python pins and the Docker base images.
+#
+# What Dependabot cannot do here:
+# - bump ARG GARMIN_MCP_REF in the Dockerfile (an upstream commit, not a
+#   release): check upstream by hand and bump it with constraints.txt;
+# - keep paired pins in step. CI's pin-drift check fails a pull request that
+#   moves one side only: the caddy image tag and scripts/ci-tools.sh, the python
+#   image tag and FULL_PYTHON in ci.yml, constraints.txt and the generated files
+#   in config/. Finish such a pull request by hand (regenerate the config/ file
+#   as its header says) or close it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    # constraints.txt and the hashed core lock at the top, the hashed feature
+    # files in config/, the CI tools and the eval harness (pip-compile files).
+    directories: ["/", "/config", "/.github", "/evals"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly

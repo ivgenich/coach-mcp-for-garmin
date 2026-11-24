@@ -4,7 +4,9 @@ Run the server with Docker Compose on a computer of your own that stays on, and 
 Claude through a Cloudflare Tunnel. Claude needs a public HTTPS address that never changes; the
 tunnel gives your server one without opening a port on your router.
 
-The Cloudflare Tunnel steps follow Cloudflare's documentation and were not yet tested end to end.
+This is the advanced path, and partly untested: the Cloudflare Tunnel steps follow Cloudflare's
+documentation and were not yet tested end to end. History search is not available here yet: it
+needs Railway ([History search](history-search.md)).
 
 ## What you need
 
@@ -25,6 +27,29 @@ The Cloudflare Tunnel steps follow Cloudflare's documentation and were not yet t
 - git and a bash or zsh shell. The commands below are for macOS and Linux; on Windows, use WSL
   (this guide was not tested there).
 
+## What Cloudflare sees
+
+Read this before you create the tunnel. Cloudflare ends HTTPS at its edge and passes the
+traffic through the tunnel, so it can read the requests and answers, your Garmin data and the
+sign-in pages included.
+
+Claude calls your server from Anthropic's servers, not from a browser, and some Cloudflare
+features block such calls ([Claude connectors: troubleshooting](https://claude.com/docs/connectors/building/troubleshooting.md)).
+For this hostname:
+- Don't put a Cloudflare Access application on it. Claude cannot sign in through Access; your
+  server has its own sign-in.
+- Turn off **Bot Fight Mode** in the domain's security settings (bot traffic). It can challenge
+  API calls, and no rule can skip it ([Cloudflare](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)).
+  It applies to the whole domain.
+- Don't set the AI agent policy to **Block** ([Cloudflare](https://developers.cloudflare.com/bots/additional-configurations/block-ai-bots/)).
+- Never turn on **Under Attack** mode. Add no WAF, rate-limiting or cache rule for this hostname.
+  If other rules on the domain could catch it, allow Claude's addresses, `160.79.104.0/21` and
+  `153.61.208.0/20` ([Anthropic](https://platform.claude.com/docs/en/api/ip-addresses)).
+- Use a first-level subdomain, such as `coach.example.com`. Deeper ones need an Advanced
+  Certificate.
+- Never run cloudflared with `--loglevel debug`: it logs every request header, sign-in tokens
+  included.
+
 ## 1. Get the files
 
 ```
@@ -35,6 +60,7 @@ git checkout v1.0.0
 
 `<repository URL>` is the HTTPS address under the **Code** button on this repository's GitHub
 page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.0`.
+If no release is listed yet, skip the `git checkout` line and stay on `main`.
 
 Clone it into a folder that no cloud drive syncs (not the iCloud Desktop or Documents folders,
 Dropbox or OneDrive): the two settings files you create next hold your secrets in plain text.
@@ -52,7 +78,8 @@ Open `.env` in a text editor and set:
 - `GARMIN_AUTH=full` or `GARMIN_AUTH=key`.
 - `REPORT_TZ=` your time zone, such as `Europe/London`.
 - `PUBLIC_URL=https://<your-host>`: remove the `#` in front of it. It is required here, since
-  there is no Railway domain. `<your-host>` is the hostname you give the tunnel in
+  there is no Railway domain. Choose `<your-host>` now: a first-level subdomain of your domain
+  on Cloudflare, such as `coach.example.com`. You give the tunnel this same hostname in
   [3. Create the tunnel](#3-create-the-tunnel).
 
 Generate your owner secret. This command writes it into `.env` and prints nothing:
@@ -76,9 +103,9 @@ If you edit `.env` by hand, put any value that contains a `$` in single quotes
 ## 3. Create the tunnel
 
 In the Cloudflare dashboard: **Networking → Tunnels → Create Tunnel**. Then open the tunnel and,
-under **Routes**, choose **Add route → Published application**: a hostname on your domain (this
-is `<your-host>`) and the service URL `http://app:8080` (`app` is the server's name inside
-Docker Compose).
+under **Routes**, choose **Add route → Published application**: the hostname you chose for
+`<your-host>` in [2. Settings](#2-settings) and the service URL `http://app:8080` (`app` is the
+server's name inside Docker Compose).
 
 Then copy the tunnel's token: the install command Cloudflare shows for the tunnel ends with
 `--token` and the token. Copy only the token. In the project folder, run this, paste the token at
@@ -115,7 +142,8 @@ docker compose exec app garmin-mcp-auth --token-path /data/tokens
 ```
 
 ([More](garmin-login.md#with-docker).) In `key` mode there is nothing to do: `.env` has your key.
-Then add the server to Claude: [Connect Claude](connect-claude.md).
+Then add the server to Claude with the connector URL `https://<your-host>/mcp`, exactly, with no
+trailing slash: [Connect Claude](connect-claude.md).
 
 ## 6. Check
 
@@ -128,28 +156,6 @@ In the project folder:
 It should end with `RESULT: PASS`. Before the `full`-mode Garmin login, `/readyz` answers 503 and
 that check fails; `./scripts/test-connector.sh --expect-unready https://<your-host>` expects
 exactly that.
-
-## What Cloudflare sees
-
-Cloudflare ends HTTPS at its edge and passes the traffic through the tunnel, so it can read the
-requests and answers, your Garmin data and the sign-in pages included.
-
-Claude calls your server from Anthropic's servers, not from a browser, and some Cloudflare
-features block such calls ([Claude connectors: troubleshooting](https://claude.com/docs/connectors/building/troubleshooting.md)).
-For this hostname:
-- Don't put a Cloudflare Access application on it. Claude cannot sign in through Access; your
-  server has its own sign-in.
-- Turn off **Bot Fight Mode** in the domain's security settings (bot traffic). It can challenge
-  API calls, and no rule can skip it ([Cloudflare](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)).
-  It applies to the whole domain.
-- Don't set the AI agent policy to **Block** ([Cloudflare](https://developers.cloudflare.com/bots/additional-configurations/block-ai-bots/)).
-- Never turn on **Under Attack** mode. Add no WAF, rate-limiting or cache rule for this hostname.
-  If other rules on the domain could catch it, allow Claude's addresses, `160.79.104.0/21` and
-  `153.61.208.0/20` ([Anthropic](https://platform.claude.com/docs/en/api/ip-addresses)).
-- Use a first-level subdomain, such as `coach.example.com`. Deeper ones need an Advanced
-  Certificate.
-- Never run cloudflared with `--loglevel debug`: it logs every request header, sign-in tokens
-  included.
 
 ## Logs, updates and removal
 
@@ -166,7 +172,8 @@ git checkout <new tag>
 docker compose up -d --build
 ```
 
-To go back, do the same with the previous tag. A release of this project also updates the pinned
+If you stayed on `main` because no release was listed, update with `git pull` instead of the
+first two lines. To go back, do the same with the previous tag. A release of this project also updates the pinned
 cloudflared image.
 
 Remove everything: `docker compose down --volumes --rmi all` deletes the containers, the images

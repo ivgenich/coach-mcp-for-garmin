@@ -1,0 +1,23 @@
+name: Question
+description: Ask how something works, or say you have a security report to send privately.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a public page: never paste health data, tokens, secrets, keys, emails or logs with
+        personal data. To send a security report without the Report a vulnerability button, write
+        only that you have a security report to send, with no details (see SECURITY.md).
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This contains no health data, tokens or personal logs.
+          required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true

@@ -16,8 +16,7 @@ linked to the account, so they are untrusted text. This module:
   inline-link opener "](" left over;
 - cleans every string value of an upstream JSON answer and keeps the JSON valid (clean_tool_answer).
 
-The character rules follow R2's reference filter (step 1.3 contract, section 5.1, with amendments M3, M4, M5,
-M10 and M14). The per-character pass runs in two phases, so cleaning is idempotent: f(f(x)) == f(x).
+The per-character pass runs in two phases, so cleaning is idempotent: f(f(x)) == f(x).
 
 Standard library only; imports on Python 3.10. Nothing here raises on any input, logs, or does I/O. A value
 that is not a str comes back unchanged (name_or_none() gives None for it).
@@ -28,14 +27,14 @@ import re
 import unicodedata
 
 NAME_MAX = 100
-DESCRIPTION_MAX = 2000  # amendment M15: 500 only once descriptions are returned on request (DM-4)
+DESCRIPTION_MAX = 2000  # could drop to 500 once descriptions are returned only on request
 ECHO_MAX = 64
 ELLIPSIS = "\u2026"
 LINK = "[link]"
 IMAGE = "[image]"
 HTML = "[html]"
 
-# --- character data (contract 5.1, amendment M4) ------------------------------------------------------
+# --- character data ------------------------------------------------------------------------------------
 
 # Default_Ignorable_Code_Point, DerivedCoreProperties-18.0.0.txt.
 _DI = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
@@ -45,7 +44,7 @@ _DI = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (
 # Not default-ignorable, still dropped: C0, DEL and C1, interlinear annotation, surrogates, the BMP
 # noncharacter block. Every other noncharacter ((cp & 0xFFFE) == 0xFFFE) is added below.
 _EXTRA = ((0x0000, 0x001F), (0x007F, 0x009F), (0xFFF9, 0xFFFB), (0xD800, 0xDFFF), (0xFDD0, 0xFDEF))
-# M4: a blank Braille cell and the Egyptian hieroglyph format controls draw nothing.
+# A blank Braille cell and the Egyptian hieroglyph format controls draw nothing.
 _BLANK = ((0x2800, 0x2800), (0x13430, 0x1343F))
 # Each becomes one ASCII space; checked before the drop rule.
 _SPACES = frozenset({0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029})
@@ -53,7 +52,7 @@ _ZS = frozenset({0x0020, 0x00A0, 0x1680, *range(0x2000, 0x200B), 0x202F, 0x205F,
 # Coarse emoji test for the ZWJ and variation-selector rules (a superset of Extended_Pictographic).
 _EMOJIISH = ((0x00A9, 0x00A9), (0x00AE, 0x00AE), (0x203C, 0x2BFF), (0x3030, 0x3030), (0x303D, 0x303D),
              (0x3297, 0x3297), (0x3299, 0x3299), (0x1F000, 0x1FAFF), (0x1FC00, 0x1FFFD))
-# M4: scripts whose orthography uses ZWJ or ZWNJ between letters. By range, not unicodedata, so py3.10 and
+# Scripts whose orthography uses ZWJ or ZWNJ between letters. By range, not unicodedata, so py3.10 and
 # py3.12 decide alike.
 _JOINING = ((0x0600, 0x08FF), (0x0900, 0x0DFF), (0x0F00, 0x0FFF), (0x1000, 0x109F), (0x1780, 0x17FF),
             (0x1800, 0x18AF), (0xA8E0, 0xA8FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFC))
@@ -113,7 +112,7 @@ def _joining(ch):
 
 def _phase1(text):
     """Spaces become " "; every unconditional code point is dropped. ZWJ, ZWNJ, VS15, VS16 and whole RGI tag
-    flags stay for phase 2 (amendment M3)."""
+    flags stay for phase 2, which judges them on the string after the drops."""
     if _TAG_RE.search(text) is None:
         return _DROP_RE.sub("", _SPACE_RE.sub(" ", text))
     parts = _RGI_RE.split(text)  # odd indices: an RGI flag with its tags, kept whole
@@ -123,7 +122,7 @@ def _phase1(text):
 
 
 def _phase2(text):
-    """The context rules (5.1 as narrowed by M4), run on the phase 1 string, so "the next character" is
+    """The context rules, run on the phase 1 string, so "the next character" is
     always one that phase 1 kept. "Previous" is the previous character this phase kept."""
     if _CONTEXT_RE.search(text) is None:
         return text
@@ -171,7 +170,7 @@ def clean_text(value, max_chars=None):
     Idempotent: clean_text(clean_text(x)) == clean_text(x)."""
     if not isinstance(value, str):
         return value
-    text = value if (value.isascii() and value.isprintable()) else _char_pass(value)  # M10: ASCII fast path
+    text = value if (value.isascii() and value.isprintable()) else _char_pass(value)  # printable ASCII: nothing to drop
     if "  " in text:
         text = _MULTI_SPACE_RE.sub(" ", text)
     text = text.strip(" ")
@@ -241,8 +240,8 @@ def cut(text, n):
     return text[:_safe_end(text, n)]
 
 
-# Link forms (contract 5.1 as amended by M5). Matching runs on a copy with U+FF01-FF5E folded to ASCII (one to
-# one, so spans match the original). Changes to the contract's patterns, each for idempotence or cost:
+# Link forms. Matching runs on a copy with U+FF01-FF5E folded to ASCII (one to
+# one, so spans match the original). Details of the patterns, each for idempotence or cost:
 # - images, markdown links and HTML tags also take the "(...)" groups right after them, so a replacement is never
 #   followed by "(...)" and turned into a new link by the next round;
 # - link text stops at "[" and a link target at "(" or "[" (a target such as "a_(b)" is left to the URL pass),
@@ -250,7 +249,7 @@ def cut(text, n):
 #   may hold "<", so a nested tag cannot leave an outer one behind;
 # - "<\s*/?\s*" is written "<\s*(?:/\s*)?" (the same strings, without the quadratic backtracking over spaces);
 # - a scheme or "www." followed by the ellipsis of a cut value is not a link.
-# Fixer changes (validators EVF-1 to EVF-3):
+# Later changes:
 # - CommonMark reads a backslash escape or a character reference inside a link destination as the character, and
 #   a browser does in an attribute, so ":", "/" and "." are also matched in those forms ("https&colon;&sol;&sol;");
 # - "ftp", "ws", "wss" and "file" need "//" and "data" needs a data-URI shape ("type;param,"), so workout

@@ -1,0 +1,7 @@
+# Files `railway up` leaves out of the upload, on top of .gitignore (which it
+# also honours). None of them is used by the Dockerfile; .dockerignore keeps
+# the rest of the image minimal.
+evals/
+dashboards/
+recipes/
+.ruff_cache/

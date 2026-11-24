@@ -388,6 +388,9 @@ def read_only_server_class(base, allowed):
                 else:
                     guard.live_call_started()
             token = _CALL_GROUP.set(None)
+            # The rate-limit and login failures of single report sources (status_common.fetch_all), which a
+            # report that still answers would otherwise hide from the guard.
+            capture, sources = status_common.capture_outcomes()
             started = time.monotonic()
             result = None
             try:
@@ -397,9 +400,10 @@ def read_only_server_class(base, allowed):
                 return result
             finally:
                 group = _CALL_GROUP.get() if result is not None else tool_errors.INTERNAL
+                status_common.end_capture(capture)
                 if guard is not None:
                     guard.live_call_finished()
-                    guard.after_outcome(garmin_guard.TOOL, group)
+                    guard.after_outcome(garmin_guard.TOOL, _guard_outcome(group, sources))
                 if _TELEMETRY is not None:
                     _record_tool_call(name, "ok" if group is None else "error", group,
                                       time.monotonic() - started, result, guard)
@@ -415,7 +419,7 @@ def read_only_server_class(base, allowed):
                     result = await super().call_tool(name, arguments, context)
                 except MCPError:
                     raise
-                except Exception as exc:  # ToolError, UnexpectedToolError, anything else
+                except Exception as exc:  # noqa: BLE001 - ToolError, UnexpectedToolError, anything else
                     group, detail, _root, text = tool_errors.classify_exception(exc)
                     return _failure(name, group, detail, text, exc_info=exc)
                 if isinstance(result, InputRequiredResult) or not isinstance(result, CallToolResult):
@@ -433,23 +437,48 @@ def read_only_server_class(base, allowed):
                     # A night that has not synced yet: an empty object says nothing, so say "no data".
                     return _failure(name, tool_errors.NO_DATA, None, tool_errors.NO_SLEEP_LOG, original=result,
                                     message=tool_errors.NO_SLEEP_TEXT)
-                cleaned = await anyio.to_thread.run_sync(text_hygiene.clean_tool_answer, text)
-                if cleaned == text:
+                # Every text block is cleaned, not only the first (one worker-thread hop for all of them).
+                texts = [b.text if getattr(b, "type", None) == "text" and isinstance(getattr(b, "text", None), str)
+                         else None for b in result.content]
+                cleaned_texts = await anyio.to_thread.run_sync(_clean_texts, texts)
+                if cleaned_texts == texts:
                     return result
-                update = {"content": [TextContent(type="text", text=cleaned), *result.content[1:]]}
+                content = []
+                for block, old, new in zip(result.content, texts, cleaned_texts):
+                    if old is not None and new != old:
+                        copy = getattr(block, "model_copy", None)
+                        block = copy(update={"text": new}) if callable(copy) else TextContent(type="text", text=new)
+                    content.append(block)
+                cleaned = cleaned_texts[0]
+                update = {"content": content}
                 if isinstance(result.structured_content, dict) and result.structured_content.get("result") == text:
                     update["structured_content"] = {**result.structured_content, "result": cleaned}
                 return result.model_copy(update=update)
             except MCPError:
                 raise
-            except Exception as bug:  # a bug in this method: never leak, never raise
+            except Exception as bug:  # noqa: BLE001 - a bug in this method: never leak, never raise
                 return _failure(name, tool_errors.INTERNAL, None,
                                 f"tool-error wrapper failed: {type(bug).__name__}: {bug}", exc_info=bug)
 
     return ReadOnlyFastMCP
 
 
-# Log levels of _failure()'s line (contract 5.8): these groups need the owner;
+def _guard_outcome(group, source_groups):
+    """The group the call guard hears for a tool call that ended in `group` (None: it answered) after its
+    report sources met `source_groups`: the call's own group when it starts a cooldown, else a rate limit or
+    login failure of any source (so the cooldown starts and a partial answer never ends a login cooldown),
+    else the call's own group."""
+    if group in garmin_guard.WORKER_PAUSE:
+        return group
+    return status_common.guard_group(source_groups) or group
+
+
+def _clean_texts(texts):
+    """text_hygiene.clean_tool_answer() of each str in `texts`; None entries (blocks that are no text) stay None."""
+    return [None if t is None else text_hygiene.clean_tool_answer(t) for t in texts]
+
+
+# Log levels of _failure()'s line: these groups need the owner;
 # bad input and no data are the caller's business.
 _WARNING_GROUPS = frozenset({tool_errors.LOGIN, tool_errors.RATE_LIMITED, tool_errors.UNAVAILABLE})
 
@@ -1132,7 +1161,7 @@ def _run_role(features):
 def _setup_features(features, environ, allowed=frozenset()):
     """Startup of the optional features in the app (main()), in this order: their notes logged, the secrets
     registered for redaction, tracing set up, the secrets taken out of `environ`, the call guard built (with
-    the refresh lock in full mode), the history forgotten when asked, the catch-up started."""
+    the refresh lock and the atomic token-file write in full mode), the history forgotten when asked, the catch-up started."""
     global _TELEMETRY, _GUARD
 
     for value in feature_config.secret_values(features):
@@ -1159,6 +1188,8 @@ def _setup_features(features, environ, allowed=frozenset()):
     _GUARD = _build_guard(features, environ)
     if not _KEY_MODE:
         garmin_guard.install_refresh_lock(_GUARD.refresh_lock)
+        # garminconnect rewrites the token file after each refresh: atomically and owner-only from here on.
+        garmin_guard.install_atomic_token_dump()
     forgot_ok = True
     if features.history_forget and features.database_url_set:
         forgot_ok = _forget_history(features)
@@ -1325,6 +1356,17 @@ def _configure_logging():
     configure_logging("INFO")
 
 
+# The sign-in's secret variables (auth_config reads them): their values are hidden in every log line.
+AUTH_SECRET_ENVS = ("OWNER_SECRET", "MCP_BEARER_TOKEN")
+
+
+def _register_auth_secrets(environ):
+    """Register the values of AUTH_SECRET_ENVS with tool_errors.register_secret() (unset or short values are
+    ignored there), so log_privacy and redact() replace them with "<redacted>". Never raises."""
+    for name in AUTH_SECRET_ENVS:
+        tool_errors.register_secret(environ.get(name))
+
+
 def _exit_config_errors(errors):
     for line in errors:
         print(f"launch: config error: {line}", file=sys.stderr)
@@ -1348,6 +1390,8 @@ def main(argv=None):
     if _FEATURES.role != "app":
         sys.exit(_run_role(_FEATURES))
 
+    # The sign-in secrets join the log redaction before anything can log them (auth_config reads them later).
+    _register_auth_secrets(os.environ)
     # Before any Garmin call: garminconnect's own records (a failed call quotes the display name in its path
     # and Garmin's answer) become one fixed line, whatever handler the SDK adds later.
     log_privacy.quiet_libraries()
@@ -1372,7 +1416,7 @@ def main(argv=None):
     gate(allowed)
 
     if _KEY_MODE:
-        # The key leaves os.environ (with GARMIN_PERSONAL_API_BASE_URL, D3)
+        # The key leaves os.environ (with GARMIN_PERSONAL_API_BASE_URL)
         # before anything else runs or logs, and redaction knows its value
         # (take_key() registers it; registering twice changes nothing).
         cache_file = key_mode.cache_path(os.environ)

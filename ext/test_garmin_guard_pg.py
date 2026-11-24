@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import garmin_guard_pg as g
 from garmin_guard_pg import Decision, LocalSharedState, State, decide
 
-TZ = ZoneInfo("Asia/Jerusalem")
+TZ = ZoneInfo("Europe/Berlin")
 
 
 def at(y, mo, d, h, mi=0, s=0, tz=TZ):
@@ -257,15 +257,15 @@ class PgOnFake(unittest.TestCase):
         self.assertEqual(s.get_cooldown(), (NOON + 10, "rate_limited"), "the local copy still knows it")
 
     def test_with_the_real_guard(self):
-        """B1's GarminGuard on PgSharedState: a worker 429 pauses the other worker; the bucket is shared."""
+        """GarminGuard on PgSharedState: a worker 429 pauses the other worker; the bucket is shared."""
         try:
             import garmin_guard
         except ModuleNotFoundError:
             self.skipTest("needs garmin_guard")
         a = self.make()
         b = g.PgSharedState("postgresql://fake", TZ, clock=self.clock, connect=self.db.connect)
-        ga = garmin_guard.GarminGuard(shared=a, zone="Asia/Jerusalem", clock=self.clock)
-        gb = garmin_guard.GarminGuard(shared=b, zone="Asia/Jerusalem", clock=self.clock)
+        ga = garmin_guard.GarminGuard(shared=a, zone="Europe/Berlin", clock=self.clock)
+        gb = garmin_guard.GarminGuard(shared=b, zone="Europe/Berlin", clock=self.clock)
         ga.before_call("worker")
         with self.assertRaises(garmin_guard.GuardBlocked) as cm:
             gb.before_call("worker")
@@ -278,14 +278,14 @@ class PgOnFake(unittest.TestCase):
         self.assertEqual((cm.exception.group, cm.exception.until), ("rate_limited", NOON + 5 + 6 * 3600))
 
     def test_a_long_live_call_blocks_a_worker_on_another_handle(self):
-        """Review fix: two handles on one row (the app and a worker service). The app's heartbeat is rewritten
+        """Two handles on one row (the app and a worker service). The app's heartbeat is rewritten
         while its live call runs and forced at its end, so no worker token while it runs or for 60 s after."""
         import garmin_guard
 
         app_state = self.make()
         worker_state = g.PgSharedState("postgresql://fake", TZ, clock=self.clock, connect=self.db.connect)
-        app = garmin_guard.GarminGuard(shared=app_state, zone="Asia/Jerusalem", clock=self.clock)
-        wk = garmin_guard.GarminGuard(shared=worker_state, zone="Asia/Jerusalem", clock=self.clock)
+        app = garmin_guard.GarminGuard(shared=app_state, zone="Europe/Berlin", clock=self.clock)
+        wk = garmin_guard.GarminGuard(shared=worker_state, zone="Europe/Berlin", clock=self.clock)
         app.live_call_started()
         self.clock.advance(90)
         app.refresh_live()                    # the background thread's step
@@ -302,14 +302,14 @@ class PgOnFake(unittest.TestCase):
         wk.before_call("worker")
 
     def test_the_daily_cap_defers_to_the_next_noon_through_the_guard(self):
-        """Review fix: the Decision's reason and retry time reach GuardBlocked (not 'bucket' 5 s later)."""
+        """The Decision's reason and retry time reach GuardBlocked (not 'bucket' 5 s later)."""
         import garmin_guard
 
         for state in (LocalSharedState(TZ, clock=Clock(NOON), day_cap=3),
                       g.PgSharedState("postgresql://fake", TZ, connect=FakeDB().connect, day_cap=3,
                                       clock=Clock(NOON))):
             clock = state._clock
-            guard = garmin_guard.GarminGuard(shared=state, zone="Asia/Jerusalem", clock=clock)
+            guard = garmin_guard.GarminGuard(shared=state, zone="Europe/Berlin", clock=clock)
             with self.subTest(state=type(state).__name__):
                 for _ in range(3):
                     guard.before_call("worker")

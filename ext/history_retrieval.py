@@ -433,6 +433,22 @@ def _sqlalchemy_url(dsn: str) -> str:
     return re.sub(r"^postgres(ql)?(\+\w+)?://", "postgresql+psycopg://", dsn)
 
 
+def _pg_connect(dsn: str) -> Any:
+    """A psycopg connection with the history connections' shared timeouts (jobqueue.pg_options)."""
+    import psycopg
+
+    import jobqueue
+
+    return psycopg.connect(dsn, connect_timeout=jobqueue.CONNECT_TIMEOUT_S, options=jobqueue.pg_options())
+
+
+def _engine_connect_args() -> Dict[str, Any]:
+    """PGEngine's psycopg connection arguments: the same timeouts as every other history connection."""
+    import jobqueue
+
+    return {"connect_timeout": jobqueue.CONNECT_TIMEOUT_S, "options": jobqueue.pg_options()}
+
+
 class PgKeywordBackend:
     """Postgres full-text search over history.doc_vectors (to_tsquery('english', 'a | b'), ts_rank_cd)."""
 
@@ -449,9 +465,7 @@ class PgKeywordBackend:
 
         try:
             if self._connect is None:
-                import psycopg
-
-                conn = psycopg.connect(self.dsn, connect_timeout=5)
+                conn = _pg_connect(self.dsn)
             else:
                 conn = self._connect(self.dsn)
             with conn:
@@ -694,7 +708,7 @@ def _engine(dsn: str) -> Any:
     with _ENGINE_LOCK:
         if url not in _ENGINES:
             _ENGINES[url] = PGEngine.from_connection_string(url=url, pool_pre_ping=True, pool_size=2,
-                                                            max_overflow=2)
+                                                            max_overflow=2, connect_args=_engine_connect_args())
         return _ENGINES[url]
 
 
@@ -702,9 +716,7 @@ def ensure_doc_table(dsn: str, connect: Optional[Callable[[str], Any]] = None) -
     """Create history.doc_vectors and its indexes if missing (idempotent)."""
     try:
         if connect is None:
-            import psycopg
-
-            conn = psycopg.connect(_pg_dsn(dsn), connect_timeout=5)
+            conn = _pg_connect(_pg_dsn(dsn))
         else:
             conn = connect(_pg_dsn(dsn))
         with conn:
@@ -964,9 +976,7 @@ def forget(features: Any = None, connect: Optional[Callable[[str], Any]] = None)
         return "no database configured"
     try:
         if connect is None:
-            import psycopg
-
-            conn = psycopg.connect(_pg_dsn(dsn), connect_timeout=5)
+            conn = _pg_connect(_pg_dsn(dsn))
         else:
             conn = connect(_pg_dsn(dsn))
         with conn:
@@ -994,9 +1004,7 @@ class VectorRows:
             return 0
         try:
             if self._connect is None:
-                import psycopg
-
-                conn = psycopg.connect(self.dsn, connect_timeout=5)
+                conn = _pg_connect(self.dsn)
             else:
                 conn = self._connect(self.dsn)
             with conn:
