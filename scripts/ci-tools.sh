@@ -17,10 +17,10 @@ actionlint 1.7.12 linux-x86_64 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b
 actionlint 1.7.12 darwin-arm64 aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz
 actionlint 1.7.12 linux-aarch64 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz
 actionlint 1.7.12 darwin-x86_64 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz
-caddy 2.11.7 linux-x86_64 727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz
-caddy 2.11.7 darwin-arm64 cda3030e5d5b13eb9f0b6fb541037f633bddd958c070c5f561d7a5cccb581665 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_mac_arm64.tar.gz
-caddy 2.11.7 linux-aarch64 d8fc6d179a5d283028a472a5618564f6ad8a86fed513e64f032b3b0b7cc45e42 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_arm64.tar.gz
-caddy 2.11.7 darwin-x86_64 110c53e5c093e4cfce6eda787f94f23bef913c309f620fab26b4f678031841ad https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_mac_amd64.tar.gz
+caddy 2.11.9 linux-x86_64 5b8cb7faf8726a2028ad96a66e54e6e81e8f361bc6175e5d22bbd997cc5177fb https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_amd64.tar.gz
+caddy 2.11.9 darwin-arm64 d075afc620376679a77b453399bf7ada264cab3280b2833e4ed1372abc0c1c13 https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_mac_arm64.tar.gz
+caddy 2.11.9 linux-aarch64 5e377cff994fc9362a6fcf695c53f226cfca3a3ef85bd3a3687cf252d6310165 https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_arm64.tar.gz
+caddy 2.11.9 darwin-x86_64 22af256a2cc45606f6bfa8786cd89130529331319665926f4e972234a658fb30 https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_mac_amd64.tar.gz
 gitleaks 8.30.1 linux-x86_64 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
 gitleaks 8.30.1 darwin-arm64 b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_darwin_arm64.tar.gz
 gitleaks 8.30.1 linux-aarch64 e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz

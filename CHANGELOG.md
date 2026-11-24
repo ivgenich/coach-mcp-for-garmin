@@ -8,6 +8,25 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-24
+
+### Changed
+
+- Updated pins, each release at least 14 days old: attrs 26.1.0, cffi 2.1.1, pycparser 3.12,
+  rpds-py 2026.9.1, the Caddy image 2.11.9 (with the CI copy in `scripts/ci-tools.sh`) and
+  actions/upload-artifact 7.0.2.
+- Dependabot waits 14 days before proposing a release, proposes only patch releases of the
+  python base image (the image stays on 3.12), and leaves garminconnect, requests and
+  python-dotenv alone: upstream garmin_mcp pins them exactly, so they move with
+  `GARMIN_MCP_REF`. garminconnect stays at upstream's 0.3.2; its advisory
+  (GHSA-wjhr-76vg-2hvc, token file mode) is reviewed in `scripts/ci-checks.py` AUDIT_IGNORES:
+  the image keeps the tokens in a 0700 directory of a one-user container.
+
+### Fixed
+
+- `scripts/release-check.py` R6 checked the commit emails of remote-tracking branches too, so
+  a fetched Dependabot branch failed the release check. It now checks local branches and tags.
+
 ## [1.0.0] - 2026-11-24
 
 ### Added

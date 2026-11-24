@@ -7,7 +7,7 @@
 # index, so a re-pushed tag cannot change the build. Dependabot bumps both;
 # by hand: `docker buildx imagetools inspect caddy:<tag>` prints the digest.
 # Caddy release binary (static Go build) from the official image.
-FROM caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e AS caddy
+FROM caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b AS caddy
 
 FROM python:3.12.15-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 

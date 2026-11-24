@@ -157,6 +157,20 @@ class FailureTest(Base):
         code, out = self.rc()
         self.assertIn("FAIL R3 git: not on branch main", out)
 
+    def test_remote_branch_email_ignored(self):
+        # A remote-tracking branch (Dependabot's, committed by GitHub) is not released as it is.
+        base = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.git("checkout", "-q", "-b", "bot")
+        self.repo.write("bot.txt", "b\n")
+        self.repo.commit("bot", env={"GIT_COMMITTER_EMAIL": "bot@example.net"})
+        bot = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("branch", "-q", "-D", "bot")
+        self.repo.git("update-ref", "refs/remotes/origin/bot", bot)
+        self.assertEqual(self.repo.git("rev-parse", "HEAD").strip(), base)
+        code, out = self.rc()
+        self.assertEqual(self.status(out, "R6"), "PASS", out)
+
     def test_non_noreply_email(self):
         self.repo.write("a.txt", "a\n")
         self.repo.commit("a", env={"GIT_AUTHOR_EMAIL": "person@example.net"})

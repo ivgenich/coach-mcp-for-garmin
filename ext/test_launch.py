@@ -54,6 +54,7 @@ import auth_http  # noqa: E402
 import auth_store  # noqa: E402
 import mcp2_compat  # noqa: E402
 import server_instructions  # noqa: E402
+import version  # noqa: E402
 import text_hygiene  # noqa: E402
 import tool_errors  # noqa: E402
 
@@ -459,7 +460,6 @@ class MainServesOnlyReadOnlyTools(UpstreamCase):
         import version
 
         self.assertEqual(self.server.version, version.VERSION)
-        self.assertEqual(self.server.version, "1.0.0")
 
     def test_env_narrows_the_list(self):
         tools, _, code = self.serve({"GARMIN_ENABLED_TOOLS": "get_stats,get_daily_status"})
@@ -767,7 +767,7 @@ class SignInMain(UpstreamCase):
         self.assertIs(fake.middleware_auth, fake.auth)
         # The overrides carry the instructions and the sign-in's settings and provider into the server.
         self.assertEqual(mcp2_compat._server_overrides,
-                         {"name": "coach-mcp-for-garmin", "version": "1.0.0",
+                         {"name": "coach-mcp-for-garmin", "version": version.VERSION,
                           "instructions": server_instructions.INSTRUCTIONS,
                           "auth": fake.settings, "auth_server_provider": fake.provider})
         self.assertEqual(server.instructions, server_instructions.INSTRUCTIONS)
@@ -806,7 +806,7 @@ class SignInMain(UpstreamCase):
         self.assertIsNone(self.launch._AUTH)
         self.assertIsNone(server.settings.auth)
         self.assertEqual(mcp2_compat._server_overrides,
-                         {"name": "coach-mcp-for-garmin", "version": "1.0.0",
+                         {"name": "coach-mcp-for-garmin", "version": version.VERSION,
                           "instructions": server_instructions.INSTRUCTIONS})
         self.assertEqual(mcp2_compat._asgi_middleware, [])
 
@@ -2141,7 +2141,7 @@ class ServedTexts(RealServerCase):
                 self.assertEqual(type(result).__name__, "InitializeResult" if mode == "legacy" else "DiscoverResult")
                 self.assertEqual(result.instructions, server_instructions.INSTRUCTIONS)
                 self.assertEqual(info.name, "coach-mcp-for-garmin")
-                self.assertEqual(info.version, "1.0.0")  # ext/version.py
+                self.assertEqual(info.version, version.VERSION)
 
     def test_tool_list_annotations_and_descriptions_in_both_eras(self):
         server = self.serve()
@@ -2695,8 +2695,8 @@ class KeyModeMain(UpstreamCase):
         self.assertTrue(launch._KEY_MODE)
         self.assertEqual(stubs.key_mode, {"daily_status": True, "weekly_status": True})
         self.assertEqual(server.instructions, server_instructions.INSTRUCTIONS_KEY)
-        self.assertEqual((server.name, server.version), ("coach-mcp-for-garmin", "1.0.0"))
-        self.assertEqual(mcp2_compat._server_overrides, {"name": "coach-mcp-for-garmin", "version": "1.0.0",
+        self.assertEqual((server.name, server.version), ("coach-mcp-for-garmin", version.VERSION))
+        self.assertEqual(mcp2_compat._server_overrides, {"name": "coach-mcp-for-garmin", "version": version.VERSION,
                                                          "instructions": server_instructions.INSTRUCTIONS_KEY})
         ((key, cache_file, seen, _),) = installed
         self.assertEqual((key, cache_file), (env["GARMIN_PERSONAL_API_KEY"], env["GARMIN_KEY_TOKEN_CACHE"]))
@@ -2830,7 +2830,7 @@ class KeyModeServer(RealServerCase):
             with self.subTest(mode=mode):
                 result, info, tools = handshake(server, mode)
                 self.assertEqual(result.instructions, server_instructions.INSTRUCTIONS_KEY)
-                self.assertEqual((info.name, info.version), ("coach-mcp-for-garmin", "1.0.0"))
+                self.assertEqual((info.name, info.version), ("coach-mcp-for-garmin", version.VERSION))
                 self.assertEqual(set(tools), KEY_MODE_TOOL_NAMES)
                 with captured_records() as records:
                     answered = call_tools(server, mode, [("get_stats", {"date": "2026-11-10"}),

@@ -43,8 +43,9 @@ class VersionFile(unittest.TestCase):
         self.assertEqual([t.id for t in node.targets], ["VERSION"])
         self.assertEqual(ast.literal_eval(node.value), version.VERSION)
 
-    def test_first_release(self):
-        self.assertEqual(version.VERSION, "1.0.0")
+    def test_released(self):
+        # 1.0.0 was the first public release; no later version goes below it.
+        self.assertGreaterEqual(tuple(map(int, version.VERSION.split("."))), (1, 0, 0))
 
 
 if __name__ == "__main__":

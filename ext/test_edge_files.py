@@ -1523,7 +1523,9 @@ class ChangelogFile(unittest.TestCase):
         # released, take its heading out first so the step is replayed, not doubled.
         version = ".".join(map(str, code_version()))
         text = re.sub(r"\n## \[%s\] - \d{4}-\d{2}-\d{2}\n" % re.escape(version), "\n", read(CHANGELOG), count=1)
-        text = text.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] - 2026-11-18\n" % version, 1)
+        # Dated no earlier than the newest release below it (dates must not rise going down).
+        day = max(re.findall(r"^## \[[^\]]+\] - (\d{4}-\d{2}-\d{2})$", text, re.M), default="2026-11-18")
+        text = text.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] - %s\n" % (version, day), 1)
         self.assertEqual(changelog_problems(text) + version_problems(text, code_version()), [])
 
     def test_the_checks_catch_bad_headings(self):

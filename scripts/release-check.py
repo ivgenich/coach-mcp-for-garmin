@@ -312,7 +312,9 @@ def main(argv=None):
         code, local_email = repo.git("config", "--local", "user.email", check=False)
         if code != 0 or not local_email.strip().lower().endswith(NOREPLY):
             problems.append("repo-local user.email is not a GitHub noreply address")
-        rows = [x for x in repo.out("log", "--all", "--format=%ae%x00%ce").splitlines() if x]
+        # Local branches and tags only: remote-tracking branches hold Dependabot's commits, which
+        # GitHub signs with its own committer address and which are never released as they are.
+        rows = [x for x in repo.out("log", "--branches", "--tags", "--format=%ae%x00%ce").splitlines() if x]
         bad_mail = sum(1 for r in rows if not all(e.strip().lower().endswith(NOREPLY) for e in r.split("\0")))
         span, scope = offset_scope(repo, tag, args.since)
         offsets = [x for x in repo.out("log", "--format=%ad %cd", "--date=format:%z", span, "--").splitlines() if x]
