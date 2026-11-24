@@ -8,6 +8,8 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-24
+
 ### Added
 
 - First public release: a server you deploy for yourself that lets Claude read your Garmin
