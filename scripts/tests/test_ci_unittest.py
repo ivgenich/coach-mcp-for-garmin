@@ -171,9 +171,33 @@ class Threads(unittest.TestCase):
         self.assertTrue(ok.wasSuccessful(), messages(ok))
         self.assertEqual(len(bad.failures), 1)
 
+    def test_the_pg_engine_loop_and_its_executor_threads_are_allowed_others_are_not(self):
+        loop_thread = Stopper(self, "Thread-1 (run_forever)")
+        worker = Stopper(self, "asyncio_0")
+        stranger = Stopper(self, "asyncio_1")
+        engine = types.SimpleNamespace(
+            _default_thread=loop_thread.thread,
+            _default_loop=types.SimpleNamespace(_default_executor=types.SimpleNamespace(_threads={worker.thread})))
+        fake = types.ModuleType("langchain_postgres.v2.engine")
+        fake.PGEngine = engine
+
+        class Inner(unittest.TestCase):
+            def test_engine_threads(self):
+                loop_thread.start()
+                worker.start()
+
+            def test_a_stranger(self):
+                stranger.start()
+
+        with mock.patch.dict(sys.modules, {"langchain_postgres.v2.engine": fake}):
+            ok = run_isolated(Inner("test_engine_threads"))
+            bad = run_isolated(Inner("test_a_stranger"))
+        self.assertTrue(ok.wasSuccessful(), messages(ok))
+        self.assertEqual(len(bad.failures), 1)
+
     def test_the_ignore_lists_stay_small(self):
         # A new entry needs a reason in the comment above it; this keeps the lists from growing quietly.
-        self.assertLessEqual(len(cu.SINGLETON_THREADS), 2)
+        self.assertLessEqual(len(cu.SINGLETON_THREADS), 3)
         self.assertLessEqual(len(cu.IGNORED_HANDLERS), 2)
 
 

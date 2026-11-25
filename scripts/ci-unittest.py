@@ -115,6 +115,11 @@ GRACE_SECONDS = 2.0
 SINGLETON_THREADS = (
     # mcp2_compat's tool loop: one asyncio loop on a daemon thread for every async tool, by design.
     ("mcp2_compat", ("_tool_loop", "thread")),
+    # langchain-postgres: PGEngine.from_connection_string starts one class-wide asyncio loop on a daemon
+    # thread for the process (history_retrieval caches one engine per database), and that loop's default
+    # executor keeps its worker threads ("asyncio_N") for reuse. Only those exact objects are ignored.
+    ("langchain_postgres.v2.engine", ("PGEngine", "_default_thread")),
+    ("langchain_postgres.v2.engine", ("PGEngine", "_default_loop", "_default_executor", "_threads")),
 )
 # Handlers a library puts on the root logger, by module and class name.
 IGNORED_HANDLERS = (
@@ -129,7 +134,7 @@ def ignored_thread(thread) -> bool:
         obj = sys.modules.get(module)
         for name in path:
             obj = getattr(obj, name, None)
-        if obj is thread:
+        if obj is thread or (isinstance(obj, (set, frozenset, list, tuple)) and thread in obj):
             return True
     return False
 
