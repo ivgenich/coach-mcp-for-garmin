@@ -180,7 +180,11 @@ DELETE FROM history.jobs WHERE status = 'failed' AND key = 'index_day:2026-11-23
 
 - **Redeploy or restart.** The worker finishes its running job on SIGTERM when it can; if
   the platform kills it first, the lease runs out and another run picks the job up.
-  Nothing is lost.
+  Nothing is lost. Railway sends SIGKILL right after SIGTERM unless the service sets a
+  draining time: give the worker one, for example the service variable
+  `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` (a day's Garmin calls take a few seconds). The app
+  needs none: it holds no state, and Caddy (PID 1) stops at once, which ends the server with
+  it.
 - **Update.** Deploy the same commit to all three: in your clone, `./scripts/deploy.sh` (the
   app), then `railway up --ci --service worker` and `railway up --detach --service scheduler`.
 - **Pause indexing.** Remove the worker service, or set its replicas to 0. Jobs wait in the

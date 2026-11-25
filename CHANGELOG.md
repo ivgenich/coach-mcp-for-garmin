@@ -8,6 +8,23 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-25
+
+### Fixed
+
+- History search: a probe before the backfill floor whose fetch hit a Garmin failure was stored
+  open and never probed again (the sweep's recheck only covers days after the floor), so older
+  data behind a long break could stay unindexed. Such a probe is now probed again once, as a
+  recheck, and after that on the late sweep.
+
+### Changed
+
+- Dependabot leaves curl-cffi and ua-generator (the Garmin login's libraries, which follow
+  upstream) and pgvector 0.4 and later (langchain-postgres caps it below 0.4) alone.
+- docs/history-worker.md: Railway kills a stopping service at once unless it has a draining
+  time; the worker should get one (`RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`) so it finishes its
+  running job. The app needs none.
+
 ## [1.0.1] - 2026-11-24
 
 ### Changed

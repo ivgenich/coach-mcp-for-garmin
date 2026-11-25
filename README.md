@@ -56,7 +56,7 @@ time zone as an IANA name such as `Europe/London`, about an hour, a terminal and
    ```bash
    git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
    cd coach-mcp-for-garmin
-   git checkout v1.0.1    # or the newest release tag; if no release is listed yet, skip this line
+   git checkout v1.0.2    # or the newest release tag; if no release is listed yet, skip this line
    export GARMIN_AUTH=full REPORT_TZ=Europe/London    # your mode and your own zone
    ./scripts/deploy.sh
    ```

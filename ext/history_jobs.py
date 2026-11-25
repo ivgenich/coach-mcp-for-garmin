@@ -15,7 +15,8 @@ GuardedGarmin: call guard, token bucket, quiet window).
   (every source answered, none had data: the account start or a long break) and stores that day as the
   backfill floor. A day with a failed source never counts, and the stop is skipped while an older stored day
   has data. The floor is provisional: each sweep probes a few days before it (PROBE_DAYS, each one once), and a
-  probe that finds data removes the floor and the backfill goes on from there.
+  probe that finds data removes the floor and the backfill goes on from there. A probe stored open (a source
+  failed) is probed again once, then only on the late sweep.
 - build_week {"start" (a Monday), "cascade"?, "fetch_load"?}: the week's numbers from its stored days, plus one
   get_training_status in full mode (kept in the row, so rebuilds call nothing), then embed_doc for the week and
   build_week for the next week while cascade > 0 (its HRV and volume comparisons read this week).
@@ -483,7 +484,7 @@ def sweep(job: Any, ctx: Any) -> None:
     for d in still_open[:REFETCH_PER_SWEEP]:
         _enqueue(ctx, "index_day", f"index_day:{d.isoformat()}", {"date": d.isoformat(), "recheck": True})
         queued += 1
-    queued += _probe_floor(ctx, fp, today)
+    queued += _probe_floor(ctx, fp, today, bool(p.get("late")))
     if p.get("late"):
         late_from = today - dt.timedelta(days=LATE_SWEEP_DAYS)
         for d, r in sorted(rows.items()):
@@ -509,9 +510,12 @@ def sweep(job: Any, ctx: Any) -> None:
              removed.get("days", 0), removed.get("weeks", 0))
 
 
-def _probe_floor(ctx: Any, fp: str, today: dt.date) -> int:
+def _probe_floor(ctx: Any, fp: str, today: dt.date, late: bool = False) -> int:
     """index_day probes for the PROBE_DAYS before the backfill floor that have no row yet (each is fetched
-    once, then stored); a probe with data removes the floor (_probe_found_data). Returns how many it queued."""
+    once, then stored); a probe with data removes the floor (_probe_found_data). A probe stored open (a Garmin
+    source failed) is probed again, as a recheck, once; after that only on the late sweep, like the open days
+    after the floor. The sweep's own recheck never reaches these days: they lie before the floor. Returns how
+    many it queued."""
     store, conn = ctx.store, ctx.conn
     stop = store.meta_get(hs.META_BACKFILL_FLOOR, conn=conn)
     if not stop:
@@ -524,8 +528,13 @@ def _probe_floor(ctx: Any, fp: str, today: dt.date) -> int:
     days = [floor - dt.timedelta(days=n) for n in PROBE_DAYS if floor - dt.timedelta(days=n) >= first]
     queued = 0
     for d in days:
-        if store.missing_days(fp, d, d, conn=conn):
+        rows = store.days(fp, d, d, conn=conn)
+        if not rows:
             _enqueue(ctx, "index_day", f"index_day:{d.isoformat()}", {"date": d.isoformat(), "probe": True})
+            queued += 1
+        elif not rows[0]["final"] and (late or not rows[0]["rechecked"]):
+            _enqueue(ctx, "index_day", f"index_day:{d.isoformat()}",
+                     {"date": d.isoformat(), "probe": True, "recheck": True})
             queued += 1
     return queued
 

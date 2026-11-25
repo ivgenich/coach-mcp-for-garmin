@@ -43,6 +43,14 @@ updates:
       - dependency-name: garminconnect
       - dependency-name: requests
       - dependency-name: python-dotenv
+      # The Garmin login's own libraries (garminconnect's TLS fingerprint and
+      # user agent): they follow upstream's uv.lock, like the three above.
+      - dependency-name: curl-cffi
+      - dependency-name: ua-generator
+      # langchain-postgres caps pgvector below 0.4 (config/requirements-history.txt
+      # installs with --no-deps, so CI would not catch it).
+      - dependency-name: pgvector
+        versions: [">=0.4"]
     groups:
       python-minor:
         update-types: ["minor", "patch"]

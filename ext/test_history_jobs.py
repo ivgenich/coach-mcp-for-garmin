@@ -300,6 +300,46 @@ class Backfill(Harness):
         new_floor = self.store.meta_get(hs.META_BACKFILL_FLOOR)
         self.assertEqual(new_floor, (old_from - dt.timedelta(days=hx.EMPTY_STOP_DAYS)).isoformat())
 
+    def test_a_probe_that_hit_a_garmin_failure_is_probed_again(self):
+        # Older data only around one probe day; that probe's first fetch fails on every source.
+        floor = ACCOUNT_START - dt.timedelta(days=hx.EMPTY_STOP_DAYS)
+        probe = floor - dt.timedelta(days=21)
+        has = self.garmin._has
+        self.garmin._has = lambda day: has(day) or abs((dt.date.fromisoformat(day) - probe).days) <= 3
+        self.enqueue("sweep", "sweep:1", {})
+        self.run_all()
+        self.assertEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR), floor.isoformat())
+        err = tws.GarminConnectConnectionError("503 Server Error: Service Unavailable")
+        for name in ("get_stats", "get_sleep_data", "get_hrv_data", "connectapi"):
+            self.garmin.fail[(name, probe.isoformat())] = err
+        self.enqueue("sweep", "sweep:2", {})
+        self.run_until_idle()
+        (row,) = self.store.days(self.fp(), probe, probe)
+        self.assertFalse(row["final"])
+        self.assertEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR), floor.isoformat())
+        # Garmin is back: the next sweep probes that day again (a recheck) and finds the older data.
+        self.garmin.fail.clear()
+        with self.assertLogs("garmin_ext.history", "INFO") as logs:
+            self.enqueue("sweep", "sweep:3", {})
+            self.run_until_idle()
+        self.assertIn("data found before the backfill floor", "\n".join(logs.output))
+        (row,) = self.store.days(self.fp(), probe, probe)
+        self.assertTrue(row["final"] and not row["empty"])
+        self.assertNotEqual(self.store.meta_get(hs.META_BACKFILL_FLOOR), floor.isoformat())
+
+    def test_an_open_probe_that_failed_again_waits_for_the_late_sweep(self):
+        fp = "e" * 64
+        self.store.meta_set(hs.META_ACCOUNT, fp)
+        floor = TODAY - dt.timedelta(days=100)
+        self.store.meta_set(hs.META_BACKFILL_FLOOR, floor.isoformat())
+        probe = floor - dt.timedelta(days=hj.PROBE_DAYS[0])
+        self.store.upsert_day(fp, probe, {"mode": "key", "missing": ["hrv"]}, False, rechecked=True)
+        hj.sweep(*self.ctx({}))
+        self.assertNotIn(f"index_day:{probe}", {r.key for r in self.rows("index_day")})
+        hj.sweep(*self.ctx({"late": True}))
+        queued = [r for r in self.rows("index_day") if r.key == f"index_day:{probe}"]
+        self.assertEqual([r.payload for r in queued], [{"date": probe.isoformat(), "probe": True, "recheck": True}])
+
     def test_running_a_day_twice_changes_nothing(self):
         d = (TODAY - dt.timedelta(days=10)).isoformat()
         self.enqueue("index_day", "index_day:a", {"date": d})

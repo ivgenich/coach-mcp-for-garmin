@@ -55,11 +55,11 @@ For this hostname:
 ```
 git clone <repository URL>
 cd coach-mcp-for-garmin
-git checkout v1.0.1
+git checkout v1.0.2
 ```
 
 `<repository URL>` is the HTTPS address under the **Code** button on this repository's GitHub
-page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.1`.
+page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.2`.
 If no release is listed yet, skip the `git checkout` line and stay on `main`.
 
 Clone it into a folder that no cloud drive syncs (not the iCloud Desktop or Documents folders,
