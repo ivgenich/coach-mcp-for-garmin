@@ -8,6 +8,22 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-25
+
+### Changed
+
+- The weekly report keeps a found power:HR drift in memory (the 16 newest activities), so a
+  second report of the same week does not download and decode the long session's FIT file
+  again. Only a found drift is kept; a failure or a file without drift is read again next time.
+  The memory is per server process and starts empty at each deploy.
+- Log lines: INFO and below go to stdout, warnings and errors to stderr, in the app, the history
+  worker and the scheduler, so Railway (which marks every stderr line as an error) shows only
+  real warnings and errors in red. With the stdio transport every line stays on stderr, since
+  stdout carries the protocol there. The line format is unchanged.
+- The image compiles ext/ at build time, so a start no longer compiles it again.
+- ruff also checks bugbear (B, without B905) and ASYNC rules; the few hits are fixed.
+- CI: the container smoke test installs its mcp client by hash, like every other job.
+
 ## [1.0.2] - 2026-11-25
 
 ### Fixed

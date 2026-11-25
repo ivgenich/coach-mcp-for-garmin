@@ -143,6 +143,35 @@ class Registry(unittest.TestCase):
         self.assertIn("ROLE=worker", err.getvalue())
 
 
+class LogStreams(unittest.TestCase):
+    """configure_logging(): INFO lines on stdout, warnings and errors on stderr (Railway marks stderr as errors)."""
+
+    def test_info_on_stdout_warnings_on_stderr(self):
+        import contextlib
+        import io
+        import logging
+
+        import enqueue
+
+        root = logging.getLogger()
+        saved = (list(root.handlers), root.level)
+
+        def restore():
+            root.handlers[:] = saved[0]
+            root.setLevel(saved[1])
+
+        self.addCleanup(restore)
+        for module in (worker, enqueue):
+            root.handlers[:] = []
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                module.configure_logging()
+                logging.getLogger("garmin_ext.worker").info("job done")
+                logging.getLogger("garmin_ext.worker").error("job failed")
+            self.assertRegex(out.getvalue(), r"\A\S+ \S+ INFO garmin_ext\.worker: job done\n\Z", module.__name__)
+            self.assertRegex(err.getvalue(), r"\A\S+ \S+ ERROR garmin_ext\.worker: job failed\n\Z", module.__name__)
+
+
 class RunAsMain(Base):
     """entrypoint.sh runs `python worker.py`, so this file loads as __main__ while the handler
     modules `import worker` again; their worker.Permanent must still fail the job with its group."""

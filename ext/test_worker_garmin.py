@@ -384,7 +384,7 @@ class Guarded(unittest.TestCase):
         self.assertEqual(guard.events, [("before", "worker"), ("after", "worker", None),
                                          ("before", "worker"), ("after", "worker", "rate_limited")])
         with self.assertRaises(AttributeError):
-            client._private
+            client._private  # noqa: B018 - the attribute access itself must raise
 
     def test_blocked_call_never_reaches_garmin(self):
         class Inner:

@@ -257,9 +257,14 @@ jobs:
         with:
           python-version: ${{ env.FULL_PYTHON }}
           cache: pip
-          cache-dependency-path: constraints.txt
-      - name: The mcp client for scripts/test-protocol.py
-        run: python -m pip install -c constraints.txt mcp
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            config/requirements-build.txt
+            config/requirements-core.txt
+            config/requirements-telemetry.txt
+      - name: The mcp client for scripts/test-protocol.py (the image's pins, every package by hash)
+        run: python -B scripts/ci-checks.py install-full
       - name: Build the image, run it with fake secrets and no Garmin login, check it
         env:
           SMOKE_PYTHON: python

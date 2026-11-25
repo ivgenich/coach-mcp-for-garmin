@@ -63,7 +63,9 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import re
+import threading
 import time
+from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import mcp2_compat
@@ -97,6 +99,9 @@ DEADLINE_S = 60.0
 CALL_TIMEOUT_S = 30.0
 # FIT download + parse of a long ride: fitparse is slow on a 3-4 h file.
 FIT_TIMEOUT_S = 45.0
+# Finished drift results, newest last: decoding a long FIT file costs seconds
+# of CPU, and Garmin's ORIGINAL file of a finished activity does not change.
+DRIFT_CACHE_SIZE = 16
 # 14 days of activities in one call; a triathlete's fortnight is far below it. A full page counts as an
 # incomplete volume comparison (_activities_cut).
 ACTIVITY_LIMIT = 100
@@ -850,9 +855,46 @@ def _load_fit_helpers() -> Tuple[Any, Callable[..., Any], bool]:
     return Garmin.ActivityDownloadFormat.ORIGINAL, _parse_fit, bool(FITPARSE_AVAILABLE)
 
 
+_drift_cache: "OrderedDict[Any, Tuple[Any, Any, Dict[str, Any]]]" = OrderedDict()
+_drift_lock = threading.Lock()
+
+
+def _cached_drift(client: Any, parse_fit: Any, activity_id: Any) -> Optional[Dict[str, Any]]:
+    """A stored drift result for this activity, from the same client and parser, else None.
+
+    The client and parser are compared by identity, so a re-created client (a
+    new login) or another parser reads the file again. The cache lives in
+    memory only: every deploy starts empty.
+    """
+    with _drift_lock:
+        entry = _drift_cache.get(activity_id)
+        if entry is None or entry[0] is not client or entry[1] is not parse_fit:
+            return None
+        _drift_cache.move_to_end(activity_id)
+        return dict(entry[2])
+
+
+def _store_drift(client: Any, parse_fit: Any, activity_id: Any, result: Dict[str, Any]) -> None:
+    """Keep a drift result; only a found drift is kept, never a failure or None."""
+    if result.get("pct") is None:
+        return
+    with _drift_lock:
+        _drift_cache[activity_id] = (client, parse_fit, dict(result))
+        _drift_cache.move_to_end(activity_id)
+        while len(_drift_cache) > DRIFT_CACHE_SIZE:
+            _drift_cache.popitem(last=False)
+
+
 def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
-    """Download the original FIT and read upstream's power:HR drift (session.hr_drift)."""
+    """Download the original FIT and read upstream's power:HR drift (session.hr_drift).
+
+    A drift already found for this activity is answered from memory, without
+    calling Garmin.
+    """
     fmt, parse_fit, available = _load_fit_helpers()
+    cached = _cached_drift(client, parse_fit, activity_id)
+    if cached is not None:
+        return cached
     if not available:
         raise RuntimeError("fitparse is not installed")
     raw = sc.client_method(client, "download_activity")(activity_id, dl_fmt=fmt)
@@ -861,7 +903,9 @@ def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
     parsed = parse_fit(bytes(raw), include_records=False)
     drift = sc.dig(parsed, "session", "hr_drift")
     # None when the file has under 60 min of power + heart rate (e.g. no power).
-    return {"pct": sc.num(sc.dig(drift, "hr_drift_pct")), "basis": "power"}
+    result = {"pct": sc.num(sc.dig(drift, "hr_drift_pct")), "basis": "power"}
+    _store_drift(client, parse_fit, activity_id, result)
+    return result
 
 
 async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float, key_mode: bool = False):

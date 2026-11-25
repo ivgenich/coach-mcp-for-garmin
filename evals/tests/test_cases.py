@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import datetime as dt
 import importlib.util
 import json
@@ -254,7 +255,7 @@ class ShippedCases(unittest.TestCase):
         self.assertEqual(e02.followups, ("Try again please",))
 
     def test_cases_are_frozen(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(dataclasses.FrozenInstanceError):
             self.cases[0].id = "X99"
 
 

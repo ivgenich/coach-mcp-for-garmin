@@ -133,7 +133,8 @@ class FakeClient:
 # --- runner ---------------------------------------------------------------------------
 
 class ToolLoop(unittest.TestCase):
-    def run_one(self, client, case=Case(), variant="instr", harness=None, **kw):
+    def run_one(self, client, case=None, variant="instr", harness=None, **kw):
+        case = case or Case()
         return runner.run_trial(client, case, variant, 1, MODEL, harness=harness or stub_harness(), **kw)
 
     def test_parallel_tools_one_user_message_then_answer(self):

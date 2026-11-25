@@ -276,7 +276,7 @@ def _start(stack, mode, state, moment, tz, timeout, history="off"):
         (courses.register_tools, tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS,
          garmin_mcp.FastMCP, garmin_mcp.init_api) = saved
         for name, client in clients.items():
-            setattr(getattr(garmin_mcp, name), "garmin_client", client)
+            getattr(garmin_mcp, name).garmin_client = client
         ext.launch._AUTH, ext.launch._KEY_MODE = None, False
         ext.mcp2_compat.set_server_overrides()
         ext.mcp2_compat.set_asgi_middleware()

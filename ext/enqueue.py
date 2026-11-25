@@ -163,7 +163,8 @@ def configure_logging() -> None:
     """As worker.configure_logging: INFO lines, the Garmin libraries' records hidden, secrets redacted."""
     import log_privacy
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, handlers=[
+        log_privacy.LevelStreamHandler("%(asctime)s %(levelname)s %(name)s: %(message)s")])
     log_privacy.install()
 
 

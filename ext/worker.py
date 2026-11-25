@@ -559,11 +559,12 @@ def _shutdown(tele) -> None:
 
 
 def configure_logging() -> None:
-    """INFO lines on stderr; the Garmin libraries' records hidden and registered secrets redacted
+    """INFO lines on stdout, warnings and errors on stderr; the Garmin libraries' records hidden and registered secrets redacted
     (log_privacy: garminconnect logs a failed call with the display name in the path and Garmin's answer)."""
     import log_privacy
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, handlers=[
+        log_privacy.LevelStreamHandler("%(asctime)s %(levelname)s %(name)s: %(message)s")])
     log_privacy.install()
 
 

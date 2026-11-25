@@ -292,7 +292,7 @@ def hashed_pins(path: str) -> tuple[dict[str, str], list[str]]:
     rel = os.path.relpath(path, ROOT)
     pins, problems = {}, []
     joined = re.sub(r"\\\n", " ", read(path))
-    for n, line in enumerate(joined.splitlines(), 1):
+    for line in joined.splitlines():
         line = "" if line.lstrip().startswith("#") else line.strip()
         if not line:
             continue

@@ -1237,7 +1237,7 @@ def _refresh_app_token():
     client = _app_garmin_client()
     if guard is None or client is None:
         return
-    method = getattr(type(client), "_refresh_session")
+    method = type(client)._refresh_session
     refresh = getattr(method, "__wrapped__", method)
     try:
         with guard.refresh_lock:
@@ -1314,24 +1314,22 @@ def _start_token_cleanup(features, reason=TOKEN_CLEANUP_HISTORY_OFF):
 LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
 
 
-class _LineHandler(logging.StreamHandler):
-    """One plain line per record, written to whatever sys.stderr is at the
-    time (as logging.lastResort does), so a test's redirect_stderr sees it."""
+class _LineHandler(log_privacy.LevelStreamHandler):
+    """One plain line per record, INFO on stdout and warnings and errors on
+    stderr (Railway marks every stderr line as an error), all on stderr with
+    the stdio transport, whose stdout carries the protocol. The streams are
+    whatever sys.stdout and sys.stderr are at the time, so a test's redirect
+    sees the lines."""
 
     coach_line_handler = True
 
-    def __init__(self):
-        logging.Handler.__init__(self)
-        self.setFormatter(logging.Formatter(LOG_FORMAT))
-
-    @property
-    def stream(self):
-        return sys.stderr
+    def __init__(self, split: bool = False):
+        super().__init__(LOG_FORMAT, split=split)
 
 
 def _configure_logging():
-    """INFO on the root logger, one plain line per record on stderr, set up
-    now so the sign-in's startup lines are not dropped.
+    """INFO on the root logger, one plain line per record (_LineHandler), set
+    up now so the sign-in's startup lines are not dropped.
 
     Not the SDK's rich handler: with no terminal (Railway, Docker) it wraps
     each record at 80 columns, and Railway's log viewer and
@@ -1344,7 +1342,8 @@ def _configure_logging():
         if type(handler).__name__ == "RichHandler":
             root.removeHandler(handler)
     if not any(getattr(h, "coach_line_handler", False) for h in root.handlers):
-        root.addHandler(_LineHandler())
+        transport = (os.environ.get("GARMIN_MCP_TRANSPORT") or "stdio").strip().lower()
+        root.addHandler(_LineHandler(split=transport != "stdio"))
     root.setLevel(logging.INFO)
     # garminconnect logs a failed call with the display name in the path and Garmin's answer: hidden; and
     # every registered secret redacted on the root handlers.

@@ -4,15 +4,22 @@
 # zero-cost checks that guard a public repo: no hidden bidirectional text
 # (PLE2502), no blanket noqa (PGH), sane version checks (YTT), shebangs that
 # match the executable bit (EXE), and no bare `except Exception` without a
-# `# noqa: BLE001 - reason` (BLE). Formatting is not enforced yet.
+# `# noqa: BLE001 - reason` (BLE), plus bugbear (B: likely bugs such as
+# mutable defaults or unused loop variables) and ASYNC (blocking calls in async
+# code). B905 (zip() without strict=) is left out: most zips here pair lists
+# of one length by construction. Formatting is not enforced yet.
 target-version = "py310"
 line-length = 120
 
 [lint]
-select = ["E4", "E7", "E9", "F", "W", "PLE", "PGH", "YTT", "EXE", "BLE"]
+select = ["E4", "E7", "E9", "F", "W", "PLE", "PGH", "YTT", "EXE", "BLE", "B", "ASYNC"]
+ignore = ["B905"]
 
 [lint.per-file-ignores]
 # The tests put their folder on sys.path before they import the modules under
-# test, and some use short names such as `l` in comprehensions.
-"ext/test_*.py" = ["E402", "E741"]
-"scripts/tests/*.py" = ["E402", "E741"]
+# test, and some use short names such as `l` in comprehensions. Tests define
+# closures in loops that run at once (B023) and sleep or open files inside
+# async test helpers on purpose (ASYNC251 and kin).
+"ext/test_*.py" = ["E402", "E741", "B023", "ASYNC"]
+"scripts/tests/*.py" = ["E402", "E741", "B023", "ASYNC"]
+"evals/tests/*.py" = ["B023", "ASYNC"]

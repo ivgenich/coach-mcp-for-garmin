@@ -36,11 +36,11 @@ Get the files, in a terminal:
 ```
 git clone <repository URL>
 cd coach-mcp-for-garmin
-git checkout v1.0.2
+git checkout v1.0.3
 ```
 
 `<repository URL>` is the HTTPS address under the **Code** button on this repository's GitHub
-page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.2`.
+page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.3`.
 If no release is listed yet, skip the `git checkout` line and stay on `main`.
 
 ```bash

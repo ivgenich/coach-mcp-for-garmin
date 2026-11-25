@@ -130,7 +130,12 @@ RUN printf '%s\n' "import sys; sys.path.insert(0, '/opt/garmin-ext'); import mcp
     && garmin-mcp-auth --help >/dev/null \
     && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version, worker_garmin; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); worker_garmin.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)" \
     && python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import telemetry, feature_config, garmin_guard; from opentelemetry.sdk.trace import TracerProvider; from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter" \
-    && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue"; fi
+    && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue"; fi \
+    && python -m compileall -q /opt/garmin-ext
+
+# The last step above compiles ext/ once at build time: PYTHONDONTWRITEBYTECODE
+# and the root-owned folder mean no process could cache it later, so every start
+# would compile it again (about 90 ms each for the check and the server).
 
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY entrypoint.sh /entrypoint.sh

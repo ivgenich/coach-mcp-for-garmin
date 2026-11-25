@@ -1181,6 +1181,34 @@ class OneLineLogRecords(unittest.TestCase):
         self.assertEqual(out.count("garmin library: one "), 2, out)
         self.assertIn("WARNING garmin_ext.auth: a line with <redacted>", out)
 
+    def split_run(self, transport):
+        """(stdout lines, stderr lines) of one INFO and one WARNING record with that transport."""
+        secret = "canary-split-registered-secret"
+        tool_errors.register_secret(secret)
+        out, err = io.StringIO(), io.StringIO()
+        env = {"GARMIN_MCP_TRANSPORT": transport} if transport else {}
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), mock.patch.dict(os.environ, env):
+            if not transport:
+                os.environ.pop("GARMIN_MCP_TRANSPORT", None)
+            self.launch._configure_logging()
+            logging.getLogger("garmin_ext.auth").info("sign-in: on %s", secret)
+            logging.getLogger("garmin_ext.auth").warning("rate limited")
+        return out.getvalue().splitlines(), err.getvalue().splitlines()
+
+    def test_on_the_network_info_goes_to_stdout_and_warnings_to_stderr(self):
+        # Railway marks every stderr line as an error.
+        out, err = self.split_run("streamable-http")
+        self.assertEqual(out, ["INFO garmin_ext.auth: sign-in: on <redacted>"])
+        self.assertEqual(err, ["WARNING garmin_ext.auth: rate limited"])
+
+    def test_on_stdio_every_line_stays_on_stderr(self):
+        # stdout carries the MCP protocol there.
+        for transport in ("stdio", None):
+            out, err = self.split_run(transport)
+            self.assertEqual(out, [], transport)
+            self.assertEqual(err, ["INFO garmin_ext.auth: sign-in: on <redacted>",
+                                   "WARNING garmin_ext.auth: rate limited"], transport)
+
     def test_a_role_run_sets_up_its_logging_first(self):
         order = []
         module = types.SimpleNamespace(configure_logging=lambda: order.append("logging"),
@@ -2115,7 +2143,7 @@ class RealServerCase(UpstreamCase):
         garmin.display_name, garmin.unit_system = "MyName", "metric"
         proxy = garmin_mcp._GarminProxy(garmin, timeout=10)
         for name in UPSTREAM_MODULES:
-            setattr(getattr(garmin_mcp, name), "garmin_client", proxy)
+            getattr(garmin_mcp, name).garmin_client = proxy
 
     def assert_one_line_per_failure(self, records, expected):
         """`expected`: {tool: group} for the calls that failed."""

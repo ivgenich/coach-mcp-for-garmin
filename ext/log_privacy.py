@@ -5,6 +5,8 @@
   '/usersummary-service/usersummary/daily/<display name>': ... {<Garmin's answer>}" with a traceback. Each such
   record of WARNING or above becomes one fixed line on the logger "garmin_ext.garmin_library" (its level, the
   library's logger name and the exception class name only); records below WARNING are dropped.
+- LevelStreamHandler: one line per record, INFO and below on stdout and WARNING and above on stderr, so a log
+  viewer that marks stderr as errors (Railway) shows only real warnings and errors that way.
 - Every handler on the root logger gets a filter that replaces each value registered with
   tool_errors.register_secret() with "<redacted>" in the message and the traceback text.
 
@@ -14,6 +16,7 @@ Standard library only (plus tool_errors from this folder); imports on Python 3.1
 from __future__ import annotations
 
 import logging
+import sys
 import traceback
 
 import tool_errors
@@ -21,6 +24,35 @@ import tool_errors
 LIBRARY_LOGGERS = ("garminconnect", "garth")
 OUT_LOGGER = "garmin_ext.garmin_library"
 HIDDEN_LINE = "garmin library: one %s line of %s was hidden (it may quote a Garmin path or answer)%s"
+
+
+class LevelStreamHandler(logging.StreamHandler):
+    """One line per record: below WARNING on stdout, WARNING and above on stderr (split=False: all on stderr).
+
+    The streams are looked up when a record is written (as logging.lastResort does), so a test's
+    redirect_stdout/redirect_stderr sees the lines. Each line is flushed, so the two streams keep their order
+    as closely as the reader allows. An MCP server on the stdio transport must pass split=False: there stdout
+    carries the protocol.
+    """
+
+    def __init__(self, fmt: str, split: bool = True):
+        logging.Handler.__init__(self)
+        self.setFormatter(logging.Formatter(fmt))
+        self.split = split
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    def emit(self, record):
+        try:
+            out = sys.stdout if self.split and record.levelno < logging.WARNING else sys.stderr
+            out.write(self.format(record) + self.terminator)
+            out.flush()
+        except RecursionError:
+            raise
+        except Exception:  # noqa: BLE001 - as logging.StreamHandler: report and go on
+            self.handleError(record)
 
 
 def _exc_name(record) -> str:

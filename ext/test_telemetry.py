@@ -756,7 +756,7 @@ class DeadBackend(unittest.TestCase):
 
     def work(self):
         times = []
-        for i in range(self.N):
+        for _ in range(self.N):
             t0 = time.perf_counter()
             with t.span("tool get_daily_status", tool="get_daily_status") as s:
                 with t.span("source sleep", source="sleep"):

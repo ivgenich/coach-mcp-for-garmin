@@ -591,6 +591,50 @@ class LongSession(unittest.TestCase):
         self.assertIsNone(ws.decoupling_from_details(None))
 
 
+
+class DriftCache(unittest.TestCase):
+    """A found drift is kept in memory: a second report does not download the FIT again."""
+
+    def setUp(self):
+        ws._drift_cache.clear()
+        self.addCleanup(ws._drift_cache.clear)
+
+    def test_second_report_reads_the_drift_from_memory(self):
+        client, fit = FakeClient(), fit_helpers()
+        first = build(client, fit=fit)
+        self.assertEqual(client.names().count("download_activity"), 1)
+        second = build(client, fit=fit)
+        self.assertEqual(client.names().count("download_activity"), 1)
+        self.assertEqual(first["long_session"], second["long_session"])
+
+    def test_another_client_or_parser_reads_the_file_again(self):
+        client, fit = FakeClient(), fit_helpers()
+        build(client, fit=fit)
+        other = FakeClient()
+        build(other, fit=fit)  # a new login gives a new client
+        self.assertEqual(other.names().count("download_activity"), 1)
+        build(client, fit=fit_helpers(pct=-12.0))  # another parser
+        self.assertEqual(client.names().count("download_activity"), 2)
+
+    def test_a_failure_or_no_drift_is_not_kept(self):
+        client = FakeClient(fail={"download_activity": GarminConnectConnectionError("down")})
+        build(client)
+        self.assertEqual(len(ws._drift_cache), 0)
+        fit = fit_helpers(pct=None)
+        build(FakeClient(), fit=fit)
+        self.assertEqual(len(ws._drift_cache), 0)
+
+    def test_the_cache_keeps_the_newest_entries(self):
+        client, (_, parse_fit, _) = object(), fit_helpers()()
+        for aid in range(ws.DRIFT_CACHE_SIZE + 3):
+            ws._store_drift(client, parse_fit, aid, {"pct": -1.0, "basis": "power"})
+        self.assertEqual(len(ws._drift_cache), ws.DRIFT_CACHE_SIZE)
+        self.assertIsNone(ws._cached_drift(client, parse_fit, 0))
+        self.assertEqual(ws._cached_drift(client, parse_fit, ws.DRIFT_CACHE_SIZE + 2)["pct"], -1.0)
+        ws._cached_drift(client, parse_fit, 3)["pct"] = 99  # callers get a copy
+        self.assertEqual(ws._cached_drift(client, parse_fit, 3)["pct"], -1.0)
+
+
 # --- the whole report ----------------------------------------------------------
 
 class EndToEnd(unittest.TestCase):
