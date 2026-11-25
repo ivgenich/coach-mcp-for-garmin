@@ -6,8 +6,9 @@
 An MCP server you deploy for yourself that lets Claude read your Garmin Connect data: activities,
 sleep, HRV, training load, planned workouts and more. MCP (Model Context Protocol) is the open
 standard Claude uses to call tools on servers like this one. Ask "How am I today?" in the Claude
-app on your phone, and Claude answers from your own numbers. Every tool is read-only, and the
-server has a sign-in of its own, so only you can connect it to Claude. On top of the tools of
+app on your phone, and Claude answers from your own numbers. Every tool is read-only unless you
+turn on training-plan writes (`PLAN_WRITES=on`, off by default), and the server has a sign-in of
+its own, so only you can connect it to Claude. On top of the tools of
 [Taxuspt/garmin_mcp](https://github.com/Taxuspt/garmin_mcp) it adds a daily status (a green,
 yellow or red level and a recommendation for today's workout, by fixed rules), a weekly status
 and a course climb profile.
@@ -34,7 +35,9 @@ $5 a month on Railway). You need a computer with bash, git and python3: macOS, L
 Windows. The Railway CLI installs with Homebrew (optional) or npm; on Windows, inside WSL.
 
 It is not if you want an app to install from a store, a service someone else runs for you, one
-server for several people, or a tool that changes your Garmin data: every tool only reads.
+server for several people, or a tool that changes your Garmin data on its own: by default every tool
+only reads, and the optional training-plan writes (`PLAN_WRITES=on`) only add or delete the plan's own
+workouts after you approve them.
 
 ## Quickstart
 
@@ -130,8 +133,9 @@ server, with their own Garmin login or key and their own owner secret.
   It may stop working without notice, using it may breach Garmin's terms of use, and too many
   logins or calls can get your Garmin account rate-limited or restricted.
 - **`full` mode's tokens give full account access.** The login tokens kept on your server can do
-  anything you can do in Garmin Connect, including changing and deleting data. The server only
-  exposes read-only tools, but anyone who gets the tokens is not limited by that. Protect the
+  anything you can do in Garmin Connect, including changing and deleting data. By default the
+  server only exposes read-only tools (with `PLAN_WRITES=on` it can also add and delete its own
+  training-plan workouts), but anyone who gets the tokens is not limited by that. Protect the
   server and your host account like your Garmin password.
 - **`key` mode uses Garmin's official Personal API, under Garmin's own terms.** You accept them
   when you create the key: read them there first. The key expires after the period you choose,
@@ -175,8 +179,9 @@ server, with their own Garmin login or key and their own owner secret.
 - **Course profile** (`get_course_profile`): the climbs and elevation profile of a saved course.
 - **Your Garmin data** through the read-only tools of upstream garmin_mcp: activities, sleep,
   HRV, Body Battery, VO2max and more, and in `full` mode also laps, time in zones, weekly stress,
-  training status, race predictions and records. No tool can change your Garmin data.
-  [Every tool, per mode](docs/tools.md).
+  training status, race predictions and records. No tool can change your Garmin data unless you
+  turn on training-plan writes, which add and delete only the plan's own workouts, after you
+  approve them. [Every tool, per mode](docs/tools.md).
 - **Optional add-ons, off by default.** The basic deploy is one service, as in the
   [Quickstart](#quickstart); neither add-on is needed.
   [Tracing](docs/tracing.md) (`TRACING=on`): tool latency, errors and Garmin rate limits on a
@@ -277,6 +282,7 @@ This is a personal project, maintained on a best-effort basis, with no SLA.
 | [MCP protocol](docs/protocol.md) | Protocol versions, server instructions, checking a deploy |
 | [Tracing](docs/tracing.md) | Optional: traces and metrics with no health values, the dashboard and alerts |
 | [History search](docs/history-search.md) | Optional: the history tools, what is stored, retrieval quality, forgetting |
+| [Training plans](docs/training-plan.md) | Optional: plan previews, Garmin writes, tracking and the weekly review, the plan rules, what is stored |
 | [History worker](docs/history-worker.md) | Optional: the Postgres, worker and cron services, the job queue |
 | [Evals](docs/evals.md) | How a Claude model behaves with the tools: cases, running, cost, results |
 | [How it works](docs/how-it-works.md) | Architecture, the sign-in, security, what leaves your server |

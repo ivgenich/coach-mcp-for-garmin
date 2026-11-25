@@ -30,6 +30,8 @@ Docker: `scripts/ci-smoke.sh`. More: [ext/README.md](ext/README.md).
 - Plain, short English in docs, comments and messages. Say what the code does.
 - Python 3.10 compatible; `ruff check .` passes (`ruff.toml`). Shell scripts pass `shellcheck`.
 - Every behaviour change comes with a test, and with the doc page that describes it.
-- Every tool stays read-only. No secret, key or Garmin value may reach a log line, an error text
-  or a trace.
+- Every tool stays read-only, except the plan write tools behind `PLAN_WRITES=on` (`plan_commit`,
+  `plan_cancel`): they write only through a token's ops and only the server's own workouts
+  ([SECURITY.md](SECURITY.md#how-plan-writes-behave)). A new write needs its own switch, default
+  off. No secret, key or Garmin value may reach a log line, an error text or a trace.
 - Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user notices.

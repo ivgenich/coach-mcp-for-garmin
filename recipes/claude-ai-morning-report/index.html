@@ -436,7 +436,7 @@ footer { font-size: 0.85rem; color: var(--muted); display: flex; flex-direction:
       return '<article class="card"><div class="hero-head"><h2 class="num">Week of ' + esc(dm(w.start)) + "–" + esc(dm(w.end)) + '</h2><span class="chip"><span class="dot ' + L.cls + '"></span>' +
         esc(levelText(w)) + "</span></div>" + (summary ? "<p>" + esc(summary) + "</p>" : "") +
         (isNum(p.scheduled) && p.scheduled > 0 ? '<p class="small muted num">Plan: ' + (isNum(p.completed)
-          ? esc(p.completed) + " of " + esc(p.scheduled) + " done" + (isNum(p.on_planned_day) ? ", " + esc(p.on_planned_day) + " on the planned day" : "")
+          ? esc(p.completed) + " of " + esc(isNum(p.due) ? p.due : p.scheduled) + " done" + (isNum(p.on_planned_day) ? ", " + esc(p.on_planned_day) + " on the planned day" : "")
           : esc(p.scheduled) + " scheduled · done: no data") + "</p>" : "") +
         (text ? '<details data-det="' + esc(key) + '"' + (openDetails[key] || state.weeks[0] === w ? " open" : "") + "><summary>Full summary</summary>" + md(text) + "</details>" : "") + "</article>";
     }).join("");

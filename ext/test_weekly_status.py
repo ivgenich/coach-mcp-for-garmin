@@ -419,7 +419,7 @@ class Plan(unittest.TestCase):
         # week's other run is linked, and the previous week's run 5 days before
         # it never counts.
         plan = self.plan(FX["schedule"], FX["activities"])
-        self.assertEqual(plan, {"scheduled": 8, "completed": 7, "on_planned_day": 6, "moved": 1, "upcoming": 0,
+        self.assertEqual(plan, {"scheduled": 8, "due": 8, "completed": 7, "on_planned_day": 6, "moved": 1, "upcoming": 0, "done_early": 0,
                                 "linked": 5, "completion_pct": 88})
 
     def test_moved_session_counts_within_one_day_early_or_two_days_late(self):
@@ -429,8 +429,8 @@ class Plan(unittest.TestCase):
             with self.subTest(when=when):
                 plan = self.plan(schedule_payload(("2026-03-04", "running", None)),
                                  [activity(f"{when} 06:00:00", "running", aid=1)])
-                self.assertEqual(plan, {"scheduled": 1, "completed": done, "on_planned_day": 0, "moved": done,
-                                        "upcoming": 0, "linked": 0, "completion_pct": done * 100})
+                self.assertEqual(plan, {"scheduled": 1, "due": 1, "completed": done, "on_planned_day": 0, "moved": done,
+                                        "upcoming": 0, "done_early": 0, "linked": 0, "completion_pct": done * 100})
 
     def test_owner_week_activities_before_the_plan_do_not_count(self):
         # Live case (19-25 Nov): 4 rides planned Mon-Wed, created on Sun; the week's rides were Thu-Sat. v1 said
@@ -442,7 +442,7 @@ class Plan(unittest.TestCase):
                                     activity("2026-11-20 07:00:00", "running", aid=2),
                                     activity("2026-11-21 07:00:00", "road_biking", aid=3)], TZ)
         plan = ws.plan_section(ws.parse_schedule(payload, start, end), acts, start, end, today)
-        self.assertEqual(plan, {"scheduled": 4, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0,
+        self.assertEqual(plan, {"scheduled": 4, "due": 4, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0, "done_early": 0,
                                 "linked": 0, "completion_pct": 0})
         self.assertIn("low_completion", flag_ids(neutral(plan=plan)))
         # A ride on Sunday (1 day before Monday) is a moved session; the rest stay undone.
@@ -460,14 +460,55 @@ class Plan(unittest.TestCase):
                                     activity("2026-03-05 06:00:00", "running", aid=2),
                                     activity("2026-03-06 06:00:00", "road_biking", aid=3)], TZ)
         plan = ws.plan_section(ws.parse_schedule(payload, START, END), acts, START, END, today)
-        self.assertEqual(plan, {"scheduled": 4, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 2,
-                                "linked": 0, "completion_pct": 25})
+        self.assertEqual(plan, {"scheduled": 4, "due": 2, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 2, "done_early": 0,
+                                "linked": 0, "completion_pct": 50})
         # 1 of the 2 due workouts done: under 70% of due ones, but only 2 due (< 3), so no flag.
         self.assertNotIn("low_completion", flag_ids(neutral(plan=plan)))
-        due_three = dict(plan, scheduled=5, upcoming=2, completed=3, completion_pct=60)  # 3 of 3 due done
+        due_three = dict(plan, scheduled=5, due=3, upcoming=2, completed=3, completion_pct=100)  # 3 of 3 due done
         self.assertNotIn("low_completion", flag_ids(neutral(plan=due_three)))
-        self.assertIn("low_completion", flag_ids(neutral(plan=dict(due_three, completed=2, completion_pct=40))))
-        self.assertIn("Plan: 1 of 4 done (25%), 2 still ahead", ws.render_text(dict(build(), plan=plan), "markdown"))
+        self.assertIn("low_completion", flag_ids(neutral(plan=dict(due_three, completed=2, completion_pct=67))))
+        self.assertIn("Plan: 1 of 2 done (50%), 2 still ahead", ws.render_text(dict(build(), plan=plan), "markdown"))
+
+    def test_linked_future_workout_is_done_early_not_completed(self):
+        # Rules v3: Thu's run is still ahead but Garmin already linked it (done a day early, on Wed). It is
+        # done_early: completed counts only the due workouts, so the pct never passes 100.
+        today = dt.date(2026, 3, 4)
+        payload = schedule_payload(("2026-03-04", "running", None), ("2026-03-05", "running", 2))
+        acts = ws.parse_activities([activity("2026-03-04 06:00:00", "running", aid=1),
+                                    activity("2026-03-04 18:00:00", "running", aid=2)], TZ)
+        plan = ws.plan_section(ws.parse_schedule(payload, START, END), acts, START, END, today)
+        self.assertEqual(plan, {"scheduled": 2, "due": 1, "completed": 1, "on_planned_day": 1, "moved": 0,
+                                "upcoming": 1, "done_early": 1, "linked": 1, "completion_pct": 100})
+        # The linked activity never completes the due workout too: without the morning run it is not done.
+        plan = ws.plan_section(ws.parse_schedule(payload, START, END), acts[1:], START, END, today)
+        self.assertEqual((plan["completed"], plan["done_early"], plan["completion_pct"]), (0, 1, 0))
+        text = ws.render_text(dict(build(), plan=plan), "markdown")
+        self.assertIn("Plan: 0 of 1 done (0%), 1 still ahead (1 already done)", text)
+        # Without the activity list, the due workouts' links decide; a link ahead never makes it 2 of 1.
+        plan = ws.plan_section(ws.parse_schedule(payload, START, END), None, START, END, today)
+        self.assertEqual((plan["completed"], plan["done_early"], plan["completion_pct"]), (None, 1, None))
+        linked_both = schedule_payload(("2026-03-04", "running", 1), ("2026-03-05", "running", 2))
+        plan = ws.plan_section(ws.parse_schedule(linked_both, START, END), None, START, END, today)
+        self.assertEqual((plan["completed"], plan["done_early"], plan["completion_pct"]), (1, 1, 100))
+
+    def test_a_week_with_nothing_due_has_no_pct(self):
+        today = dt.date(2026, 2, 27)  # the week starts after today: everything is ahead
+        plan = ws.plan_section(ws.parse_schedule(schedule_payload(("2026-03-04", "running", None)), START, END),
+                               [], START, END, today)
+        self.assertEqual((plan["due"], plan["completed"], plan["upcoming"], plan["completion_pct"]), (0, 0, 1, None))
+        self.assertIn("Plan: 1 scheduled, all still ahead", ws.render_text(dict(build(), plan=plan), "markdown"))
+
+    def test_week_edges_are_the_same_for_workouts_and_activities(self):
+        # An activity counts only inside the report's week (start 00:00 .. min(end, today)), whichever way its
+        # time is given: a GMT-only start converted to the report zone that lands before the week is out.
+        payload = schedule_payload(("2026-03-01", "running", None), ("2026-03-07", "running", None))
+        early = {"activityId": 5, "activityType": {"typeKey": "running"}, "startTimeGMT": "2026-02-28 21:30:00",
+                 "duration": 1800.0, "distance": 5000.0}
+        late = activity("2026-03-08 06:00:00", "running", aid=6)  # 1 day after the week: out too
+        plan = self.plan(payload, [early, late])
+        self.assertEqual(plan["completed"], 0)
+        inside = dict(early, startTimeGMT="2026-03-01 08:00:00")
+        self.assertEqual(self.plan(payload, [inside])["completed"], 1)
 
     def test_previous_week_activity_does_not_count(self):
         plan = self.plan(schedule_payload(("2026-03-01", "running", None)),
@@ -482,7 +523,7 @@ class Plan(unittest.TestCase):
             ("2026-03-05", "swimming", None),  # the ride is another sport
         ), [activity("2026-03-04 06:00:00", "treadmill_running", aid=2),
             activity("2026-03-04 18:00:00", "virtual_ride", aid=3)])
-        self.assertEqual(plan, {"scheduled": 4, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0,
+        self.assertEqual(plan, {"scheduled": 4, "due": 4, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0, "done_early": 0,
                                 "linked": 0, "completion_pct": 25})
         self.assertIn("low_completion", flag_ids(neutral(plan=plan)))
 
@@ -500,7 +541,7 @@ class Plan(unittest.TestCase):
     def test_linked_activity_is_never_reused(self):
         plan = self.plan(schedule_payload(("2026-03-04", "running", 2), ("2026-03-05", "running", None)),
                          [activity("2026-03-04 06:00:00", "running", aid=2)])
-        self.assertEqual(plan, {"scheduled": 2, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0,
+        self.assertEqual(plan, {"scheduled": 2, "due": 2, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0, "done_early": 0,
                                 "linked": 1, "completion_pct": 50})
 
     def test_without_activities_only_full_links_count(self):
@@ -513,7 +554,7 @@ class Plan(unittest.TestCase):
 
     def test_nothing_scheduled_gives_null_pct_and_no_flag(self):
         plan = self.plan({"data": {"workoutScheduleSummariesScalar": []}}, [])
-        self.assertEqual(plan, {"scheduled": 0, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0,
+        self.assertEqual(plan, {"scheduled": 0, "due": 0, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0, "done_early": 0,
                                 "linked": 0, "completion_pct": None})
         self.assertNotIn("low_completion", flag_ids(neutral(plan=plan)))
         null_list = ws.parse_schedule({"data": {"workoutScheduleSummariesScalar": None}}, START, END)
@@ -779,7 +820,7 @@ class EndToEnd(unittest.TestCase):
         client = FakeClient()
         status = build(client)
         self.assertEqual((status["kind"], status["rules_version"], status["start"], status["end"]),
-                         ("weekly_status", 2, "2026-03-01", "2026-03-07"))
+                         ("weekly_status", 3, "2026-03-01", "2026-03-07"))
         self.assertEqual((status["generated_at"], status["tz"]), ("2026-03-08T06:30:00+02:00", TZ_NAME))
         self.assertEqual([f["id"] for f in status["flags"]], ["short_nights", "gear_near_limit"])
         self.assertEqual((status["level"], status["level_en"]), ("yellow", "Yellow"))
@@ -790,8 +831,8 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(status["load"]["chronic_7d_ago"], 731)
         self.assertEqual((status["load"]["chronic_change"], status["load"]["optimal_min"],
                           status["load"]["optimal_max"]), (45, 621, 1164))
-        self.assertEqual(status["plan"], {"scheduled": 8, "completed": 7, "on_planned_day": 6, "moved": 1,
-                                          "upcoming": 0, "linked": 5, "completion_pct": 88})
+        self.assertEqual(status["plan"], {"scheduled": 8, "due": 8, "completed": 7, "on_planned_day": 6, "moved": 1,
+                                          "upcoming": 0, "done_early": 0, "linked": 5, "completion_pct": 88})
         long_session = status["long_session"]
         self.assertEqual((long_session["date"], long_session["date_en"], long_session["weekday_en"],
                           long_session["sport"]), ("2026-03-07", "7 Mar", "Saturday", "bike"))
@@ -875,8 +916,8 @@ class EndToEnd(unittest.TestCase):
 
     def test_activity_list_failure_leaves_completion_missing(self):
         status = build(FakeClient(fail={"connectapi": RuntimeError("API Error 500 - boom")}))
-        self.assertEqual(status["plan"], {"scheduled": 8, "completed": None, "on_planned_day": None, "moved": None,
-                                          "upcoming": 0, "linked": 5, "completion_pct": None})
+        self.assertEqual(status["plan"], {"scheduled": 8, "due": 8, "completed": None, "on_planned_day": None, "moved": None,
+                                          "upcoming": 0, "done_early": 0, "linked": 5, "completion_pct": None})
         for key in ("volume", "plan.completed", "plan.on_planned_day", "plan.moved", "plan.completion_pct",
                     "long_session"):
             self.assertIn(key, status["missing"])
@@ -1404,7 +1445,8 @@ WEEKLY_SECTION_KEYS = {
                "change_pct"},
     "load": {"acute", "chronic", "acwr", "acwr_status", "acwr_status_en", "chronic_7d_ago", "chronic_change",
              "optimal_min", "optimal_max"},
-    "plan": {"scheduled", "completed", "on_planned_day", "moved", "upcoming", "linked", "completion_pct"},
+    "plan": {"scheduled", "due", "completed", "on_planned_day", "moved", "upcoming", "done_early", "linked",
+             "completion_pct"},
     "long_session": {"date", "date_en", "weekday_en", "sport", "type", "name", "minutes", "hhmm", "decoupling_pct",
                      "interpretation", "interpretation_code", "basis", "source", "steady"},
     "fitness": {"vo2max_run", "vo2max_bike", "training_status", "training_status_en", "training_balance",
@@ -1418,7 +1460,7 @@ SOURCE_KEYS = {"ok", "fetched_at", "ms"}  # plus "error" when ok is false
 class PublicApi(unittest.TestCase):
     def assert_shape(self, status):
         self.assertEqual(set(status), WEEKLY_KEYS)
-        self.assertEqual(status["rules_version"], 2)
+        self.assertEqual(status["rules_version"], 3)
         for section, keys in WEEKLY_SECTION_KEYS.items():
             if status[section] is not None:
                 self.assertEqual(set(status[section]), keys, section)
@@ -1428,7 +1470,7 @@ class PublicApi(unittest.TestCase):
             self.assertEqual(set(meta), SOURCE_KEYS if meta["ok"] else SOURCE_KEYS | {"error"}, name)
 
     def test_weekly_key_sets(self):
-        self.assertEqual(ws.RULES_VERSION, 2)
+        self.assertEqual(ws.RULES_VERSION, 3)
         status = build()
         self.assert_shape(status)
         self.assertTrue(status["gear"])
@@ -1708,6 +1750,157 @@ class Upstream(unittest.TestCase):
         self.assertTrue(ts["other_device"])
         self.assertIsNone(ts["acute"])
         self.assertEqual(ts["training_status"], "PRODUCTIVE_2")
+
+
+# --- training plan counts (PLAN_TRACKING=on) ------------------------------------
+
+COUNTS = {"planned": 5, "done": 3, "partial": 1, "missed": 1, "replaced": 0, "moved": 1, "open": 0, "x": 9}
+
+
+def fake_tracking(store="store", counts=COUNTS, raise_in=None, gate=None, account="fp-1"):
+    """A stand-in for plan_tracking (the lead's module): records its calls."""
+    import types
+
+    mod = types.ModuleType("plan_tracking")
+    mod.calls = []
+
+    def step(name, *args):
+        mod.calls.append((name,) + args)
+        if gate is not None and name == "week_counts":
+            gate.wait(5)   # a stuck database until the test releases it
+        if raise_in == name:
+            raise RuntimeError("db down: secret row value")
+
+    def configured_store():
+        step("configured_store")
+        return store
+
+    def account_fp(st, pid):
+        step("account_fp", st, pid)
+        return account
+
+    def week_counts(st, fp, week_start, *, state="unset"):
+        step("week_counts", st, fp, week_start)
+        assert state == "state-1", state   # the lookup hands refresh_links' state over
+        return copy.deepcopy(counts)
+
+    def refresh_links(st, fp, day, activities, scheduled, *, first=None, last=None, tz=None, today=None, cut=False):
+        step("refresh_links", st, fp, day, first, last, today)
+        mod.refresh_args = {"activities": activities, "scheduled": scheduled, "tz": tz, "cut": cut}
+        return "state-1"
+
+    for fn in (configured_store, account_fp, week_counts, refresh_links):
+        setattr(mod, fn.__name__, fn)
+    return mod
+
+
+def join_plan_threads(gate):
+    """Release a held fake lookup and wait for the plan-status threads (the CI isolation check)."""
+    gate.set()
+    for thread in threading.enumerate():
+        if thread.name == "plan-status":
+            thread.join(5)
+
+
+class TrainingPlanCounts(unittest.TestCase):
+    def setUp(self):
+        import daily_status as ds
+
+        self.ds = ds
+        self._log = (ds.log.handlers[:], ds.log.propagate)
+        ds.log.handlers, ds.log.propagate = [logging.NullHandler()], False
+
+    def tearDown(self):
+        join_plan_threads(threading.Event())   # a finished lookup's thread may still be ending
+        self.ds.log.handlers, self.ds.log.propagate = self._log
+
+    def build_with(self, module, **kw):
+        with mock.patch.dict("sys.modules", {"plan_tracking": module}):
+            return build(**kw)
+
+    def without_plans(self, **kw):
+        async def nothing(*a, **k):
+            return False, None
+
+        with mock.patch.object(ws, "plan_counts", nothing):
+            return build(**kw)
+
+    @staticmethod
+    def stable(status):
+        status = dict(status)
+        status.pop("sources", None)   # call timings
+        return sc.compact_json(status)
+
+    def test_switch_off_is_byte_identical(self):
+        golden = self.stable(self.without_plans(text_format="markdown"))
+        for module in (None, fake_tracking(store=None), fake_tracking(raise_in="configured_store")):
+            out = self.build_with(module, text_format="markdown")
+            self.assertEqual(self.stable(out), golden)
+            self.assertNotIn("training_plan", out)
+
+    def test_counts_with_the_switch_on(self):
+        mod = fake_tracking()
+        out = self.build_with(mod, text_format="markdown")
+        self.assertEqual(out["training_plan"], {k: v for k, v in COUNTS.items() if k != "x"})
+        keys = list(out)
+        self.assertEqual(keys.index("training_plan"), keys.index("plan") + 1)
+        self.assertEqual([c[0] for c in mod.calls], ["configured_store", "account_fp", "refresh_links", "week_counts"])
+        self.assertEqual(mod.calls[1][2], "71000001")
+        # The links are refreshed from the 14 days (end - 13 .. end) first, "today" the report's own date.
+        self.assertEqual(mod.calls[2][3:], (dt.date(2026, 3, 7), dt.date(2026, 2, 22), dt.date(2026, 3, 7),
+                                            NOW.date()))
+        self.assertTrue(mod.refresh_args["activities"])
+        self.assertFalse(mod.refresh_args["cut"])
+        self.assertEqual(str(mod.refresh_args["tz"]), TZ_NAME)
+        self.assertEqual(mod.calls[3][3], dt.date(2026, 3, 1))
+        self.assertIn("Training plan: 3 of 5 sessions done, 1 partly done, 1 moved, 1 missed", out["text"])
+        base = self.without_plans()
+        for key in ("level", "flags", "missing", "plan", "rules_version"):
+            self.assertEqual(out[key], base[key])
+
+    def test_no_plan_week_is_null(self):
+        out = self.build_with(fake_tracking(counts=None), text_format="markdown")
+        self.assertIsNone(out["training_plan"])
+        self.assertNotIn("Training plan:", out["text"])
+
+    def test_failures_and_slowness_leave_it_out(self):
+        golden = self.stable(self.without_plans())
+        for name in ("account_fp", "week_counts"):
+            with self.subTest(name=name), self.assertLogs(self.ds.log, "WARNING") as logs:
+                out = self.build_with(fake_tracking(raise_in=name))
+            self.assertEqual(self.stable(out), golden)
+            self.assertNotIn("secret", "\n".join(logs.output))
+        self.assertEqual(self.stable(self.build_with(fake_tracking(account=""))), golden)
+        gate = threading.Event()
+        self.addCleanup(join_plan_threads, gate)
+        with mock.patch.object(ws, "PLAN_TIMEOUT_S", 0.05), self.assertLogs(self.ds.log, "WARNING"):
+            out = self.build_with(fake_tracking(gate=gate))
+        self.assertNotIn("training_plan", out)
+        join_plan_threads(gate)
+
+    def test_key_mode_never_looks(self):
+        mod = fake_tracking()
+        self.build_with(mod, key_mode=True)
+        self.assertEqual(mod.calls, [])
+
+    def test_week_profile_id(self):
+        start, end = dt.date(2026, 3, 1), dt.date(2026, 3, 7)
+        self.assertIsNone(ws.week_profile_id({}, start, end))
+        sleep = {"dailySleepDTO": {"userProfilePK": 42}}
+        self.assertEqual(ws.week_profile_id({"sleep@2026-03-03": sleep}, start, end), "42")
+        # No HRV and no sleep: the last used device's profile number, else an activity's owner.
+        device = {"userProfileNumber": 43}
+        acts = {"activityList": [{"activityId": 1}, {"activityId": 2, "ownerId": 44}]}
+        self.assertEqual(ws.week_profile_id({"device_last_used": device, "activities": acts}, start, end), "43")
+        self.assertEqual(ws.week_profile_id({"device_last_used": {"userProfileNumber": "x"}, "activities": acts},
+                                            start, end), "44")
+        self.assertEqual(ws.week_profile_id({"activities": [{"ownerId": 45}]}, start, end), "45")
+        self.assertEqual(ws.week_profile_id({"sleep@2026-03-03": sleep, "device_last_used": device}, start, end),
+                         "42")
+        mod = fake_tracking()
+        with mock.patch.dict("sys.modules", {"plan_tracking": mod}):
+            self.assertEqual(asyncio.run(ws.plan_counts({}, start, end)), (False, None))
+        self.assertEqual([c[0] for c in mod.calls], ["configured_store"])
 
 
 if __name__ == "__main__":

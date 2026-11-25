@@ -100,12 +100,21 @@ SCHEMA = (
   expires_at    REAL NOT NULL,
   used_at       REAL,
   parent_hash   TEXT)""",
+    # The owner's explicit plan:write consent (the ticked consent-page box): one row per code ("code:<hash>") and
+    # per grant ("grant:<id>"). A plan:write in a scopes column without its row is not honoured (get_code,
+    # get_token, exchange_code and rotate_refresh drop it), so grants an older page minted with a requested
+    # plan:write never write. An additive table: schema version 1 is unchanged and older servers ignore it.
+    """CREATE TABLE IF NOT EXISTS write_consent (
+  consent_id TEXT PRIMARY KEY,
+  created_at REAL NOT NULL)""",
     "CREATE INDEX IF NOT EXISTS tokens_by_grant   ON tokens(grant_id)",
     "CREATE INDEX IF NOT EXISTS tokens_by_parent  ON tokens(parent_hash)",
     "CREATE INDEX IF NOT EXISTS codes_by_client   ON codes(client_id)",
     "CREATE INDEX IF NOT EXISTS pending_by_client ON pending(client_id)",
     "CREATE INDEX IF NOT EXISTS grants_by_client  ON grants(client_id)",
 )
+
+WRITE_SCOPE = "plan:write"   # plan_confirm.WRITE_SCOPE (not imported: this module stays standard library only)
 
 # Revocation reasons (grants.revoked_reason).
 REASON_REFRESH_REUSE = "refresh token reuse"
@@ -241,6 +250,17 @@ def _row(row: Optional[sqlite3.Row]) -> Optional[Dict]:
     return None if row is None else dict(row)
 
 
+def _consented(db: sqlite3.Connection, scopes: str, consent_id: Optional[str]) -> str:
+    """`scopes` without plan:write unless the write_consent row `consent_id` exists."""
+    words = (scopes or "").split()
+    if WRITE_SCOPE not in words:
+        return scopes
+    if consent_id is not None and db.execute("SELECT 1 FROM write_consent WHERE consent_id = ?",
+                                             (consent_id,)).fetchone() is not None:
+        return scopes
+    return " ".join(w for w in words if w != WRITE_SCOPE)
+
+
 class AuthStore:
     """The sign-in records. Every method is one transaction under one lock,
     so the provider can call it from the event loop or from any thread."""
@@ -342,6 +362,9 @@ class AuthStore:
         db.execute("DELETE FROM grants WHERE (revoked_at IS NOT NULL AND revoked_at <= ?) "
                    "OR (created_at <= ? AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.grant_id = grants.grant_id))",
                    (old_revoked, now - EMPTY_GRANT_KEEP))
+        db.execute("DELETE FROM write_consent WHERE (consent_id LIKE 'code:%' AND substr(consent_id, 6) NOT IN "
+                   "(SELECT code_hash FROM codes)) OR (consent_id LIKE 'grant:%' AND substr(consent_id, 7) NOT IN "
+                   "(SELECT grant_id FROM grants))")
         self._last_purge = now
 
     def counts(self) -> Tuple[int, int]:
@@ -534,9 +557,13 @@ class AuthStore:
                 db.execute("DELETE FROM pending WHERE pending_hash = ?", (pending_hash,))
             return failures, dict(row), deleted
 
-    def approve_pending(self, pending_hash: str, *, code_hash: str, code_ttl: float) -> Optional[Dict]:
+    def approve_pending(self, pending_hash: str, *, code_hash: str, code_ttl: float,
+                        scopes: Optional[str] = None, write_consent: bool = False) -> Optional[Dict]:
         """Take the consent request and store a code made from it, in one transaction.
-        Returns the request, or None if it was already taken or expired."""
+        The code gets `scopes` when given (what the owner approved on the consent page),
+        else the scopes the request asked for; its plan:write counts only with
+        write_consent (the owner ticked the box). Returns the request, or None if it was
+        already taken or expired."""
         with self._tx() as db:
             now = self.clock()
             row = db.execute("SELECT * FROM pending WHERE pending_hash = ? AND expires_at > ?",
@@ -550,14 +577,21 @@ class AuthStore:
                 "INSERT INTO codes (code_hash, client_id, redirect_uri, redirect_uri_explicit, code_challenge, "
                 "scopes, resource, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (code_hash, row["client_id"], row["redirect_uri"], row["redirect_uri_explicit"],
-                 row["code_challenge"], row["scopes"], row["resource"], now, now + code_ttl))
+                 row["code_challenge"], row["scopes"] if scopes is None else scopes, row["resource"], now,
+                 now + code_ttl))
+            if write_consent:
+                db.execute("INSERT OR REPLACE INTO write_consent (consent_id, created_at) VALUES (?, ?)",
+                           ("code:" + code_hash, now))
             return dict(row)
 
     # --- codes -------------------------------------------------------------------------
 
     def get_code(self, code_hash: str) -> Optional[Dict]:
         with self._read() as db:
-            return _row(db.execute("SELECT * FROM codes WHERE code_hash = ?", (code_hash,)).fetchone())
+            row = _row(db.execute("SELECT * FROM codes WHERE code_hash = ?", (code_hash,)).fetchone())
+            if row is not None:
+                row["scopes"] = _consented(db, row["scopes"], "code:" + code_hash)
+            return row
 
     def exchange_code(self, *, code_hash: str, client_id: str, grant_id: str, access_hash: str, refresh_hash: str,
                       access_ttl: float, refresh_ttl: float) -> Dict:
@@ -572,7 +606,12 @@ class AuthStore:
                 "UPDATE codes SET used_at = ?, grant_id = ? WHERE code_hash = ? AND client_id = ? "
                 "AND used_at IS NULL AND expires_at > ?", (now, grant_id, code_hash, client_id, now))
             if cur.rowcount == 1:
-                code = db.execute("SELECT scopes, resource FROM codes WHERE code_hash = ?", (code_hash,)).fetchone()
+                code = dict(db.execute("SELECT scopes, resource FROM codes WHERE code_hash = ?",
+                                       (code_hash,)).fetchone())
+                code["scopes"] = _consented(db, code["scopes"], "code:" + code_hash)
+                if WRITE_SCOPE in code["scopes"].split():
+                    db.execute("INSERT OR REPLACE INTO write_consent (consent_id, created_at) VALUES (?, ?)",
+                               ("grant:" + grant_id, now))
                 db.execute("INSERT INTO grants (grant_id, client_id, scopes, resource, created_at, last_used_at) "
                            "VALUES (?, ?, ?, ?, ?, ?)", (grant_id, client_id, code["scopes"], code["resource"], now, now))
                 self._insert_token(db, access_hash, "access", grant_id, client_id, code["scopes"], now, now + access_ttl)
@@ -607,7 +646,10 @@ class AuthStore:
                 "SELECT t.*, g.resource AS resource, g.revoked_at AS revoked_at FROM tokens t "
                 "JOIN grants g ON g.grant_id = t.grant_id WHERE t.token_hash = ? AND t.kind = ?",
                 (token_hash, kind)).fetchone()
-        return _row(row)
+            out = _row(row)
+            if out is not None:
+                out["scopes"] = _consented(db, out["scopes"], "grant:" + str(out["grant_id"]))
+        return out
 
     def rotate_refresh(self, *, old_hash: str, client_id: str, access_hash: str, refresh_hash: str,
                        access_scopes: str, access_ttl: float, refresh_ttl: float) -> Optional[Dict]:
@@ -633,7 +675,8 @@ class AuthStore:
                                now + refresh_ttl, parent_hash=old_hash)
             db.execute("UPDATE grants SET last_used_at = ? WHERE grant_id = ?", (now, old["grant_id"]))
             db.execute("UPDATE clients SET last_used_at = ? WHERE client_id = ?", (now, client_id))
-            return {"grant_id": old["grant_id"], "resource": old["resource"], "refresh_scopes": old["scopes"],
+            return {"grant_id": old["grant_id"], "resource": old["resource"],
+                    "refresh_scopes": _consented(db, old["scopes"], "grant:" + str(old["grant_id"])),
                     "access_expires_at": now + access_ttl, "refresh_expires_at": now + refresh_ttl}
 
     def refresh_unused(self, token_hash: str) -> bool:

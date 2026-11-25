@@ -195,6 +195,31 @@ class MatchCompletionShiftsProperties(unittest.TestCase):
         self.assertGreaterEqual(count(early + more_early, late + more_late), count(early, late))
 
     @settings(**PROPS)
+    @given(workouts, activities, windows, windows)
+    def test_same_day_first_among_the_largest_matchings(self, scheduled, acts, early, late):
+        # The gap profile (count, then how many at |gap| 0, 1, 2 ...) is the best any matching reaches.
+        allowed = edges(scheduled, acts, early, late)
+        widest = max(early, late)
+        free = [n for n, w in enumerate(scheduled) if w["activity_id"] is None]
+        best = None
+
+        def go(k, taken, gaps):
+            nonlocal best
+            if k == len(free):
+                profile = (len(gaps),) + tuple(gaps.count(g) for g in range(widest + 1))
+                best = profile if best is None or profile > best else best
+                return
+            for (m, i), g in allowed.items():
+                if m == free[k] and i not in taken:
+                    go(k + 1, taken | {i}, gaps + [g])
+            go(k + 1, taken, gaps)
+
+        go(0, frozenset(), [])
+        shifts = sc.match_completion_shifts(scheduled, acts, max_early_days=early, max_late_days=late)
+        got = [s for n, s in enumerate(shifts) if s is not None and n in free]
+        self.assertEqual((len(got),) + tuple(got.count(g) for g in range(widest + 1)), best)
+
+    @settings(**PROPS)
     @given(workouts, activities, windows, windows, st.randoms(use_true_random=False))
     def test_count_does_not_depend_on_activity_order(self, scheduled, acts, early, late, rnd):
         shuffled = list(acts)
@@ -210,6 +235,90 @@ class MatchCompletionShiftsProperties(unittest.TestCase):
     def test_inputs_are_not_changed(self, scheduled, acts, early, late):
         before = (repr(scheduled), repr(acts))
         sc.match_completion_shifts(scheduled, acts, max_early_days=early, max_late_days=late)
+        self.assertEqual((repr(scheduled), repr(acts)), before)
+
+
+# --- match_completion_pairs ------------------------------------------------------
+
+# Activities with a local start time on their date (sometimes none), for not_before.
+timed_activities = st.lists(st.fixed_dictionaries({
+    "date": st.integers(-3, 3).map(iso), "sport": st.sampled_from(SPORTS), "id": st.none() | st.integers(1, 8),
+    "hour": st.none() | st.integers(0, 23),
+}).map(lambda a: dict({k: v for k, v in a.items() if k != "hour"},
+                      **({"start": f"{a['date']} {a['hour']:02d}:15:00"} if a["hour"] is not None else {}))),
+    max_size=6)
+floors = st.none() | st.builds(lambda d, h: dt.datetime.combine(BASE + dt.timedelta(days=d), dt.time(h)),
+                               st.integers(-3, 3), st.integers(0, 23))
+
+
+def started(act):
+    """The activity's start as not_before reads it (its "start", else its date's midnight), or None."""
+    if act.get("start"):
+        return dt.datetime.fromisoformat(act["start"])
+    try:
+        return dt.datetime.combine(dt.date.fromisoformat(act["date"]), dt.time())
+    except (TypeError, ValueError):
+        return None
+
+
+@unittest.skipUnless(HAVE_HYPOTHESIS, NEEDS_HYPOTHESIS)
+class MatchCompletionPairsProperties(unittest.TestCase):
+
+    @settings(**PROPS)
+    @given(workouts, activities, windows, windows)
+    def test_shifts_are_the_pairs_made_absolute(self, scheduled, acts, early, late):
+        pairs = sc.match_completion_pairs(scheduled, acts, max_early_days=early, max_late_days=late)
+        shifts = sc.match_completion_shifts(scheduled, acts, max_early_days=early, max_late_days=late)
+        expected = [None if p is None else 0 if w["activity_id"] is not None else abs(p[1])
+                    for w, p in zip(scheduled, pairs)]
+        self.assertEqual(shifts, expected)
+
+    @settings(**PROPS)
+    @given(workouts, timed_activities, windows, windows, floors)
+    def test_each_pair_follows_the_rules(self, scheduled, acts, early, late, floor):
+        pairs = sc.match_completion_pairs(scheduled, acts, max_early_days=early, max_late_days=late,
+                                          not_before=floor)
+        self.assertEqual(len(pairs), len(scheduled))
+        linked = {w["activity_id"] for w in scheduled if w["activity_id"] is not None}
+        taken = []
+        for w, p in zip(scheduled, pairs):
+            if w["activity_id"] is not None:
+                self.assertIsNotNone(p)  # Garmin's link always counts, whatever the dates or not_before
+                index, _gap = p
+                if index is not None:
+                    self.assertEqual(acts[index]["id"], w["activity_id"])
+                continue
+            if p is None:
+                continue
+            index, gap = p
+            self.assertIsNotNone(index)
+            act = acts[index]
+            taken.append(index)
+            self.assertEqual(act["sport"], w["sport"])
+            self.assertIsNotNone(act["sport"])
+            self.assertEqual(gap, spec_gap(act["date"], w["date"]))
+            self.assertTrue(-early <= gap <= late, (gap, early, late))
+            self.assertFalse(act["id"] is not None and act["id"] in linked)  # a linked activity is not reused
+            if floor is not None and started(act) is not None:
+                self.assertGreaterEqual(started(act), floor)  # never one that started before not_before
+        self.assertEqual(len(taken), len(set(taken)))  # one workout per activity
+
+    @settings(**PROPS)
+    @given(workouts, timed_activities, windows, windows, floors)
+    def test_not_before_equals_dropping_the_earlier_activities(self, scheduled, acts, early, late, floor):
+        # Counting with not_before is counting over the activities that started at or after it (links aside).
+        def count(a, nb):
+            return sum(p is not None for w, p in zip(scheduled, sc.match_completion_pairs(
+                scheduled, a, max_early_days=early, max_late_days=late, not_before=nb)) if w["activity_id"] is None)
+
+        kept = [a for a in acts if floor is None or started(a) is None or started(a) >= floor]
+        self.assertEqual(count(acts, floor), count(kept, None))
+
+    @settings(**PROPS)
+    @given(workouts, timed_activities, windows, windows, floors)
+    def test_inputs_are_not_changed(self, scheduled, acts, early, late, floor):
+        before = (repr(scheduled), repr(acts))
+        sc.match_completion_pairs(scheduled, acts, max_early_days=early, max_late_days=late, not_before=floor)
         self.assertEqual((repr(scheduled), repr(acts)), before)
 
 

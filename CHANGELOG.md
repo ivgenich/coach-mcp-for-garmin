@@ -8,6 +8,90 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+### Added
+
+- Training plans, off by default (`PLAN_TOOLS=on`, which needs `HISTORY_SEARCH=on` and
+  `GARMIN_AUTH=full`; [docs/training-plan.md](docs/training-plan.md)): the read tools
+  `plan_assess`, `plan_preview` and `plan_get`. A marathon or half-marathon plan from your own
+  Garmin numbers by fixed, versioned rules (plan rules v2: v1's weekly-km, long-run, quality and
+  taper rules plus a planned all-sport acute:chronic cap of 1.3 from the recorded training load),
+  checked by invariants, with B races, what-if variants, overrides that only move or reduce load,
+  and optional per-segment race pacing from a saved course (`course_id`). Previews are stored as
+  drafts in Postgres (migration 003); `plan_get` shows only the plans of the account the history
+  index belongs to. An active plan becomes `finished` the day after its A race; retention drops
+  untouched drafts after 30 days and ended plans 392 days after they ended. With this switch alone
+  nothing is written to Garmin.
+- Garmin writes for plans, off by default (`PLAN_WRITES=on`, which needs `PLAN_TOOLS=on`):
+  `plan_commit` writes an approved preview's next days (`commit_days` 1 to 21, default 7) to the
+  Garmin calendar and replaces the plan's own days whose workout changed; `plan_cancel` deletes the
+  plan's own future workouts not linked to an activity and cancels the plan. Each runs on a
+  single-use, resumable token from the preview (stored as SHA-256 only), needs a sign-in with the
+  `plan:write` consent (never the static bearer), and asks the user to confirm through MCP
+  elicitation where the connection supports it. Writes run one at a time (at most 8 per call);
+  answers are `done`, `partial` (with `retry_after_s`, 900 after a 429; also when Garmin refused an
+  upload or schedule, listed in `failed[]`), `unknown` (settled from Garmin before anything is sent
+  again, so a retry never makes a second copy), `refused` or `declined`. Only the plan's own
+  workouts are touched (a per-install marker; the database is the authority), and a session Garmin
+  linked to an activity is never deleted or written again. `python ext/launch.py --plan-cleanup
+  [--dry-run] [--orphans]` deletes this install's own future workouts, also with writes off;
+  `HISTORY_FORGET=yes` is refused while such workouts remain.
+- Every Garmin request passes a method allowlist (`garmin_paths.check_garmin_request`, in the path
+  guard and the tracing hook): GET, one anonymous GraphQL read query (comments end at a carriage
+  return or a line feed; no `data` or `files` body beside the checked `json`), and only with
+  `PLAN_WRITES=on` the four workout-service paths the plan writes use.
+- Plan tracking, off by default (`PLAN_TRACKING=on`, which needs `PLAN_TOOLS=on`): finished
+  activities are linked to the plan's sessions without any Garmin write, refreshed by the status
+  tools and shown by `plan_get`; `log_feedback` stores RPE, pain and a fixed pain location in the
+  app's own database only; `plan_review_week` reviews a week by plan review rules v1 and proposes
+  changes that only hold or reduce load, which `plan_preview` (`accept_changes`) applies to the
+  stored plan and, with `PLAN_WRITES=on` too, `plan_apply_changes` writes to Garmin with an apply
+  token. The server instructions name the tools that change data when these switches are on; with
+  every switch off the tools, annotations, instructions and reports are unchanged.
+- Plan rules v2, B races: a long run 5 to 13 days before a B race and the first one after it are
+  held at 0.70 x the peak long run (0.60 after a full-distance triathlon, whose first long run waits
+  10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`).
+
+### Changed
+
+- History search keeps its own rules version, bumped only when the numbers it stores change
+  (a test pins them), so weekly rules v3 does not rebuild or re-embed the history index.
+- `launch.py` keeps this repo's read tools (`OWN_READ_TOOLS`) apart from the later write tools
+  (`OWN_WRITE_TOOLS`): only the read tools are labelled read-only. The default tool list is
+  unchanged.
+- The history worker's daily `sweep` also applies the plans' retention.
+
+### Fixed
+
+- Weekly status: plan completion counts only the workouts already due. `completion_pct` is
+  completed of due (it was completed of scheduled, so a week in progress read low in the text),
+  and a workout still ahead that Garmin already linked counts in the new `plan.done_early`
+  instead of `completed`, so the share never passes 100%. New `plan.due`. Workouts and
+  activities use the same week edges: an activity counts only from the week's first day at
+  00:00 up to the end of the week or today. Weekly rules version 3 (old: `completion_pct` =
+  completed / scheduled, a linked future workout in `completed`; new: completed / due, that
+  workout in `done_early`). The tool description and the docs no longer say "any day of the
+  week".
+- Activity times: one parser for Garmin's start times in both status tools. Without
+  `startTimeLocal`, the daily status now dates an activity by the day it asked Garmin for
+  (it dropped such an activity from plan completion), and the weekly status reads
+  `startTimeGMT` in `REPORT_TZ` as before.
+- Daily status: a swim workout's distance steps are read in meters in every pool, a yard pool
+  too, for its distance and the hard-work total. Verified (spike S0.3): Garmin stores a yard
+  pool's step distance in meters, and the steps add up to the workout's
+  `estimatedDistanceInMeters`.
+- Plan completion matching (`status_common.match_completion_pairs`, weekly status and plan
+  tracking): among the matchings that complete the most workouts it now picks the one with the
+  most same-day matches (then 1 day away, ...); the augmenting step could move a workout off its
+  own day's activity. Part of weekly rules version 3.
+- Plan tracking: exactly 80% of the planned distance or time is `done`, and other sports adding
+  up to exactly 80% replace a session (the floating-point bound made them `partial` / `missed`);
+  an activity listed twice completes one session only; with two sessions on one day, a run too
+  short for one swaps with the other's run when each fits the other.
+- Plan tracking in the weekly status: a failed activity search settles nothing as missed, and a
+  full page of 100 activities settles nothing before the day after its oldest activity.
+- Plan tracking in the daily status: an activity with only a GMT start time is dated by the day
+  Garmin listed it under, as the rest of the daily report dates it.
+
 ## [1.0.5] - 2026-11-25
 
 ### Security

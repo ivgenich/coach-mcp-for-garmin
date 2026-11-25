@@ -283,6 +283,57 @@ class History(unittest.TestCase):
         self.assertEqual(fc.problems(env), [fc.ERR_T2, fc.ERR_H4, fc.ERR_H6, fc.ERR_H2, fc.ERR_H8])
 
 
+class Plans(unittest.TestCase):
+    def test_off_by_default(self):
+        cfg = fc.load(history_env())
+        self.assertFalse(cfg.plan_tools or cfg.plan_writes)
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="off", PLAN_WRITES="off")), [])
+
+    def test_on_with_history_in_full_mode(self):
+        env = history_env(PLAN_TOOLS="on")
+        self.assertEqual(fc.problems(env), [])
+        cfg = fc.load(env)
+        self.assertTrue(cfg.plan_tools)
+        self.assertFalse(cfg.plan_writes)
+        self.assertEqual(cfg.summary(), "history search on, plan tools on")
+        self.assertEqual(cfg.notes, ())
+
+    def test_writes_need_plan_tools(self):
+        cfg = fc.load(history_env(PLAN_TOOLS="on", PLAN_WRITES="on"))
+        self.assertTrue(cfg.plan_writes)
+        self.assertIn(fc.NOTE_PLAN_WRITES, cfg.notes)
+        self.assertEqual(cfg.summary(), "history search on, plan tools on, plan writes on")
+        self.assertEqual(fc.problems(history_env(PLAN_WRITES="on")), [fc.ERR_P5])
+        self.assertFalse(fc.load(history_env(PLAN_WRITES="on")).plan_writes)
+
+    def test_tracking_needs_plan_tools(self):
+        self.assertFalse(fc.load(history_env(PLAN_TOOLS="on")).plan_tracking)
+        cfg = fc.load(history_env(PLAN_TOOLS="on", PLAN_TRACKING="on"))
+        self.assertTrue(cfg.plan_tracking)
+        self.assertEqual(cfg.summary(), "history search on, plan tools on, plan tracking on")
+        self.assertEqual(fc.problems(history_env(PLAN_TRACKING="on")), [fc.ERR_P_TRACKING_NEEDS])
+        self.assertFalse(fc.load(history_env(PLAN_TRACKING="on")).plan_tracking)
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="on", PLAN_TRACKING="TEST-ONLY")),
+                         [fc.ERR_P_TRACKING_VALUE])
+        self.assertFalse(fc.load(history_env(PLAN_TOOLS="on", PLAN_TRACKING="on", GARMIN_AUTH="key")).plan_tracking)
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="off", PLAN_TRACKING="off")), [])
+
+    def test_rules(self):
+        self.assertEqual(fc.problems({**FULL, "PLAN_TOOLS": "yes"}), [fc.ERR_P1])
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="on", PLAN_WRITES="1")), [fc.ERR_P2])
+        self.assertEqual(fc.problems({**FULL, "PLAN_TOOLS": "on"}), [fc.ERR_P3])
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="on", GARMIN_AUTH="key")), [fc.ERR_P4])
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="on", ROLE="worker")), [fc.ERR_P6])
+        self.assertEqual(fc.problems(history_env(PLAN_TOOLS="on", ROLE="enqueue")), [fc.ERR_P6])
+        for env in ({**FULL, "PLAN_TOOLS": "on"}, history_env(PLAN_TOOLS="on", GARMIN_AUTH="key"),
+                    history_env(PLAN_TOOLS="on", ROLE="worker")):
+            self.assertFalse(fc.load(env).plan_tools)
+
+    def test_lines_never_hold_values(self):
+        for line in fc.problems({**FULL, "PLAN_TOOLS": "TEST-ONLY-secret", "PLAN_WRITES": "TEST-ONLY-x"}):
+            self.assertNotIn("TEST-ONLY", line)
+
+
 class Secrets(unittest.TestCase):
     def test_secret_values_cover_each_form(self):
         password = "TEST-ONLY-pw%2F" + secrets.token_urlsafe(8)

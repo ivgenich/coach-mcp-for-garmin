@@ -203,12 +203,18 @@ class UpstreamCase(unittest.TestCase):
         self.upstream_read_only = tool_annotations.READ_ONLY_TOOLS
         self.upstream_additive = tool_annotations.ADDITIVE_TOOLS
         # launch.gate() replaces garmin_mcp.FastMCP.
+        # All five annotation sets: patch() merges the plan write tools (PLAN_WRITES=on) and log_feedback
+        # (PLAN_TRACKING=on) into upstream's effect sets.
         saved = (courses.register_tools, courses.garmin_client,
-                 tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS, garmin_mcp.FastMCP)
+                 tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS, garmin_mcp.FastMCP,
+                 tool_annotations.DESTRUCTIVE_TOOLS, tool_annotations.IDEMPOTENT_TOOLS,
+                 tool_annotations.LOCAL_ONLY_TOOLS)
 
         def restore():
             (courses.register_tools, courses.garmin_client,
-             tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS, garmin_mcp.FastMCP) = saved
+             tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS, garmin_mcp.FastMCP,
+             tool_annotations.DESTRUCTIVE_TOOLS, tool_annotations.IDEMPOTENT_TOOLS,
+             tool_annotations.LOCAL_ONLY_TOOLS) = saved
 
         self.addCleanup(restore)
         self.addCleanup(mcp2_compat.set_server_overrides)  # launch.main() sets the server name

@@ -51,8 +51,10 @@ shows why.
 ## Security
 
 The owner secret gives full access to this server: whoever has it can approve a sign-in
-and read all your Garmin data through the read-only tools it exposes (see [Tools](tools.md)). So
-can the optional static token, without any sign-in page. Keep both in a password manager,
+and read all your Garmin data through the read-only tools it exposes (see [Tools](tools.md)), and
+with training-plan writes on (`PLAN_WRITES=on`) also approve the writes, which add and delete the
+plan's own workouts. So can the optional static token, without any sign-in page (it never gets
+the write tools). Keep both in a password manager,
 and approve only a sign-in you started yourself just now. The Garmin tokens on
 `/data/tokens` are more powerful: they give full access to your Garmin account, so anyone
 who can read the volume (for example through your Railway account, or on your own

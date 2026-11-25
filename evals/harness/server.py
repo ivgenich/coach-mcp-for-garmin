@@ -11,7 +11,9 @@ Patched for the life of the server, in the harness only:
 - status_common.now_local / today_local: the frozen clock (the status tools' "today", the bad-input date hint);
 - status_common._utc_stamp / weekly_status._utc_stamp: the frozen clock in UTC (sources' fetched_at);
 - tool_errors.new_ref: FIXED_REF, so an internal error always reads "(ref 0badc0de)";
-- with history other than "off": the history tools over an in-memory fixture (evals/harness/history.py).
+- with history other than "off": the history tools over an in-memory fixture (evals/harness/history.py);
+- with writes other than "off": Stage 2's real plan_commit and plan_cancel, as PLAN_WRITES=on serves them
+  (evals/harness/plans.py: the scope and confirmation stand-ins, the "committed" seed).
 One server per process at a time (upstream's client is a module global).
 """
 
@@ -35,6 +37,7 @@ from zoneinfo import ZoneInfo
 
 from . import fake_garmin
 from . import history as history_fixture
+from . import plans as plan_fixture
 from .state import empty_state
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -145,8 +148,10 @@ class _Records(logging.Handler):
 class Server:
     """A running eval server (start_server() yields it)."""
 
-    def __init__(self, mcp_server, loop, log, records, mode, now, tz, timeout):
+    def __init__(self, mcp_server, loop, log, records, mode, now, tz, timeout, elicit=None):
         self._server = mcp_server
+        self._elicit = elicit
+        self.elicitations = []   # the confirmation forms the server asked the client (their messages)
         self._loop = loop
         self._log = log
         self._records = records
@@ -159,18 +164,32 @@ class Server:
     async def _discover(self):
         from mcp.client import Client
 
-        async with Client(self._server, mode="auto") as client:
+        async with Client(self._server, mode="auto") as client:   # the 2026 discover result names the instructions
             instructions = client.session.discover_result.instructions or ""
             listed = await client.list_tools()
         tools = [{"name": t.name, "description": t.description or "", "input_schema": t.input_schema}
                  for t in listed.tools]
         return tools, instructions
 
-    async def _call(self, name, args):
+    def _client(self):
+        """The in-memory MCP client; with an elicitation callback ("declined") it declares form elicitation and
+        connects with the initialize handshake (mode="legacy"), whose session carries server-to-client requests
+        (the 2026 protocol has no such channel: plan_confirm then answers "unsupported")."""
         from mcp.client import Client
+
+        if self._elicit is None:
+            return Client(self._server, mode="auto")
+
+        async def elicit(context, params):
+            self.elicitations.append(getattr(params, "message", ""))
+            return await self._elicit(context, params)
+
+        return Client(self._server, mode="legacy", elicitation_callback=elicit)
+
+    async def _call(self, name, args):
         from mcp.shared.exceptions import MCPError
 
-        async with Client(self._server, mode="auto") as client:
+        async with self._client() as client:
             try:
                 return await client.call_tool(name, args)
             except MCPError as exc:
@@ -216,27 +235,39 @@ class Server:
 
 
 @contextlib.contextmanager
-def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S, history="off"):
+def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S, history="off", plan="off", writes="off"):
     """Run the server in `mode` ("full" or "key") over the fake Garmin `state` (load_state()'s result, or None
     for no data), with the clock frozen at `now` ("2026-03-18T06:30", local time) in zone `tz` (also the
     server's REPORT_TZ). history: a fixture of evals/harness/history.py ("athlete", "partial", "two_weeks",
     "mismatch") adds find_similar_weeks and search_history over it; "off" (the default) leaves them out.
+    plan: "memory" adds plan_assess, plan_preview and plan_get over an in-memory plan store (full mode only);
+    "tracked" also turns PLAN_TRACKING on (log_feedback, plan_review_week, the plan in the status reports) over
+    plans.TRACKED_PLAN; "reviewed" the same over plans.REVIEWED_PLAN with feedback stored (the weekly review).
+    writes (needs plan="memory"): "on", "declined" or "committed" serves the real plan_commit and plan_cancel
+    as PLAN_WRITES=on does (plans.py: "declined" declines every confirmation form, "committed" has the next 7 days
+    of the Tel Aviv plan on Garmin before the first call).
     Yields a Server: .tools, .instructions, .call(name, args), .calls."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     if history not in history_fixture.FIXTURES:
         raise ValueError(f"history must be one of {history_fixture.FIXTURES}, got {history!r}")
+    if plan not in plan_fixture.FIXTURES or (plan != "off" and mode != "full"):
+        raise ValueError(f"plan must be one of {plan_fixture.FIXTURES} (memory in full mode only), got {plan!r}")
+    if writes not in plan_fixture.WRITES_FIXTURES or (writes != "off" and plan != "memory"):
+        raise ValueError(f"writes must be one of {plan_fixture.WRITES_FIXTURES} (not off only with "
+                         f"plan='memory'), got {writes!r}")
     moment = frozen_now(now, tz)
     if not _ONE_SERVER.acquire(blocking=False):
         raise RuntimeError("an eval server is already running in this process (one at a time)")
     try:
         with contextlib.ExitStack() as stack:
-            yield _start(stack, mode, state if state is not None else empty_state(), moment, tz, timeout, history)
+            yield _start(stack, mode, state if state is not None else empty_state(), moment, tz, timeout, history,
+                         plan, writes)
     finally:
         _ONE_SERVER.release()
 
 
-def _start(stack, mode, state, moment, tz, timeout, history="off"):
+def _start(stack, mode, state, moment, tz, timeout, history="off", plan="off", writes="off"):
     ext = ext_modules()
     import garmin_mcp
     from garmin_mcp import courses, tool_annotations
@@ -266,15 +297,18 @@ def _start(stack, mode, state, moment, tz, timeout, history="off"):
     stack.enter_context(mock.patch.object(ext.tool_errors, "new_ref", lambda: FIXED_REF))
     if history != "off":
         history_fixture.install(stack, ext.launch, history, moment.date(), keyed)
+    store = plan_fixture.install(stack, ext.launch, writes, plan) if plan != "off" else None
 
     # Upstream's globals and launch's, restored when the server stops.
     saved = (courses.register_tools, tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS,
-             garmin_mcp.FastMCP, garmin_mcp.init_api)
+             tool_annotations.DESTRUCTIVE_TOOLS, tool_annotations.IDEMPOTENT_TOOLS, garmin_mcp.FastMCP,
+             garmin_mcp.init_api, tool_annotations.LOCAL_ONLY_TOOLS)
     clients = {name: getattr(getattr(garmin_mcp, name), "garmin_client", None) for name in UPSTREAM_MODULES}
 
     def restore():
         (courses.register_tools, tool_annotations.READ_ONLY_TOOLS, tool_annotations.ADDITIVE_TOOLS,
-         garmin_mcp.FastMCP, garmin_mcp.init_api) = saved
+         tool_annotations.DESTRUCTIVE_TOOLS, tool_annotations.IDEMPOTENT_TOOLS, garmin_mcp.FastMCP,
+         garmin_mcp.init_api, tool_annotations.LOCAL_ONLY_TOOLS) = saved
         for name, client in clients.items():
             getattr(garmin_mcp, name).garmin_client = client
         ext.launch._AUTH, ext.launch._KEY_MODE = None, False
@@ -312,7 +346,15 @@ def _start(stack, mode, state, moment, tz, timeout, history="off"):
                            f"{len(served)} server(s) built)")
     loop = _Loop()
     stack.callback(loop.close)
-    return Server(served[0], loop, log, records, mode, moment, tz, timeout)
+    srv = Server(served[0], loop, log, records, mode, moment, tz, timeout,
+                 elicit=plan_fixture.decline if writes == "declined" else None)
+    srv.plan_store = store   # the MemoryPlanStore of plan="memory" (tests move its clock), else None
+    if writes == "committed":
+        plan_fixture.seed(srv.call)
+        with log._lock:
+            del log.calls[:]
+        log.write_counts.clear()
+    return srv
 
 
 def _key_install(key_mode, state, log):

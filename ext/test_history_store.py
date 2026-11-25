@@ -273,7 +273,7 @@ class MemoryStore(StoreContract, unittest.TestCase):
 
     def test_migrate_once(self):
         s = hs.MemoryHistoryStore()
-        self.assertEqual(s.migrate(), [1, 2])
+        self.assertEqual(s.migrate(), [1, 2, 3])
         self.assertEqual(s.migrate(), [])
 
 

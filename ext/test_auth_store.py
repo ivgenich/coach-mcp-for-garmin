@@ -743,6 +743,63 @@ class Purge(StoreCase):
         self.assertEqual(self.sql("SELECT COUNT(*) FROM pending"), [(0,)])
 
 
+class WriteConsent(StoreCase):
+    """plan:write counts only with the owner's recorded consent (the ticked box), never from a scopes column."""
+
+    def grant(self, store, client_id, *, scopes, consent):
+        pending = self.add_pending(store, client_id, scopes=scopes)
+        code = fresh("ac")
+        store.approve_pending(hash_secret(pending), code_hash=hash_secret(code), code_ttl=300, scopes=scopes,
+                              write_consent=consent)
+        before = store.get_code(hash_secret(code))["scopes"]
+        access, refresh = hash_secret(fresh("at")), hash_secret(fresh("rt"))
+        result = store.exchange_code(code_hash=hash_secret(code), client_id=client_id, grant_id=secrets.token_hex(16),
+                                     access_hash=access, refresh_hash=refresh, access_ttl=3600, refresh_ttl=30 * DAY)
+        return before, result, access, refresh
+
+    def test_a_ticked_grant_keeps_plan_write_through_refresh(self):
+        store = self.open()
+        client_id = self.add_client(store)
+        code_scopes, result, access, refresh = self.grant(store, client_id, scopes="offline_access plan:write",
+                                                          consent=True)
+        self.assertEqual((code_scopes, result["scopes"]), ("offline_access plan:write",) * 2)
+        self.assertEqual(store.get_token(access, "access")["scopes"], "offline_access plan:write")
+        rotated, new_access, new_refresh = self.rotate(store, client_id, refresh, scopes="offline_access plan:write")
+        self.assertEqual(rotated["refresh_scopes"], "offline_access plan:write")
+        self.assertEqual(store.get_token(new_access, "access")["scopes"], "offline_access plan:write")
+        self.assertEqual(store.get_token(new_refresh, "refresh")["scopes"], "offline_access plan:write")
+
+    def test_an_older_grant_with_a_requested_plan_write_never_writes(self):
+        # The read-only page copied requested scopes onto codes: plan:write in the columns, no consent row.
+        store = self.open()
+        client_id = self.add_client(store)
+        code_scopes, result, access, refresh = self.grant(store, client_id, scopes="offline_access plan:write",
+                                                          consent=False)
+        self.assertEqual((code_scopes, result["scopes"]), ("offline_access",) * 2)
+        self.assertEqual(store.get_token(access, "access")["scopes"], "offline_access")
+        rotated, new_access, _ = self.rotate(store, client_id, refresh, scopes="offline_access plan:write")
+        self.assertEqual(rotated["refresh_scopes"], "offline_access")
+        # Even a token row that carries plan:write (written by an older server) reads without it.
+        self.write_sql("UPDATE tokens SET scopes = 'offline_access plan:write'")
+        self.assertEqual(store.get_token(new_access, "access")["scopes"], "offline_access")
+        self.assertEqual(self.sql("SELECT COUNT(*) FROM write_consent")[0][0], 0)
+
+    def test_consent_rows_go_with_their_code_or_grant(self):
+        store = self.open()
+        client_id = self.add_client(store)
+        self.grant(store, client_id, scopes="plan:write", consent=True)
+        self.assertEqual(self.sql("SELECT COUNT(*) FROM write_consent")[0][0], 2)
+        self.write_sql("DELETE FROM codes")
+        self.write_sql("DELETE FROM grants")
+        store.purge()
+        self.assertEqual(self.sql("SELECT COUNT(*) FROM write_consent")[0][0], 0)
+
+    def test_the_scope_name_is_plan_confirms(self):
+        import plan_confirm
+
+        self.assertEqual(auth_store.WRITE_SCOPE, plan_confirm.WRITE_SCOPE)
+
+
 class OwnerSecretFingerprint(StoreCase):
     def test_absent_equal_changed(self):
         secret = "TEST-ONLY-" + secrets.token_urlsafe(24)

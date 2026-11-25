@@ -45,6 +45,9 @@ in key mode (no training load with a Personal API key).
 
 ## What is stored
 
+The training plans (`PLAN_TOOLS=on`) keep their drafts in the same schema, in their own tables
+(migration 003); [Training plans](training-plan.md#what-is-stored) lists them.
+
 Everything lives in one Postgres schema, `history`, in the database `DATABASE_URL` names:
 
 | Table | What it holds |
@@ -89,7 +92,11 @@ first days of a break count as days with data; that only delays the stop, so it 
 - `HISTORY_FORGET=yes` on the app (and on the worker and the scheduler) drops the whole schema `history` at the next start: the
   days, weeks, documents and vectors, the job queue, the guard's row and the sealed token, then runs
   `VACUUM`. The history tools stay off while the flag is set; remove it afterwards
-  ([history-worker.md](history-worker.md#stopping-redeploying-forgetting)).
+  ([history-worker.md](history-worker.md#stopping-redeploying-forgetting)). The schema also holds the
+  training plans' records and the install tag that find their workouts on Garmin, so the forget is refused
+  (one ERROR line, nothing removed) while the plans still have workouts on Garmin from today on: run
+  `python ext/launch.py --plan-cleanup` first ([training-plan.md](training-plan.md)), then redeploy with
+  the flag still set.
 - Turning history search off (`HISTORY_SEARCH=off`) keeps the stored history, but the app deletes the
   sealed Garmin token row at its next start while `DATABASE_URL` is still set (an image built without
   `HISTORY=1` cannot reach the database and logs one line saying so). With history search on in key mode

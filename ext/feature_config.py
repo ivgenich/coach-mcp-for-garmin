@@ -19,10 +19,17 @@ server does.
                                  than yes is checked only with HISTORY_SEARCH=on)
     HISTORY_TOKEN_KEY            secret: 32 random bytes in base64; required with HISTORY_SEARCH=on in full mode
     WORKER_CONCURRENCY           1 (default) to 4: job threads in one worker
+    PLAN_TOOLS                   off (default) | on: the training-plan read tools (plan_assess, plan_preview,
+                                 plan_get); needs HISTORY_SEARCH=on and GARMIN_AUTH=full, ROLE=app only
+    PLAN_WRITES                  off (default) | on: needs PLAN_TOOLS=on; plan_commit and plan_cancel write the
+                                 plan's own workouts to Garmin (docs/training-plan.md)
+    PLAN_TRACKING                off (default) | on: needs PLAN_TOOLS=on; links finished activities to the plan's
+                                 sessions, adds the plan to get_daily_status / get_weekly_status and serves
+                                 log_feedback (writes only the app's own database, never Garmin)
 
 LANGFUSE_* variables are read by the eval runner only, never by the server.
 
-Every error line is a fixed text (the ERR_T* and ERR_H* constants): no line
+Every error line is a fixed text (the ERR_T*, ERR_H* and ERR_P* constants): no line
 ever holds a value, so a secret pasted into the wrong variable is never
 printed. secret_values() lists the secret values (and the forms a log line
 could carry them in) for tool_errors.register_secret().
@@ -48,6 +55,9 @@ CONCURRENCY_ENV = "WORKER_CONCURRENCY"
 OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
 OTLP_HEADERS_ENV = "OTEL_EXPORTER_OTLP_HEADERS"
 SDK_DISABLED_ENV = "OTEL_SDK_DISABLED"
+PLAN_TOOLS_ENV = "PLAN_TOOLS"
+PLAN_WRITES_ENV = "PLAN_WRITES"
+PLAN_TRACKING_ENV = "PLAN_TRACKING"
 
 ROLES = ("app", "worker", "enqueue")
 # Secrets: entrypoint.sh starts Caddy without them (env -u), and launch.py
@@ -106,6 +116,14 @@ ERR_H12 = ("HISTORY_TOKEN_KEY is not random (typed text, a repeated pattern or a
            "not shown): make a new one "
            "with: python3 -c \"import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())\"")
 # launch.check_config() adds these when the image lacks a turned-on feature's packages.
+ERR_P1 = "PLAN_TOOLS must be off or on (the default is off)"
+ERR_P2 = "PLAN_WRITES must be off or on (the default is off)"
+ERR_P3 = "PLAN_TOOLS=on needs HISTORY_SEARCH=on: the plans are kept in the history database"
+ERR_P4 = "PLAN_TOOLS=on needs GARMIN_AUTH=full: Garmin's Personal API key does not serve the plan's sources"
+ERR_P5 = "PLAN_WRITES=on needs PLAN_TOOLS=on"
+ERR_P_TRACKING_VALUE = "PLAN_TRACKING must be off or on (the default is off)"
+ERR_P_TRACKING_NEEDS = "PLAN_TRACKING=on needs PLAN_TOOLS=on"
+ERR_P6 = "PLAN_TOOLS and PLAN_WRITES are read by ROLE=app only: leave them unset on the worker and enqueue services"
 ERR_T7 = ("TRACING=on needs the OpenTelemetry SDK, which this image does not have: build the image from this "
           "repository's Dockerfile, which always installs config/requirements-telemetry.txt")
 ERR_H11 = ("HISTORY_SEARCH=on (or HISTORY_FORGET=yes) needs the history packages, which this image does not have: "
@@ -116,6 +134,8 @@ HISTORY_PACKAGES = ("psycopg", "langchain_postgres")
 # Information lines (launch.py logs them at startup; never errors).
 NOTE_SDK_DISABLED = "tracing: off, because OTEL_SDK_DISABLED=true"
 NOTE_TRACING_OFF_SETTINGS = "tracing: off; OTEL_EXPORTER_OTLP_* settings are set but not used"
+NOTE_PLAN_WRITES = ("training plans: PLAN_WRITES=on: plan_commit and plan_cancel may write the plan's own workouts "
+                    "to the Garmin calendar, only for callers whose sign-in carries the plan:write consent")
 NOTE_HISTORY_OFF_DATABASE = "history search: off; DATABASE_URL is set but only used to forget (HISTORY_FORGET=yes)"
 
 
@@ -134,6 +154,9 @@ class FeatureConfig:
     history_token_key_set: bool = False
     worker_concurrency: int = 1
     garmin_auth: str = "full"
+    plan_tools: bool = False
+    plan_writes: bool = False
+    plan_tracking: bool = False
     database_url: Optional[str] = field(default=None, repr=False, compare=False)
     otlp_headers: Optional[str] = field(default=None, repr=False, compare=False)
     history_token_key: Optional[bytes] = field(default=None, repr=False, compare=False)
@@ -154,6 +177,12 @@ class FeatureConfig:
             parts.append("history search on")
         if self.history_forget:
             parts.append("HISTORY_FORGET=yes")
+        if self.plan_tools:
+            parts.append("plan tools on")
+        if self.plan_writes:
+            parts.append("plan writes on")
+        if self.plan_tracking:
+            parts.append("plan tracking on")
         return ", ".join(parts)
 
 
@@ -371,6 +400,33 @@ def _parse(env: Mapping[str, str]) -> Tuple[FeatureConfig, List[str]]:
             errors.append(ERR_H9)
         concurrency = 1
 
+    plan_tools = _switch(env, PLAN_TOOLS_ENV)
+    if plan_tools is None:
+        errors.append(ERR_P1)
+        plan_tools = False
+    plan_writes = _switch(env, PLAN_WRITES_ENV)
+    if plan_writes is None:
+        errors.append(ERR_P2)
+        plan_writes = False
+    if (plan_tools or plan_writes) and role != "app":
+        errors.append(ERR_P6)
+    elif plan_tools:
+        if not history:
+            errors.append(ERR_P3)
+        if garmin_auth != "full":
+            errors.append(ERR_P4)
+    if plan_writes and not plan_tools:
+        errors.append(ERR_P5)
+    plan_tracking = _switch(env, PLAN_TRACKING_ENV)
+    if plan_tracking is None:
+        errors.append(ERR_P_TRACKING_VALUE)
+        plan_tracking = False
+    if plan_tracking and not plan_tools:
+        errors.append(ERR_P_TRACKING_NEEDS)
+    plan_ok = bool(plan_tools) and bool(history) and garmin_auth == "full" and role == "app"
+    if plan_ok and plan_writes:
+        notes.append(NOTE_PLAN_WRITES)
+
     effective_tracing = bool(tracing) and not sdk_disabled
     cfg = FeatureConfig(
         tracing=effective_tracing,
@@ -384,6 +440,9 @@ def _parse(env: Mapping[str, str]) -> Tuple[FeatureConfig, List[str]]:
         history_token_key_set=token_key is not None,
         worker_concurrency=concurrency,
         garmin_auth=garmin_auth,
+        plan_tools=plan_ok,
+        plan_writes=plan_ok and bool(plan_writes),
+        plan_tracking=plan_ok and bool(plan_tracking),
         database_url=db_url if db_ok else None,
         otlp_headers=headers.strip() or None,
         history_token_key=token_key,
@@ -393,7 +452,7 @@ def _parse(env: Mapping[str, str]) -> Tuple[FeatureConfig, List[str]]:
 
 
 def problems(env: Mapping[str, str]) -> List[str]:
-    """The ERR_T* and ERR_H* lines for this environment, in a fixed order; [] when the settings are valid."""
+    """The ERR_T*, ERR_H* and ERR_P* lines for this environment, in a fixed order; [] when the settings are valid."""
     try:
         return _parse(env)[1]
     except Exception as exc:  # noqa: BLE001 - one fixed line, never a value

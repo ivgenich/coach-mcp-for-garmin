@@ -224,6 +224,11 @@ def tool(name):
     return types.SimpleNamespace(name=name, annotations=types.SimpleNamespace(read_only_hint=True))
 
 
+def write_tool(name, destructive, idempotent=True, read_only=False):
+    return types.SimpleNamespace(name=name, annotations=types.SimpleNamespace(
+        read_only_hint=read_only, destructive_hint=destructive, idempotent_hint=idempotent))
+
+
 @needs_mcp
 class ProtocolFlags(unittest.TestCase):
     @classmethod
@@ -349,6 +354,95 @@ class ProtocolFlags(unittest.TestCase):
         self.assertFalse(got["tools/modern"][0])
         self.assertIn("not in the tools file: get_other", got["tools/modern"][1])
         self.assertIn("missing: get_stats", got["tools/modern"][1])
+
+    def write_check(self, tools, instructions=None, *argv):
+        if instructions is None:
+            sys.path.insert(0, os.path.join(ROOT, "ext"))
+            try:
+                import server_instructions
+            finally:
+                sys.path.remove(os.path.join(ROOT, "ext"))
+            instructions = server_instructions.INSTRUCTIONS_PLAN
+        args = self.args("--expect-resources", "", "--expect-version", "1.0.0",
+                         "--write-tools", "plan_cancel,plan_commit", *argv)
+        args.tool_names = {"get_daily_status", "get_stats", "plan_commit", "plan_cancel"}
+        args.expect_tools = 4
+        modern, legacy = self.eras()
+        for era in (modern, legacy):
+            era["tools"] = list(tools)
+            era["instructions"] = instructions
+        with redirect_stdout(io.StringIO()):
+            self.tp.check_eras(modern, legacy, args)
+        return {n: (ok, d) for n, ok, d in self.tp.results}
+
+    def test_write_tools_default_is_none_and_the_run_unchanged(self):
+        args = self.args()
+        self.assertEqual(args.write_tools, [])
+        self.assertEqual(args.tool_names, names_in(ENABLED_TOOLS))
+        self.assertEqual(args.expect_tools, len(names_in(ENABLED_TOOLS)))
+        got, _ = self.check("--expect-version", "1.0.0")
+        self.assertNotIn("write-tools/modern", got)
+        self.assertEqual(got["tools/modern"], (True, "2 tools (expected 2), all readOnlyHint=true; names equal "
+                                                     "the tools file's"))
+
+    def test_write_tools_join_the_file_names_and_count(self):
+        path = self.write("tools.txt", "get_stats\nplan_get\n")
+        args = self.args("--tools-file", path, "--write-tools", " plan_commit, plan_cancel,plan_commit ")
+        self.assertEqual(args.write_tools, ["plan_cancel", "plan_commit"])
+        self.assertEqual(args.tool_names, {"get_stats", "plan_get", "plan_commit", "plan_cancel"})
+        self.assertEqual(args.expect_tools, 4)
+        self.assertEqual(self.args("--tools-file", path, "--write-tools", "plan_commit",
+                                   "--expect-tools", "9").expect_tools, 9)
+
+    def test_write_tools_refuses_unknown_names_and_a_write_tool_call(self):
+        for argv in (("--write-tools", "delete_workout"), ("--write-tools", "plan_commit,get_stats"),
+                     ("--write-tools", "plan_commit", "--tool-call", "plan_commit")):
+            with self.subTest(argv=argv), redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                with open(os.devnull, "w") as null:
+                    old, sys.stderr = sys.stderr, null
+                    try:
+                        self.args(*argv)
+                    finally:
+                        sys.stderr = old
+            self.assertEqual(cm.exception.code, 2)
+
+    def test_write_tools_pass_with_their_hints(self):
+        got = self.write_check([tool("get_daily_status"), tool("get_stats"), write_tool("plan_commit", False),
+                                write_tool("plan_cancel", True)])
+        self.assertEqual(got["write-tools/modern"],
+                         (True, "2 write tool(s): plan_cancel, plan_commit; listed, readOnlyHint=false, hints of "
+                                "their kind"))
+        self.assertTrue(got["tools/modern"][0], got["tools/modern"])
+        self.assertIn("all but the write tools readOnlyHint=true", got["tools/modern"][1])
+        self.assertTrue(got["instructions/modern"][0])
+
+    def test_write_tools_fail_on_wrong_hints_or_a_missing_tool(self):
+        got = self.write_check([tool("get_daily_status"), tool("get_stats"),
+                                write_tool("plan_commit", True, idempotent=False),
+                                write_tool("plan_cancel", True, read_only=True)])
+        ok, detail = got["write-tools/legacy"]
+        self.assertFalse(ok)
+        self.assertIn("plan_commit: destructiveHint True (want false); idempotentHint False (want true)", detail)
+        self.assertIn("plan_cancel: readOnlyHint True (want false)", detail)
+        self.tp.results.clear()
+        got = self.write_check([tool("get_daily_status"), tool("get_stats"), write_tool("plan_commit", False)])
+        self.assertFalse(got["write-tools/modern"][0])
+        self.assertIn("not listed: plan_cancel", got["write-tools/modern"][1])
+        self.assertFalse(got["tools/modern"][0])
+
+    def test_a_read_tool_without_read_only_still_fails_with_write_tools(self):
+        loose = types.SimpleNamespace(name="get_stats", annotations=types.SimpleNamespace(read_only_hint=False))
+        got = self.write_check([tool("get_daily_status"), loose, write_tool("plan_commit", False),
+                                write_tool("plan_cancel", True)])
+        self.assertFalse(got["tools/modern"][0])
+        self.assertIn("without readOnlyHint=true: get_stats", got["tools/modern"][1])
+
+    def test_write_tools_need_instructions_without_the_read_only_sentence(self):
+        tools = [tool("get_daily_status"), tool("get_stats"), write_tool("plan_commit", False),
+                 write_tool("plan_cancel", True)]
+        got = self.write_check(tools, "Read-only access. No tool changes any data.")
+        self.assertFalse(got["instructions/modern"][0])
+        self.assertIn("still says 'No tool changes any data.' with write tools on", got["instructions/modern"][1])
 
     def test_call_state(self):
         self.assertEqual(self.tp.call_state(False, '{"steps": 1}'), "data")

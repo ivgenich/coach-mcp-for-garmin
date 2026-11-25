@@ -11,8 +11,16 @@
 # coach-mcp-for-garmin:smoke), SMOKE_PYTHON (default python3), SMOKE_BUILD=0
 # to test SMOKE_IMAGE as it is, SMOKE_NAME (default coach-mcp-smoke-<pid>): the
 # prefix of the container names and the Compose project name.
+# The plan legs (7 and 8; SMOKE_PLAN=0 skips them) build the history image too
+# (HISTORY=1, tagged SMOKE_HISTORY_IMAGE, default <SMOKE_IMAGE>-history) and run
+# it with HISTORY_SEARCH, PLAN_TOOLS, PLAN_TRACKING and PLAN_WRITES on, then with
+# only HISTORY_SEARCH and PLAN_TOOLS, against a throwaway pgvector container
+# (SMOKE_PG_IMAGE, default CI's pgvector/pgvector:0.8.0-pg17) on an internal
+# Docker network of their own: no Garmin login and no way out of that network.
 # The expected tools come from config/enabled-tools.txt (full mode) and
-# config/enabled-tools-key.txt (key mode); the version from ext/version.py.
+# config/enabled-tools-key.txt (key mode), plus launch.py's own tool sets for
+# the plan legs (scripts/tests/test_ci_smoke_probe.py keeps the copies below
+# equal to them); the version from ext/version.py.
 # The secrets are made here, handed to docker by name only, and never printed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,6 +35,7 @@ RUN="${SMOKE_NAME:-coach-mcp-smoke-$$}"
 INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"1"}}}'
 WORK=$(mktemp -d)
 NAMES=()
+NETWORKS=()
 FAILED=()
 CHECKS=0
 
@@ -35,6 +44,7 @@ cleanup() {
 	if [ -n "${CP:-}" ]; then dc down --volumes --timeout 5 >/dev/null 2>&1 || true; fi
 	# ${a[@]+...}: an empty array under set -u is an error in bash 3.2 (macOS).
 	for n in ${NAMES[@]+"${NAMES[@]}"}; do docker rm -f "$n" >/dev/null 2>&1 || true; done
+	for n in ${NETWORKS[@]+"${NETWORKS[@]}"}; do docker network rm "$n" >/dev/null 2>&1 || true; done
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -148,7 +158,7 @@ start_fails edge-header-empty "launch: config error: EDGE_CLIENT_IP_HEADER is se
 
 # pid1_secrets NAME: how many secret variables Caddy (PID 1) holds; want 0.
 pid1_secrets() {
-	docker exec "$1" sh -c 'tr "\0" "\n" </proc/1/environ | grep -cE "^(OWNER_SECRET|MCP_BEARER_TOKEN|GARMIN_PERSONAL_API_KEY)="' || true
+	docker exec "$1" sh -c 'tr "\0" "\n" </proc/1/environ | grep -cE "^(OWNER_SECRET|MCP_BEARER_TOKEN|GARMIN_PERSONAL_API_KEY|DATABASE_URL|HISTORY_TOKEN_KEY)="' || true
 }
 # users NAME: the users of Caddy (PID 1), of the server (launch.py) and of the
 # sign-in database; want "caddy app app". "launc[h]" keeps this sh -c out of the match.
@@ -307,6 +317,224 @@ for h, v in (("CF-Connecting-IP", "203.0.113.7"), ("X-Real-IP", "203.0.113.8")):
 	CP=""
 else
 	echo "NOTE  compose: no compose.yaml, the compose leg is skipped"
+fi
+
+# --- 7. and 8. the plan legs: the history image against a throwaway Postgres --------------------
+# launch.py's own tool sets (HISTORY_TOOLS, PLAN_READ_TOOLS, PLAN_REVIEW_TOOLS, OWN_WRITE_TOOLS and
+# GARMIN_WRITE_TOOLS); scripts/tests/test_ci_smoke_probe.py keeps these copies equal to ext/launch.py.
+PLAN_HISTORY_TOOLS="find_similar_weeks search_history"
+PLAN_READ_TOOLS="plan_assess plan_get plan_preview"
+PLAN_REVIEW_TOOLS="plan_review_week"
+PLAN_WRITE_TOOLS="log_feedback plan_apply_changes plan_cancel plan_commit"
+PLAN_GARMIN_WRITE_TOOLS="plan_apply_changes plan_cancel plan_commit"
+# upstream garmin_mcp prints this without a Garmin login (every full-mode leg); any other ERROR line fails.
+NO_LOGIN_LINE="ERROR: OAuth tokens not found and no interactive terminal available."
+# Distinct argument values: the log must not carry them (tool arguments are never logged).
+ARG_DATE=2019-03-17
+ARG_PLAN=$(openssl rand -hex 16)
+ARG_TOKEN="ct1.$(openssl rand -hex 16)"
+nwords() { echo $#; }
+csv() { printf '%s\n' "$@" | sort -u | paste -sd, -; }
+# log_errors FILE: error lines of FILE, except the no-login line and Caddy's access line for the expected 503
+# of /readyz (Caddy logs a 5xx answer at level error).
+log_errors() {
+	{ grep -E 'ERROR|CRITICAL|Traceback|"level":"(error|fatal|panic)"' "$1" || true; } |
+		{ grep -vxF "$NO_LOGIN_LINE" || true; } |
+		{ grep -vE '"logger":"http\.log\.access[^"]*".*"uri":"/readyz".*"status":503' || true; }
+}
+# plan_log_hits FILE: lines of FILE that hold a secret value of this run or a tool argument of the probe.
+plan_log_hits() {
+	grep -cF -e "$OWNER_SECRET" -e "$MCP_BEARER_TOKEN" -e "$POSTGRES_PASSWORD" -e "$HISTORY_TOKEN_KEY" \
+		-e "$DATABASE_URL" -e "$ARG_PLAN" -e "${ARG_TOKEN#ct1.}" -e "$ARG_DATE" "$1" || true
+}
+# client APP SCRIPT ARGS...: run SCRIPT (from $CLIENT) with the image's Python in APP's network namespace, as
+# nobody, with the two sign-in secrets by name: it reaches the server at 127.0.0.1:8080 and nothing else.
+client() {
+	local app=$1
+	shift
+	docker run --rm --network "container:$app" --user 65534:65534 -e MCP_BEARER_TOKEN -e OWNER_SECRET \
+		-v "$CLIENT:/w:ro" --entrypoint python "$HIMAGE" -B "$@"
+}
+
+# plan_leg LABEL all|read: one app container on the plan network. all: HISTORY_SEARCH, PLAN_TOOLS,
+# PLAN_TRACKING and PLAN_WRITES on; read: HISTORY_SEARCH and PLAN_TOOLS only.
+plan_leg() {
+	local label=$1 mode=$2 app="$PR-$1" tools writes="" instr=INSTRUCTIONS want health i code ok n errs hits
+	local env=("${SECRETS[@]}" -e HISTORY_TOKEN_KEY -e DATABASE_URL -e PUBLIC_URL=http://127.0.0.1:8080
+		-e REPORT_TZ=UTC -e GARMIN_AUTH=full -e ROLE=app -e HISTORY_SEARCH=on -e PLAN_TOOLS=on)
+	tools="$PLAN_HISTORY_TOOLS $PLAN_READ_TOOLS"
+	if [ "$mode" = all ]; then
+		env+=(-e PLAN_TRACKING=on -e PLAN_WRITES=on)
+		tools="$tools $PLAN_REVIEW_TOOLS"
+		writes=$PLAN_WRITE_TOOLS
+		instr=INSTRUCTIONS_PLAN_TRACKING
+		# shellcheck disable=SC2086 # word lists on purpose
+		want="launch: config OK ($((FULL_N + $(nwords $tools))) read-only tools and $(nwords $PLAN_GARMIN_WRITE_TOOLS) plan write tools; log_feedback writes only the app's database; history search on, plan tools on, plan writes on, plan tracking on)"
+	else
+		# shellcheck disable=SC2086
+		want="launch: config OK ($((FULL_N + $(nwords $tools))) read-only tools; history search on, plan tools on)"
+	fi
+	# The expected tools (test-protocol.py adds --write-tools itself) and instructions, from this checkout.
+	# shellcheck disable=SC2086
+	{
+		tool_names "$FULL_TOOLS"
+		printf '%s\n' $tools
+	} >"$CLIENT/$label-tools.txt"
+	"$PY" -B -c 'import sys; sys.path.insert(0, "ext"); import server_instructions as s; sys.stdout.write(getattr(s, sys.argv[1]))' \
+		"$instr" >"$CLIENT/$label-instructions.txt"
+	chmod 644 "$CLIENT/$label-tools.txt" "$CLIENT/$label-instructions.txt"
+
+	# --check-config alone, with no network at all: exit 0 and the line that names the tools and the writes.
+	code=0
+	docker run --rm --network none "${env[@]}" --entrypoint python "$HIMAGE" /opt/garmin-ext/launch.py \
+		--check-config >"$WORK/$label-check.txt" 2>&1 || code=$?
+	ok=no
+	[ "$code" = 0 ] && grep -qxF "$want" "$WORK/$label-check.txt" && ok=yes
+	check "$label/check-config" "$ok" "launch.py --check-config exit $code; says: $want"
+	[ "$ok" = yes ] || indent "$WORK/$label-check.txt"
+
+	NAMES+=("$app")
+	docker run -d --name "$app" --network "$NET" "${env[@]}" \
+		--health-cmd 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/healthz\", timeout=4)"' \
+		--health-interval 2s --health-timeout 5s --health-retries 3 "$HIMAGE" >/dev/null
+	health=none
+	for i in $(seq 1 120); do
+		health=$(docker inspect -f '{{.State.Health.Status}}' "$app" 2>/dev/null || echo none)
+		[ "$health" = healthy ] && break
+		sleep 1
+	done
+	check "$label/healthy" "$(yes_if test "$health" = healthy)" "health: $health after ${i}s (compose.yaml's /healthz check)"
+
+	if [ "$mode" = all ]; then
+		# The migrations of ext/history_sql/ and the plan tables of migration 003, read from Postgres itself.
+		local versions tables n_tables in_list got_v got_t
+		versions=$(find ext/history_sql -name '[0-9]*.sql' | sed 's#.*/0*\([0-9][0-9]*\)_.*#\1#' | sort -n | paste -sd, -)
+		tables=$(grep -ho 'CREATE TABLE IF NOT EXISTS history\.plan[a-z_]*' ext/history_sql/*.sql | sed 's/.*history\.//' | sort -u)
+		n_tables=$(printf '%s\n' "$tables" | grep -c . || true)
+		in_list=$(printf '%s\n' "$tables" | sed "s/.*/'&'/" | paste -sd, -)
+		tables=$(printf '%s\n' "$tables" | paste -sd' ' -)
+		got_v=none
+		for i in $(seq 1 60); do
+			got_v=$(docker exec "$PG" psql -U coach -d coach -Atc \
+				"select string_agg(version::text, ',' order by version) from history.schema_migrations" 2>/dev/null || echo none)
+			[ "$got_v" = "$versions" ] && break
+			sleep 1
+		done
+		got_t=$(docker exec "$PG" psql -U coach -d coach -Atc \
+			"select count(*) from pg_tables where schemaname = 'history' and tablename in ($in_list)" 2>/dev/null || echo 0)
+		ok=no
+		[ "$got_v" = "$versions" ] && [ "$got_t" = "$n_tables" ] && [ "$n_tables" -gt 0 ] && ok=yes
+		check "$label/migrations" "$ok" "history.schema_migrations: ${got_v:-none} (want $versions); plan tables: $got_t of $n_tables ($tables)"
+	fi
+
+	local proto=(--url http://127.0.0.1:8080/mcp --tools-file "/w/$label-tools.txt" --expect-version "$VERSION")
+	# shellcheck disable=SC2086
+	if [ -n "$writes" ]; then proto+=(--write-tools "$(csv $writes)"); fi
+	if client "$app" /w/test-protocol.py "${proto[@]}" >"$WORK/$label-protocol.txt" 2>&1; then
+		check "$label/test-protocol" yes "static bearer: $(tail -n 1 "$WORK/$label-protocol.txt")"
+	else
+		check "$label/test-protocol" no "static bearer: $(tail -n 1 "$WORK/$label-protocol.txt")"
+	fi
+	indent "$WORK/$label-protocol.txt"
+
+	local base
+	base=$(tool_names "$FULL_TOOLS" | paste -sd' ' -)
+	# shellcheck disable=SC2086
+	local probe=(--expect-ready 503 --expect-names "$(csv $base $tools $writes)"
+		--expect-version "$VERSION" --call get_stats --call-args "{\"date\": \"$ARG_DATE\"}"
+		--expect-error "Garmin login missing or expired" --instructions "/w/$label-instructions.txt")
+	if [ "$mode" = all ]; then
+		# shellcheck disable=SC2086
+		probe+=(--write-tools "$(csv $writes)" --refused-call plan_commit
+			--refused-args "{\"plan_id\": \"$ARG_PLAN\", \"commit_token\": \"$ARG_TOKEN\"}"
+			--expect-refusal no_write_permission --oauth yes --oauth-refusal unknown_token)
+	else
+		probe+=(--oauth no)
+	fi
+	if client "$app" /w/ci-smoke-probe.py "${probe[@]}" >"$WORK/$label-probe.txt" 2>&1; then
+		check "$label/probe" yes "static bearer and OAuth: $(tail -n 1 "$WORK/$label-probe.txt")"
+	else
+		check "$label/probe" no "static bearer and OAuth: $(tail -n 1 "$WORK/$label-probe.txt")"
+	fi
+	indent "$WORK/$label-probe.txt"
+	if [ "$mode" = read ]; then
+		ok=no
+		grep -qF "No tool changes any data." "$CLIENT/$label-instructions.txt" &&
+			grep -q '^PASS  probe/instructions:' "$WORK/$label-probe.txt" && ok=yes
+		check "$label/no-write-text" "$ok" "the server's instructions (server_instructions.$instr) say: No tool changes any data."
+	fi
+
+	check "$label/caddy-env" "$(yes_if test "$(pid1_secrets "$app")" = 0)" "Caddy (PID 1) holds no secret variable"
+	docker logs "$app" >"$WORK/$label.log" 2>&1
+	n=$(wc -l <"$WORK/$label.log" | tr -d ' ')
+	errs=$(log_errors "$WORK/$label.log" | wc -l | tr -d ' ')
+	check "$label/log-errors" "$(yes_if test "$errs" = 0)" "$errs ERROR lines in $n log lines (want 0; upstream's no-login line and Caddy's /readyz 503 aside)"
+	[ "$errs" = 0 ] || log_errors "$WORK/$label.log" | head -n 10 | sed 's/^/      /'
+	hits=$(plan_log_hits "$WORK/$label.log")
+	check "$label/log-secrets" "$(yes_if test "$hits" = 0)" \
+		"no secret value (Postgres password, DATABASE_URL, HISTORY_TOKEN_KEY included) and no tool argument value in $n log lines"
+	ok=no
+	[ "$(grep -c "garmin-mcp exited" "$WORK/$label.log" || true)" = 0 ] &&
+		[ "$(docker inspect -f '{{.State.Running}}' "$app")" = true ] && ok=yes
+	check "$label/no-restarts" "$ok" "still running, launch.py never restarted"
+	docker rm -f "$app" >/dev/null 2>&1 || true
+}
+
+if [ "${SMOKE_PLAN:-1}" = 0 ]; then
+	echo "NOTE  plan: SMOKE_PLAN=0, the plan legs are skipped"
+else
+	HIMAGE="${SMOKE_HISTORY_IMAGE:-$IMAGE-history}"
+	PG_IMAGE="${SMOKE_PG_IMAGE:-pgvector/pgvector:0.8.0-pg17}"
+	if [ "${SMOKE_BUILD:-1}" != 0 ]; then
+		if docker build --build-arg HISTORY=1 -t "$HIMAGE" . >"$WORK/build-history.log" 2>&1; then
+			check build-history yes "docker build --build-arg HISTORY=1 -t $HIMAGE (the history self-checks passed)"
+		else
+			check build-history no "docker build --build-arg HISTORY=1 failed; the end of its log:"
+			tail -n 40 "$WORK/build-history.log"
+			exit 1
+		fi
+	fi
+	# Random names, an internal network (no route out: no Garmin, no model download), new secrets.
+	PR="$RUN-plan-$(openssl rand -hex 4)"
+	NET="$PR-net"
+	PG="$PR-pg"
+	CLIENT="$WORK/client"
+	mkdir -m 755 "$CLIENT"
+	cp scripts/ci-smoke-probe.py scripts/test-protocol.py "$CLIENT/"
+	chmod 644 "$CLIENT"/*.py
+	POSTGRES_PASSWORD=$(openssl rand -hex 24)
+	HISTORY_TOKEN_KEY=$(openssl rand -base64 32)
+	DATABASE_URL="postgresql://coach:$POSTGRES_PASSWORD@$PG:5432/coach"
+	export POSTGRES_PASSWORD HISTORY_TOKEN_KEY DATABASE_URL
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		echo "::add-mask::$POSTGRES_PASSWORD"
+		echo "::add-mask::$HISTORY_TOKEN_KEY"
+		echo "::add-mask::$DATABASE_URL"
+	fi
+	NETWORKS+=("$NET")
+	docker network create --internal "$NET" >/dev/null
+	NAMES+=("$PG")
+	up=no
+	i=0
+	if docker run -d --name "$PG" --network "$NET" -e POSTGRES_USER=coach -e POSTGRES_PASSWORD \
+		-e POSTGRES_DB=coach "$PG_IMAGE" >/dev/null; then
+		for i in $(seq 1 90); do
+			if quiet docker exec "$PG" psql -h 127.0.0.1 -U coach -d coach -Atc 'select 1'; then
+				up=yes
+				break
+			fi
+			sleep 1
+		done
+	fi
+	check plan/postgres "$up" "$PG_IMAGE answers on the internal network $NET after ${i}s"
+	if [ "$up" = yes ]; then
+		plan_leg plan-all all
+		plan_leg plan-read read
+	else
+		echo "NOTE  plan: no Postgres, the plan legs are not run"
+	fi
+	docker rm -f "$PG" >/dev/null 2>&1 || true
+	docker network rm "$NET" >/dev/null 2>&1 || true
 fi
 
 if [ ${#FAILED[@]} -ne 0 ]; then

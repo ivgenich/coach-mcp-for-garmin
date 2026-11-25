@@ -25,9 +25,14 @@ check() matches each answer number against the tool numbers, allowing:
 - rounding to the precision the answer shows (6.25 -> "6.3" or "6"; 87.5 -> "88 %"; 6.5 == 6.50);
 - unit conversions selected by the answer's unit (m <-> km <-> mi, s <-> min <-> h, ms, cm -> km, kg <-> lb,
   m/s -> km/h and pace, a fraction -> percent);
-- durations: "6:15" == 6.25 h == 375 min == 22,500 s; "5:30 /km" == 330 s/km or 3.03 m/s;
+- durations: "6:15" == 6.25 h == 375 min == 22,500 s; "5:30 /km" == 330 s/km or 3.03 m/s; a pace may also be
+  cut to whole seconds (298.6 s/km as "4:58 /km");
 - a positive answer number against a negative tool number ("5 below" for -5), never the reverse.
-Numbers in the user's prompt are exempt. Whole numbers 0-10 with no unit that match nothing are reported as
+A unit word may follow a hyphen ("a 67-minute ride"); a hyphen after a letter is not a sign (Hebrew "ב-6");
+Hebrew dates ("18–24 במאי 2026") and a season with its year ("autumn 2025", "בסתיו 2025") are skipped like
+English dates.
+Numbers in the user's prompt, and in the tool descriptions and schemas the model was given ("max_long_km 10
+to 32"), are exempt. Whole numbers 0-10 with no unit that match nothing are reported as
 "soft" (counts, list positions, "Zone 2") and do not fail the check (SOFT_MAX).
 
 Standard library only. Pure functions, no I/O.
@@ -43,6 +48,9 @@ SOFT_MAX = 10  # unmatched whole numbers 0..SOFT_MAX without a unit are soft (re
 _M = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?"
       r"|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
 _W = r"mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?"
+# Hebrew month names, with the one-letter prefixes written onto them ("במאי": in May, "מאפריל": from April).
+_HM = (r"(?:[בלמוה]|עד\s)?(?:ינואר|פברואר|מרץ|מרס|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|"
+       r"דצמבר)")
 _ORD = r"(?:st|nd|rd|th)?"
 _TO = r"\s*(?:-|–|—|to|and|through|until|till)\s*"
 _I = re.IGNORECASE
@@ -56,6 +64,12 @@ _EXEMPT = [re.compile(p, _I | re.M) for p in (
     rf"\b(?:{_M})\.?\s+\d{{1,2}}{_ORD}\b(?:,?\s+\d{{4}})?",
     rf"\b\d{{1,2}}{_ORD}\s+(?:of\s+)?(?:{_M})\b\.?(?:,?\s+\d{{4}})?",
     rf"\b(?:{_M})\.?\s+\d{{4}}\b",
+    # Hebrew dates (live run 20261125T200810Z, H07): "18–24 במאי 2026", "27 באוקטובר 2025", "מאפריל 2025".
+    rf"(?<![\d.])\d{{1,2}}(?:{_TO}\d{{1,2}})?\s*{_HM}(?![א-ת])(?:,?\s+\d{{4}})?",
+    rf"{_HM}(?![א-ת])\s+\d{{4}}\b",
+    # A season and year: "autumn 2025", "בסתיו 2025" (in autumn 2025).
+    r"(?:\b(?:spring|summer|autumn|fall|winter)|(?<![א-ת])[בלמוה]?(?:אביב|קיץ|סתיו|חורף))\s+(?:of\s+)?"
+    r"(?:19|20)\d\d\b",
     rf"\b(?:{_W})\b\.?,?\s+(?:the\s+)?(?:[1-9]|[12]\d|3[01]){_ORD}\b(?![.,]\d)(?!\s?[%/a-z])",
     r"\b(?:utc|gmt)\s*[+-]\s*\d{1,2}(?::?\d{2})?\b",
     r"(?<![\d:])\d{1,2}(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)(?![a-z])",
@@ -186,6 +200,10 @@ def _strip_exempt(text):
 
 def _unit_at(text, pos):
     m = _UNIT_RE.match(text, pos)
+    if not m and text[pos:pos + 1] == "-":  # "a 67-minute ride", "a 10-km run": a word unit after a hyphen
+        m = _UNIT_RE.match(text, pos + 1)
+        if m and not m.group(0)[:1].isalpha():
+            m = None
     if not m:
         return None, pos
     return _UNITS[int(m.lastgroup[1:])][0], m.end()
@@ -269,6 +287,11 @@ def answer_numbers(text) -> list:
         work = _blank(work, m.start(), end if kind == "pace" else m.end())
     for m in _PLAIN_RE.finditer(work):
         sign, whole, frac = m.group(1), m.group(2), m.group(3)
+        start = m.start()
+        if sign and start > 0 and work[start - 1].isalpha():
+            # A hyphen after a letter is no sign: Hebrew writes a prefix before a number with one ("ב-6",
+            # "ל-7.5": in 6, to 7.5; live run 20261125T200810Z, H07).
+            sign, start = "", start + 1
         end = m.end()
         unit, unit_end = _unit_at(work, end)
         if unit is None and end < len(work) and work[end].isalpha():
@@ -288,8 +311,8 @@ def answer_numbers(text) -> list:
         value = float(whole.replace(",", "") + ("." + frac if frac else ""))
         if sign == "-":
             value = -value
-        text_span = work[m.start():unit_end if unit else end].strip()
-        found.append((m.start(), Num(text_span, value, len(frac or ""), unit, "plain")))
+        text_span = work[start:unit_end if unit else end].strip()
+        found.append((start, Num(text_span, value, len(frac or ""), unit, "plain")))
     found.sort(key=lambda pair: pair[0])
     return [num for _, num in found]
 
@@ -343,13 +366,23 @@ def _unit_word(key):
     return m.group(1).lower() if m else None
 
 
+_RACE_M = {"marathon": 42195.0, "half": 21097.5, "half_marathon": 21097.5}
+
+
+def _hms(value):
+    """Seconds of an "H:MM:SS" string, else None."""
+    m = re.fullmatch(r"(\d{1,2}):([0-5]\d):([0-5]\d)", str(value or "").strip())
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) if m else None
+
+
 def derived_numbers(value) -> list:
     """Exact simple arithmetic on the numbers of a parsed tool result (after pool pruning):
     - within one list of objects: for each key with a unit word, the sum and both differences of every pair of
       items, and the total over the list ("together 25.7 km", "the long run grew by 1.8 km");
     - within one object: both differences of every two values whose keys end in the same unit word ("5 ms
       below the 7-day average": last_night_avg_hrv_ms vs weekly_avg_hrv_ms);
-    - the pace of an object with a distance and a duration, in s/km, s/mi and s/100 m;
+    - the pace of an object with a distance and a duration, in s/km, s/mi and s/100 m, and for a race object
+      (distance marathon or half) its length in metres and the goal pace of its goal_time in s/km and s/mi;
     - the span of an "<x>start" / "<x>end" pair of one object ("6 h 41 min in bed" from sleep_start/sleep_end);
     - the difference of any two distances of the result, in metres, when it holds at most DERIVED_DOC_MAX
       ("the last 6.3 km" = distance_m 14000 - end_km 7.7).
@@ -382,6 +415,12 @@ def derived_numbers(value) -> list:
             dur = next((_num(node.get(k)) for k in _DUR_KEYS if _num(node.get(k))), None)
             if dist and dur and dist > 0:
                 out.extend((dur / (dist / 1000), dur / (dist / 1609.344), dur / (dist / 100)))
+            race_m = _RACE_M.get(str(node.get("distance") or "").lower())
+            goal = _hms(node.get("goal_time"))
+            if race_m:  # the race's own length: "the full 42.2 km"
+                out.append(race_m)
+            if race_m and goal:  # plan_assess' race {distance: marathon, goal_time: 3:30:00}: the goal pace
+                out.extend((goal / (race_m / 1000), goal / (race_m / 1609.344)))
             for k, v in node.items():  # "sleep_start" / "sleep_end": the span ("6 h 41 min in bed")
                 if str(k).endswith("start") and _num(v) is not None:
                     end = _num(node.get(str(k)[:-5] + "end"))
@@ -479,6 +518,8 @@ def _pace_matches(num, pool):
     for p in pool:
         if _close(secs, p, 0.5) or _close(secs, p * 60, 0.5):
             return True
+        if p - 1 < secs <= p:  # a pace cut to whole seconds: 298.6 s/km as "4:58 /km"
+            return True
         if p > 0 and _close(secs, dist / p, 0.5):  # p in m/s
             return True
     return False
@@ -502,11 +543,12 @@ def _in_prompt(num, prompt_nums):
     return False
 
 
-def check(answer, tool_texts, prompt_texts=()) -> NumberReport:
-    """Match every number of `answer` against the numbers of `tool_texts`; numbers of `prompt_texts` are
-    exempt. Returns a NumberReport (passed when nothing but soft numbers is unmatched)."""
+def check(answer, tool_texts, prompt_texts=(), doc_texts=()) -> NumberReport:
+    """Match every number of `answer` against the numbers of `tool_texts`; numbers of `prompt_texts` (what the
+    user typed) and `doc_texts` (the tool descriptions and schemas) are exempt. Returns a
+    NumberReport (passed when nothing but soft numbers is unmatched)."""
     pool = tool_numbers(tool_texts)
-    prompt_nums = [n for t in prompt_texts for n in answer_numbers(t)]
+    prompt_nums = [n for t in tuple(prompt_texts) + tuple(doc_texts) for n in answer_numbers(t)]
     report = NumberReport([], [], [], [])
     for num in answer_numbers(answer):
         if _in_prompt(num, prompt_nums):

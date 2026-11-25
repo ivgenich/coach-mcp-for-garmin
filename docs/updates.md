@@ -35,10 +35,20 @@ You may rely on these; only a MAJOR release breaks them:
    `Error: Garmin login missing or expired.`, `Error: Garmin rate limit.`,
    `Error: Garmin Connect did not answer`, `Error: Invalid input:`,
    `Error: Internal server error (ref` and `No data:`.
+9. **The plan JSON** of the training-plan tools (`plan_assess`, `plan_preview`, `plan_get`,
+   `plan_commit`, `plan_cancel`): every field name, the feasibility verdicts, the warning and
+   invariant names, the session roles, and the write statuses (`done`, `partial`, `unknown`,
+   `refused`, `declined`) with what each means.
+10. **The plan `RULES_VERSION`**: every plan answer carries it as `rules_version`, separate from the
+   status tools' one. Any change to a plan rule or number raises it, and the CHANGELOG lists the
+   old and the new values; a stored plan built under an older version says so (`rules_changed`).
+   Removing or renaming a verdict, a warning, an invariant or a role is MAJOR.
 
 Not part of the public API, so any release may change them: the wording of the markdown report
 text (`text_format="markdown"`), tool descriptions and server instructions; log lines; the
-`sources` and debug parts of a status (`include_sources`); the answers of upstream's tools, which
+`sources` and debug parts of a status (`include_sources`); the plan's `window` text (the workouts
+as Garmin would show them) and the names and descriptions of the workouts it writes to Garmin;
+the answers of upstream's tools, which
 are Garmin's own data as JSON and change when Garmin changes it; Python names inside `ext/`; the
 output of the scripts.
 

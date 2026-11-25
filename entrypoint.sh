@@ -92,9 +92,10 @@ esac
 	die "GARMIN_EMAIL/GARMIN_PASSWORD (or a *_FILE variant) is set. Delete it; in full mode, log in once with garmin-mcp-auth inside the container instead (docs/garmin-login.md)."
 
 # --- Config checks: fail closed, before anything starts ----------------------
-# The read-only tool policy (config/enabled-tools.txt, narrowed only by
+# The tool policy (config/enabled-tools.txt, narrowed only by
 # GARMIN_ENABLED_TOOLS; no write tool, no unknown name, no
-# GARMIN_DISABLED_TOOLS; in key mode only the tools key mode has),
+# GARMIN_DISABLED_TOOLS; in key mode only the tools key mode has; the plan
+# write tools only from PLAN_WRITES=on, which needs PLAN_TOOLS and full mode),
 # GARMIN_AUTH (required: full or key) and, for key, GARMIN_PERSONAL_API_KEY,
 # REPORT_TZ (required, a valid IANA zone), EDGE_CLIENT_IP_HEADER (unset,
 # X-Real-IP or CF-Connecting-IP) and the sign-in: OWNER_SECRET (required),

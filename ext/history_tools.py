@@ -70,6 +70,10 @@ TEXT_MIN_WEEKS = ("No data: similar-week search needs at least 8 indexed weeks w
 TEXT_OUTSIDE = ("No data: {day} is not in the history index (it covers {start} to {end}). get_weekly_status with "
                 "that end_date reads it from Garmin.")
 TEXT_NOTHING = "No data: nothing in the stored history matches this search ({n} {kind}s searched)."
+# Appended to TEXT_NOTHING while index.complete is false (eval H03: without it the answer did not say the
+# history is partial).
+TEXT_PARTIAL = ("The history index is still filling: it covers only {start} to {end}, so older weeks were not "
+                "searched; say so.")
 
 _COMMON = (
     "Searches the server's stored history of daily and weekly numbers. Does not call Garmin. Every number is "
@@ -448,7 +452,10 @@ class HistoryService:
         try:
             found, used = hr.search(req_index, weeks, req, self.cross_encoder)
         except hr.NotEnoughHistory as exc:
-            return TEXT_MIN_WEEKS.format(n=exc.usable)
+            text = TEXT_MIN_WEEKS.format(n=exc.usable)
+            if not index.get("complete") and index.get("from"):
+                text += " " + TEXT_PARTIAL.format(start=index["from"], end=index.get("to") or index["from"])
+            return text
         except _db_errors() as exc:  # a fixed text, no detail; anything else is a bug for launch's wrapper
             return self._db_failure(exc)
         results = []
@@ -562,7 +569,10 @@ class HistoryService:
         _metric("search_history", "ok" if results else "empty", used)
         if not results:
             n = sum(1 for s in docs if lo_s <= s <= hi_s)
-            return TEXT_NOTHING.format(n=n, kind=kind)
+            text = TEXT_NOTHING.format(n=n, kind=kind)
+            if not index.get("complete") and index.get("from"):
+                text += " " + TEXT_PARTIAL.format(start=index["from"], end=index.get("to") or index["from"])
+            return text
         answer = {"kind": "history_search", "index": index, "search": {"kind": kind, "flags": wanted,
                                                                        "order": order, "words": len(tokens)},
                   "results": results, "note": NOTE}

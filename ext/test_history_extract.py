@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import json
 import os
 import unittest
@@ -222,6 +223,57 @@ class WeekParity(unittest.TestCase):
         text = json.dumps(self.week)
         for value in tws.planted_ids():
             self.assertNotIn(f'"{value}"', text)
+
+
+class StoredNumbersPinned(unittest.TestCase):
+    """The numbers history stores are pinned to history_extract's own versions.
+
+    A change in a stored number, flag or level (a parser, a threshold, a rule history applies) must come with a
+    bump of hx.RULES_VERSION (or hx.NUMBERS_VERSION for a change of shape), because only a bump rebuilds and
+    re-embeds the stored history. A bump with unchanged numbers costs a full rebuild for nothing. When this test
+    fails: bump the version if the change is meant, then add the new digest under the new key below.
+    """
+
+    # "<rules day>.<rules week>/n<numbers>" -> sha256 of stored_sample() as canonical JSON.
+    PINNED = {
+        "1.2/n1": "335036d03715b00dcead3709d348f7507bbda41ac495cedbb48f639b4a20b8aa",
+    }
+
+    def stored_sample(self):
+        parity = WeekParity("test_hrv_sleep_volume_load_match")
+        parity.setUp()
+        days = parity.days
+        # A harder week from the same days: short nights, a volume jump and high load fire the week's flags.
+        rough = {d: dict(n, sleep_seconds=5 * 3600, run_seconds=(n.get("run_seconds") or 0.0) * 3)
+                 if d >= tws.START else n for d, n in days.items()}
+        rough_load = dict(parity.load, acwr_status="HIGH")
+        stressed = {"sleep_seconds": 5 * 3600, "hrv": 40, "hrv_7d": 55, "hrv_balanced_low": 60, "rhr": 60,
+                    "rhr_7d": 50}
+        return {
+            "day": hx.day_numbers(DAY, day_payloads(), TZ, "full"),
+            "day_key": hx.day_numbers(DAY, day_payloads(), TZ, "key"),
+            "week": parity.week,
+            "week_key": hx.week_numbers(tws.START, days, mode="key", load=parity.load, end=tws.END),
+            "week_rough": hx.week_numbers(tws.START, rough, mode="full", load=rough_load, chronic_week_ago=300.0,
+                                          end=tws.END),
+            "day_flags": [hx.day_flags(n) for n in days.values()],
+            "day_flags_stressed": hx.day_flags(stressed, dict(stressed, hrv_7d=56), dict(stressed, hrv_7d=57)),
+        }
+
+    def test_stored_numbers_match_the_pinned_version(self):
+        key = f"{hx.RULES_VERSION[0]}.{hx.RULES_VERSION[1]}/n{hx.NUMBERS_VERSION}"
+        blob = json.dumps(self.stored_sample(), sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        self.assertIn(key, self.PINNED, f"new history version {key}: pin its digest {digest}")
+        self.assertEqual(self.PINNED[key], digest,
+                         f"the numbers history stores changed under the same version {key}: bump "
+                         "history_extract.RULES_VERSION (or NUMBERS_VERSION) and pin the new digest " + digest)
+
+    def test_history_versions_do_not_follow_the_status_tools(self):
+        # Weekly rules v3 changed only plan completion, which history does not store: no rebuild.
+        self.assertEqual(ws.RULES_VERSION, 3)
+        self.assertEqual(hx.RULES_VERSION, (1, 2))
+        self.assertEqual(self.stored_sample()["week"]["rules_version"], 2)
 
 
 class DayFlags(unittest.TestCase):

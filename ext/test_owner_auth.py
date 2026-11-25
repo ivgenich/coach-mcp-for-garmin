@@ -2038,5 +2038,178 @@ class NoSecretsInLogs(SignInCase):
             self.assertIn(expected, text)
 
 
+# --- plan:write (Stage 2) ----------------------------------------------------------------------------------
+
+
+WRITE_BOX = '<input type="checkbox" name="plan_write" value="yes">'
+WRITE_TEXT = "Also allow this app to change my Garmin calendar"
+
+
+@unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
+class PlanWriteScope(SignInCase):
+    """The plan:write scope: offered on the consent page only with PLAN_WRITES on, granted only when the owner
+    ticks the box, never asked into a grant by the client, never on the static bearer."""
+
+    with_static_bearer = True
+    writes = False
+
+    def build(self, **changes):
+        auth = owner_auth.build(self.config(**changes), clock=self.clock, writes_offered=lambda: self.writes)
+        self.addCleanup(auth.provider.store.close)
+        return auth
+
+    def page(self, flow):
+        response = self.client.get("/consent", params={"req": flow["pending"]})
+        self.assertEqual(response.status_code, 200, why(response))
+        return response.text
+
+    def sign_in_ticked(self, ticked, client=None, **kwargs):
+        flow = self.start(client or self.register(), **kwargs)
+        fields = {"plan_write": "yes"} if ticked else {}
+        response = self.post_consent(flow["pending"], secret=self.owner_secret, **fields)
+        self.assertEqual(response.status_code, 303, why(response))
+        flow["code"] = query_of(response.headers["location"])["code"]
+        response = self.exchange(flow)
+        self.assertEqual(response.status_code, 200, why(response))
+        flow["tokens"] = response.json()
+        return flow
+
+    def may_write(self, access_token):
+        """plan_confirm.caller_may_write() with this token in the request's auth context."""
+        import plan_confirm
+        from mcp.server.auth.middleware.auth_context import auth_context_var
+        from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+
+        token = self.run_async(self.provider.load_access_token(access_token))
+        self.assertIsNotNone(token)
+        reset = auth_context_var.set(AuthenticatedUser(token))
+        try:
+            return plan_confirm.caller_may_write()
+        finally:
+            auth_context_var.reset(reset)
+
+    # switch off (the default)
+
+    def test_switch_off_the_page_has_no_box(self):
+        text = self.page(self.start(self.register()))
+        for absent in ("fieldset", "plan_write", "checkbox", "calendar", "unless you tick"):
+            self.assertNotIn(absent, text)
+        self.assertIn("<p>Started less than a minute ago. This gives read-only access to your Garmin data on this "
+                      "server.</p>", text)
+
+    def test_switch_off_a_posted_box_grants_nothing(self):
+        flow = self.sign_in_ticked(True)
+        self.assertEqual(flow["tokens"]["scope"], "offline_access")
+        self.assertFalse(self.may_write(flow["tokens"]["access_token"]))
+        self.assertIn("consent: approved for client " + flow["client"]["client_id"], self.logs.auth_lines("INFO"))
+
+    def test_a_client_cannot_ask_for_the_scope(self):
+        for writes in (False, True):
+            self.writes = writes
+            with self.subTest(writes=writes):
+                flow = self.sign_in_ticked(False, scope="offline_access plan:write claudeai")
+                self.assertEqual(flow["tokens"]["scope"], "offline_access claudeai")
+                self.assertFalse(self.may_write(flow["tokens"]["access_token"]))
+                refused = self.refresh(flow["client"], flow["tokens"]["refresh_token"],
+                                       scope="offline_access plan:write")
+                self.assertEqual((refused.status_code, refused.json()["error"]), (400, "invalid_scope"))
+
+    # switch on
+
+    def test_switch_on_the_page_says_the_calendar_may_change(self):
+        self.writes = True
+        response = self.client.get("/consent", params={"req": self.start(self.register())["pending"]})
+        self.assertEqual(response.status_code, 200, why(response))
+        text = response.text
+        for expected in ("This gives read-only access to your Garmin data on this server, unless you tick the box "
+                         "below.", WRITE_BOX + WRITE_TEXT, "may add training-plan workouts to your Garmin Connect "
+                         "calendar and remove the ones this server added", "Leave it empty for read-only access",
+                         "label.check input{width:auto"):
+            self.assertIn(expected, text)
+        self.assertNotIn("checked", text)                                # unticked by default
+        self.assertLess(text.index(WRITE_BOX), text.index('value="approve"'))
+        self.assertEqual(response.headers["content-security-policy"], PAGE_HEADERS["content-security-policy"])
+
+    def test_switch_on_unticked_is_read_only(self):
+        self.writes = True
+        flow = self.sign_in_ticked(False)
+        self.assertEqual(flow["tokens"]["scope"], "offline_access")
+        self.assertFalse(self.may_write(flow["tokens"]["access_token"]))
+
+    def test_switch_on_ticked_grants_the_scope_and_keeps_it_on_refresh(self):
+        self.writes = True
+        flow = self.sign_in_ticked(True)
+        self.assertEqual(flow["tokens"]["scope"], "offline_access plan:write")
+        self.assertTrue(self.may_write(flow["tokens"]["access_token"]))
+        self.assertIn("consent: approved for client %s with plan:write" % flow["client"]["client_id"],
+                      self.logs.auth_lines("INFO"))
+        rotated = self.rotate(flow["client"], flow["tokens"]["refresh_token"])
+        self.assertEqual(rotated["scope"], "offline_access plan:write")
+        self.assertTrue(self.may_write(rotated["access_token"]))
+        response = self.refresh(flow["client"], rotated["refresh_token"], scope="offline_access")
+        self.assertEqual(response.status_code, 200, why(response))   # an access token may drop it
+        self.assertFalse(self.may_write(response.json()["access_token"]))
+        self.assert_mcp(flow["tokens"]["access_token"], 200)
+
+    def test_only_yes_ticks_the_box(self):
+        self.writes = True
+        flow = self.start(self.register())
+        response = self.post_consent(flow["pending"], secret=self.owner_secret, plan_write="on")
+        flow["code"] = query_of(response.headers["location"])["code"]
+        self.assertEqual(self.exchange(flow).json()["scope"], "offline_access")
+
+    def test_switched_off_between_page_and_approval_grants_nothing(self):
+        self.writes = True
+        flow = self.start(self.register())
+        self.assertIn(WRITE_BOX, self.page(flow))
+        self.writes = False
+        response = self.post_consent(flow["pending"], secret=self.owner_secret, plan_write="yes")
+        flow["code"] = query_of(response.headers["location"])["code"]
+        self.assertEqual(self.exchange(flow).json()["scope"], "offline_access")
+
+    def test_a_wrong_secret_page_keeps_the_box(self):
+        self.writes = True
+        flow = self.start(self.register())
+        response = self.post_consent(flow["pending"], secret=fake_secret(), plan_write="yes")
+        self.assertEqual(response.status_code, 403, why(response))
+        self.assertIn(WRITE_BOX, response.text)
+
+    def test_existing_grants_keep_reading_when_the_switch_turns_on(self):
+        old = self.sign_in_ticked(False)
+        self.writes = True
+        self.assert_mcp(old["tokens"]["access_token"], 200)
+        rotated = self.rotate(old["client"], old["tokens"]["refresh_token"])
+        self.assertEqual(rotated["scope"], "offline_access")
+        self.assertFalse(self.may_write(rotated["access_token"]))
+        self.assertEqual(self.grant_reasons(), [None])   # nothing revoked
+
+    def test_the_static_bearer_never_writes(self):
+        self.writes = True
+        self.assertFalse(self.may_write(self.bearer))
+
+    def test_approved_scopes(self):
+        self.assertEqual(owner_auth.approved_scopes("offline_access", False), "offline_access")
+        self.assertEqual(owner_auth.approved_scopes("plan:write", False), "")
+        self.assertEqual(owner_auth.approved_scopes("", True), "plan:write")
+        self.assertEqual(owner_auth.approved_scopes("a plan:write b", True), "a b plan:write")
+
+
+@unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
+class PlanWritesSwitch(unittest.TestCase):
+    """The default writes_offered reads PLAN_WRITES through feature_config on every call."""
+
+    def test_it_follows_the_environment(self):
+        key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        on = {"GARMIN_AUTH": "full", "HISTORY_SEARCH": "on", "DATABASE_URL": "postgresql://u:TEST-ONLY@db/x",
+              "HISTORY_TOKEN_KEY": key, "PLAN_TOOLS": "on", "PLAN_WRITES": "on"}
+        with mock.patch.dict(os.environ, on, clear=True):
+            self.assertTrue(owner_auth._plan_writes_on())
+        for change in ({"PLAN_WRITES": "off"}, {"PLAN_TOOLS": "off"}, {"PLAN_WRITES": "yes"}, {"ROLE": "worker"}):
+            with self.subTest(change=sorted(change)), mock.patch.dict(os.environ, {**on, **change}, clear=True):
+                self.assertFalse(owner_auth._plan_writes_on())
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(owner_auth._plan_writes_on())
+
+
 if __name__ == "__main__":
     unittest.main()

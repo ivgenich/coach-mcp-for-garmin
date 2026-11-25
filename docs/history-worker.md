@@ -31,7 +31,7 @@ updates the database tables when it starts.
   (below), computes the embeddings and writes Postgres. It serves nothing and needs no
   port, domain or volume.
 - The **scheduler** starts once a day, adds the day's jobs (the daily sweep, and a rebuild
-  when the rules changed), and exits.
+  when the numbers history stores changed), and exits.
 
 ## Set it up on Railway
 

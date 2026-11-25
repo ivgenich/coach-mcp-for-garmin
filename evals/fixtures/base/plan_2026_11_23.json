@@ -1,0 +1,514 @@
+{
+ "note": "L0: the training-plan world, Monday 2026-11-23 09:00 Europe/London. Runs 2026-09-29..11-22 (ids 74000001-32, ownerId the profile id): 4 a week, 40 km (46.9 km in the week of 2026-11-09, with the 20.9 km long run); LT speed 3.85 m/s (4:20/km), marathon prediction 3:35:00, VO2max 52; one fixed 'VO2 intervals' run on 2026-12-16. Profile id 71000001.",
+ "anchor": {
+  "now": "2026-11-23T09:00",
+  "tz": "Europe/London"
+ },
+ "responses": {
+  "get_stats": {
+   "2026-11-23": {
+    "userProfileId": 71000001,
+    "calendarDate": "2026-11-23",
+    "restingHeartRate": 47
+   }
+  },
+  "connectapi": {
+   "/activitylist-service/activities/search/activities": [
+    {
+     "activityId": 74000032,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-22 07:00:00",
+     "startTimeGMT": "2026-11-22 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000031,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-20 07:00:00",
+     "startTimeGMT": "2026-11-20 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000030,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-19 07:00:00",
+     "startTimeGMT": "2026-11-19 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000029,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-17 07:00:00",
+     "startTimeGMT": "2026-11-17 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000028,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-15 07:00:00",
+     "startTimeGMT": "2026-11-15 07:00:00",
+     "distance": 20900.0,
+     "duration": 6966.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000027,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-13 07:00:00",
+     "startTimeGMT": "2026-11-13 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000026,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-12 07:00:00",
+     "startTimeGMT": "2026-11-12 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000025,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-10 07:00:00",
+     "startTimeGMT": "2026-11-10 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000024,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-08 07:00:00",
+     "startTimeGMT": "2026-11-08 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000023,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-06 07:00:00",
+     "startTimeGMT": "2026-11-06 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000022,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-05 07:00:00",
+     "startTimeGMT": "2026-11-05 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000021,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-03 07:00:00",
+     "startTimeGMT": "2026-11-03 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000020,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-11-01 07:00:00",
+     "startTimeGMT": "2026-11-01 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000019,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-30 07:00:00",
+     "startTimeGMT": "2026-10-30 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000018,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-29 07:00:00",
+     "startTimeGMT": "2026-10-29 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000017,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-27 07:00:00",
+     "startTimeGMT": "2026-10-27 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000016,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-25 07:00:00",
+     "startTimeGMT": "2026-10-25 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000015,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-23 07:00:00",
+     "startTimeGMT": "2026-10-23 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000014,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-22 07:00:00",
+     "startTimeGMT": "2026-10-22 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000013,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-20 07:00:00",
+     "startTimeGMT": "2026-10-20 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000012,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-18 07:00:00",
+     "startTimeGMT": "2026-10-18 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000011,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-16 07:00:00",
+     "startTimeGMT": "2026-10-16 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000010,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-15 07:00:00",
+     "startTimeGMT": "2026-10-15 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000009,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-13 07:00:00",
+     "startTimeGMT": "2026-10-13 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000008,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-11 07:00:00",
+     "startTimeGMT": "2026-10-11 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000007,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-09 07:00:00",
+     "startTimeGMT": "2026-10-09 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000006,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-08 07:00:00",
+     "startTimeGMT": "2026-10-08 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000005,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-06 07:00:00",
+     "startTimeGMT": "2026-10-06 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000004,
+     "activityName": "Synthetic Long Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-04 07:00:00",
+     "startTimeGMT": "2026-10-04 07:00:00",
+     "distance": 14000.0,
+     "duration": 4666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000003,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-02 07:00:00",
+     "startTimeGMT": "2026-10-02 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000002,
+     "activityName": "Synthetic Tempo Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-10-01 07:00:00",
+     "startTimeGMT": "2026-10-01 07:00:00",
+     "distance": 10000.0,
+     "duration": 3333.3,
+     "ownerId": 71000001
+    },
+    {
+     "activityId": 74000001,
+     "activityName": "Synthetic Easy Run",
+     "activityType": {
+      "typeId": 1,
+      "typeKey": "running",
+      "parentTypeId": 17
+     },
+     "startTimeLocal": "2026-09-29 07:00:00",
+     "startTimeGMT": "2026-09-29 07:00:00",
+     "distance": 8000.0,
+     "duration": 2666.7,
+     "ownerId": 71000001
+    }
+   ]
+  },
+  "get_lactate_threshold": {
+   "*": {
+    "speed_and_heart_rate": {
+     "calendarDate": "2026-11-01",
+     "speed": 0.385,
+     "heartRate": 168
+    }
+   }
+  },
+  "get_race_predictions": {
+   "*": {
+    "calendarDate": "2026-11-22",
+    "time5K": 1230,
+    "time10K": 2580,
+    "timeHalfMarathon": 5820,
+    "timeMarathon": 12900
+   }
+  },
+  "get_max_metrics": {
+   "2026-11-23": [
+    {
+     "generic": {
+      "calendarDate": "2026-11-22",
+      "vo2MaxPreciseValue": 52.0,
+      "vo2MaxValue": 52
+     }
+    }
+   ]
+  },
+  "query_garmin_graphql": {
+   "*": {
+    "data": {
+     "workoutScheduleSummariesScalar": [
+      {
+       "scheduleDate": "2026-12-16",
+       "workoutName": "VO2 intervals",
+       "workoutType": "running",
+       "estimatedDurationInSecs": 3600,
+       "isRestDay": false,
+       "workoutId": 7790001
+      }
+     ]
+    }
+   }
+  }
+ },
+ "faults": {}
+}

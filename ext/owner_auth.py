@@ -27,6 +27,14 @@ This module adds what the SDK leaves to the provider:
                            its grant, except for a 30 s idempotent replay window
                            (kept in memory only: after a restart a reuse revokes)
     static bearer          the optional MCP_BEARER_TOKEN header, for Claude Code or CI
+    plan:write             with PLAN_WRITES=on the consent page adds a box that lets the
+                           app change the Garmin calendar; the grant gets the plan:write
+                           scope only when the owner ticks it (plan_confirm.caller_may_write
+                           checks it). A client cannot ask for it at /authorize, and the
+                           static bearer never has it. The tick is stored as its own
+                           consent row (auth_store write_consent): without it a plan:write
+                           in a grant's scopes (an older page copied requested scopes) is
+                           dropped when the token is read.
     OriginCheck            /mcp refuses (403) a request whose Origin header is not
                            PUBLIC_URL's, Claude's web apps' or in ALLOWED_ORIGINS
     IssuerParameter        RFC 9207: `iss` on every authorization response, and
@@ -77,8 +85,10 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 import auth_config
 import auth_store
+import feature_config
 from auth_config import AuthConfig
 from auth_store import AuthStore, hash_secret
+from plan_confirm import WRITE_SCOPE
 
 log = logging.getLogger("garmin_ext.auth")
 SUBJECT = "owner"
@@ -187,6 +197,19 @@ def _exact_redirects(config: AuthConfig) -> frozenset:
     return frozenset(allowed)
 
 
+def _plan_writes_on() -> bool:
+    return bool(feature_config.load().plan_writes)
+
+
+def approved_scopes(requested: str, write_ticked: bool) -> str:
+    """The scopes a code gets on approval: what the client asked for, never plan:write,
+    plus plan:write when the owner ticked the calendar box on a page that offered it."""
+    kept = [s for s in _split(requested) if s != WRITE_SCOPE]
+    if write_ticked:
+        kept.append(WRITE_SCOPE)
+    return " ".join(kept)
+
+
 # --- clients --------------------------------------------------------------------------
 
 
@@ -251,9 +274,13 @@ class OwnerAuthProvider:
     """OAuthAuthorizationServerProvider for one owner (SDK/server/auth/provider.py:146;
     structural typing, no subclassing). Records live in AuthStore."""
 
-    def __init__(self, config: AuthConfig, store: AuthStore) -> None:
+    def __init__(self, config: AuthConfig, store: AuthStore,
+                 writes_offered: Optional[Callable[[], bool]] = None) -> None:
         self.config = config
         self.store = store
+        # Whether the consent page offers plan:write: PLAN_WRITES as feature_config reads
+        # it from the environment (on only with its prerequisites), read on every page.
+        self.writes_offered: Callable[[], bool] = writes_offered or _plan_writes_on
         self._allowed_redirects = _exact_redirects(config)
         # Guards refresh rotation together with the replay map; the
         # store has its own lock per operation. Nothing awaits while holding it.
@@ -509,9 +536,11 @@ class OwnerAuth:
     provider: "OwnerAuthProvider"
 
 
-def build(config: AuthConfig, *, clock: Callable[[], float] = time.time) -> OwnerAuth:
+def build(config: AuthConfig, *, clock: Callable[[], float] = time.time,
+          writes_offered: Optional[Callable[[], bool]] = None) -> OwnerAuth:
     """Open the sign-in database and make the SDK settings and the provider.
-    `clock` is for tests (a fake clock that starts at time.time())."""
+    `clock` is for tests (a fake clock that starts at time.time()); so is `writes_offered`
+    (default: PLAN_WRITES from the environment, read on every consent page)."""
     store = AuthStore(config.db_path, clock=clock)
     try:
         if store.owner_secret_changed(config.owner_secret):
@@ -529,7 +558,7 @@ def build(config: AuthConfig, *, clock: Callable[[], float] = time.time) -> Owne
         if str(settings.issuer_url) != config.public_url or str(settings.resource_server_url) != config.resource_url:
             raise RuntimeError(f"owner_auth: the SDK spells PUBLIC_URL {config.public_url} as {settings.issuer_url}; "
                                "set PUBLIC_URL to that spelling")
-        provider = OwnerAuthProvider(config, store)
+        provider = OwnerAuthProvider(config, store, writes_offered)
         clients, grants = store.counts()
         log.info("sign-in: database ready (%d clients, %d live grants)", clients, grants)
         return OwnerAuth(config=config, settings=settings, provider=provider)
@@ -595,11 +624,18 @@ _STYLE = (
 )
 
 
-def _page(title: str, body: str, status: int) -> HTMLResponse:
+_WRITE_STYLE = (
+    "fieldset{border:1px solid #d9b84a;border-radius:.4rem;margin:1rem 0;padding:.4rem .8rem}"
+    "label.check{font-weight:600;margin:.5rem 0}label.check input{width:auto;margin:0 .5rem 0 0}"
+)
+WRITE_FIELD = "plan_write"
+
+
+def _page(title: str, body: str, status: int, extra_style: str = "") -> HTMLResponse:
     doc = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{html.escape(title)}</title><style>{_STYLE}</style></head>"
+        f"<title>{html.escape(title)}</title><style>{_STYLE}{extra_style}</style></head>"
         f"<body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>"
     )
     return HTMLResponse(doc, status_code=status, headers=dict(_PAGE_HEADERS))
@@ -654,15 +690,31 @@ def _form_page(auth: OwnerAuth, pending_id: str, row: Dict, client_name: Optiona
     name = _plain(client_name, CLIENT_NAME_MAX) if client_name and client_name.strip() else "an app with no name"
     started = _started(auth.provider.clock() - row["created_at"])
     alert = f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+    writes = auth.provider.writes_offered()
+    if writes:
+        access = ("This gives read-only access to your Garmin data on this server, unless you tick "
+                  "the box below.")
+        write_box = (
+            "<fieldset>"
+            f'<label class="check"><input type="checkbox" name="{WRITE_FIELD}" value="yes">'
+            "Also allow this app to change my Garmin calendar</label>"
+            '<p class="small">With the box ticked, this app may add training-plan workouts to your Garmin '
+            "Connect calendar and remove the ones this server added, after you confirm each change in the "
+            "conversation. Leave it empty for read-only access, for example for a daily report.</p>"
+            "</fieldset>"
+        )
+    else:
+        access, write_box = "This gives read-only access to your Garmin data on this server.", ""
     body = (
         f"<p>You are signing in to <b>{html.escape(auth.config.host)}</b>.</p>"
         f"<p>App: <b>{html.escape(name)}</b> (not verified)</p>"
         f"{where}"
-        f"<p>{started} This gives read-only access to your Garmin data on this server.</p>"
+        f"<p>{started} {access}</p>"
         "<p>Approve only a sign-in you started yourself just now. If someone sent you this link, press Deny.</p>"
         f"{alert}"
         f'<form method="post" action="{html.escape(auth_config.CONSENT_PATH)}">'
         f'<input type="hidden" name="req" value="{html.escape(pending_id)}">'
+        f"{write_box}"
         '<label for="username">Username</label>'
         f'<input id="username" name="username" value="{SUBJECT}" autocomplete="username" readonly>'
         '<label for="secret">Owner secret</label>'
@@ -672,7 +724,7 @@ def _form_page(auth: OwnerAuth, pending_id: str, row: Dict, client_name: Optiona
         "</form>"
         '<p class="small">The owner secret is set on the server as OWNER_SECRET.</p>'
     )
-    return _page("Sign in", body, status)
+    return _page("Sign in", body, status, _WRITE_STYLE if writes else "")
 
 
 def _consent_endpoint(auth: OwnerAuth) -> Callable:
@@ -762,12 +814,15 @@ async def _consent_post(auth: OwnerAuth, store: AuthStore, request: Request) -> 
                                                     state=failed_row["state"], iss=auth.config.public_url))
         _, name = _client_name(store, failed_row["client_id"])
         return _form_page(auth, pending_id, failed_row, name, error="Wrong secret.", status=403)
-    # 9. Approved: take the request and mint the code in one transaction.
+    # 9. Approved: take the request and mint the code in one transaction. plan:write only from
+    #    the box, and only while the page offers it (PLAN_WRITES is read again here).
+    write = first(WRITE_FIELD) == "yes" and auth.provider.writes_offered()
     code = "ac_" + secrets.token_urlsafe(32)
-    taken = store.approve_pending(pending_hash, code_hash=hash_secret(code), code_ttl=auth_config.CODE_TTL)
+    taken = store.approve_pending(pending_hash, code_hash=hash_secret(code), code_ttl=auth_config.CODE_TTL,
+                                  scopes=approved_scopes(row["scopes"], write), write_consent=write)
     if taken is None:
         return _expired_page()
-    log.info("consent: approved for client %s", taken["client_id"])
+    log.info("consent: approved for client %s%s", taken["client_id"], " with plan:write" if write else "")
     # The OAuth parameters come from the stored request, never from the form. iss (RFC 9207) is the
     # issuer exactly as the metadata names it: AuthSettings keeps PUBLIC_URL's spelling (build()).
     return _redirect(construct_redirect_uri(taken["redirect_uri"], code=code, state=taken["state"],

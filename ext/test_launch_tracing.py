@@ -139,7 +139,7 @@ class TracingHooks(unittest.TestCase):
 
     def test_other_methods_count_but_get_no_get_span(self):
         client, _ = self.traced_client([200])
-        client._run_request("POST", "/activity-service/activity")
+        client._run_request("POST", "graphql-gateway/graphql", json={"query": "query{x}"})
         self.assertEqual(self.names("span"), [])
         self.assertEqual([c[2]["outcome"] for c in self.names("count")], ["ok"])
 

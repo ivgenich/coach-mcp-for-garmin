@@ -7,15 +7,36 @@ decoupling), VO2max and training status, weight, and gear mileage.
 
 Planned sessions often move a day or two, so a planned workout is done when Garmin linked
 an activity to it, or an activity of the same sport was recorded on the planned day, up to
-1 day earlier or up to 2 days later (same-day matches first, one activity per workout, and
-only activities of the report's week up to today). A workout dated after today is not due
-yet: it is never done, the plan line says how many are still ahead, and `low_completion`
-leaves it out. Garmin's schedule list carries no date the workout was created, so the 1-day
-early limit is what keeps a session done days before the plan from counting. The plan line
-gives how many were done and how many of those on the planned day; in the JSON, `plan`
-holds `scheduled`, `completed`, `on_planned_day`, `moved` (done on another day),
-`upcoming` (dated after today), `linked` (Garmin's own links) and `completion_pct`
-(completed of scheduled). The daily status keeps the same-day rule.
+1 day earlier or up to 2 days later (as many workouts as possible and, among those ways, as
+many on the planned day as possible: same-day matches first; one activity per workout, and
+only activities of the report's week up to today). The week has one set of edges for both
+sides: workouts dated in the week, activities started from its first day at 00:00 up to
+the end of the week or today, whichever comes first (by the watch's local start time, else
+the GMT start read in `REPORT_TZ`). A workout dated after today is not due yet: it is
+never matched to an activity, the plan line says how many are still ahead, and it is left
+out of `completed`, `completion_pct` and `low_completion`; if Garmin already linked an
+activity to it, it counts in `done_early` instead, so the share never passes 100%. Garmin's
+schedule list carries no date the workout was created, so the 1-day early limit is what
+keeps a session done days before the plan from counting. The plan line gives how many of
+the due workouts were done and how many of those on the planned day; in the JSON, `plan`
+holds `scheduled`, `due` (dated up to today), `completed`, `on_planned_day`, `moved` (done
+on another day), `upcoming` (dated after today), `done_early` (upcoming, already linked by
+Garmin), `linked` (Garmin's own links) and `completion_pct` (completed of due; null when
+nothing is due yet). The daily status keeps the same-day rule.
+
+With plan tracking on (`PLAN_TRACKING=on`, see [Training plans](training-plan.md)), the
+answer also has `training_plan`, right after `plan`: the stored training plan's sessions of
+the 7 days from `start`, as `planned`, `done`, `partial`, `missed`, `replaced`, `moved` and
+`open` (not settled yet), or `null` when there is no tracked plan, it has no session in
+those days, or its database read failed. Before counting, the report refreshes the plan's
+links from its 14 days of activities and the week's calendar (the daily status's two days
+cannot settle a session as missed; a failed activity search settles nothing, and a full page
+of 100 activities settles nothing before the day after its oldest one), then counts from that same read; the text adds one
+"Training plan" line. Best effort: when the database does not answer within 3 seconds, or no
+account id is found (in the week's HRV or sleep answers, else the last used device's profile
+number, else an activity's owner), `training_plan` is left out, exactly as with plan
+tracking off. It feeds no flag and no level, `RULES_VERSION` stays the same,
+and key mode has none.
 
 The long session's aerobic decoupling compares heart rate against power (or speed) in the
 first and second half, so it only means something when the effort was even. `long_session.steady`
@@ -31,12 +52,18 @@ climbing in its elevation samples is checked.
 With the [morning report recipe](../recipes/claude-ai-morning-report/README.md), the cloud
 routine adds the weekly report to the page's weekly tab on Sundays.
 
-## Weekly status rules v2
+## Weekly status rules v3
+
+v3 (from v2): `completed` and `completion_pct` count only the workouts already due
+(`completion_pct` = completed of due, v2: completed of scheduled), and a workout still
+ahead that Garmin already linked counts in the new `plan.done_early`, not in `completed`
+(v2 counted it, so the share could pass the due workouts); `plan.due` is added. Workouts
+and activities share the same week edges.
 
 v2 (from v1): a planned workout counts only when done on its day, 1 day earlier or 2 days
-later, never after today (v1: any day of the week), with `plan.moved` and `plan.upcoming`
-added; the long session's decoupling reads `not_applicable` when the effort was uneven
-(`long_session.steady` added).
+later, never after today (v1: on any day of the week), with `plan.moved` and
+`plan.upcoming` added; the long session's decoupling reads `not_applicable` when the effort
+was uneven (`long_session.steady` added).
 
 | Flag | Fires when | Level |
 |---|---|---|

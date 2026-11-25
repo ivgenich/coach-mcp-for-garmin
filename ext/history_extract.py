@@ -35,7 +35,11 @@ import weekly_status as ws
 
 # Bump when the stored day/week numbers change shape (rebuild job reruns).
 NUMBERS_VERSION = 1
-RULES_VERSION = (ds.RULES_VERSION, ws.RULES_VERSION)
+# History's own rules version (day part, week part), not the status tools' RULES_VERSION: a change in it
+# recomputes and re-embeds all of history (history_jobs.rebuild), so bump it only when a stored number, flag or
+# level changes. test_history_extract.StoredNumbersPinned fails when they change without a bump. It started as
+# (daily, weekly) = (1, 2); weekly rules v3 changed plan completion only, which history does not store.
+RULES_VERSION = (1, 2)
 
 FINAL_AFTER_DAYS = 3          # a day is final 3 days after its date (late syncs)
 EMPTY_STOP_DAYS = 14          # backfill stops after 14 answered empty days in a row (account start)
@@ -381,7 +385,7 @@ def week_numbers(start: dt.date, days: Mapping[dt.date, Mapping[str, Any]], *, m
 
     rows = [days.get(d) or {} for d in week_days]
     out: Dict[str, Any] = {
-        "mode": mode, "rules_version": ws.RULES_VERSION,
+        "mode": mode, "rules_version": RULES_VERSION[1],
         "days_with_data": sum(1 for n in rows if n and not is_empty_day(n)),
         "hrv_avg_7d": hrv["avg_7d"], "hrv_avg_28d": hrv["avg_28d"], "hrv_delta_ms": hrv["delta_ms"],
         "hrv_status": code(hrv["status"]), "hrv_balanced_low": hrv["balanced_low"],

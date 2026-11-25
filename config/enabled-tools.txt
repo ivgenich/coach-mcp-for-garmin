@@ -2,6 +2,9 @@
 # lines are ignored. Baked into the image (Dockerfile); ext/launch.py exposes
 # only these, and every name must be a read-only tool or the build and the
 # start fail. The GARMIN_ENABLED_TOOLS variable can only narrow this list.
+# The feature switches add their own tools, never listed here: HISTORY_SEARCH
+# and PLAN_TOOLS read-only ones, PLAN_WRITES the plan write tools (plan_commit,
+# plan_cancel); a write tool named here is an error.
 # Apply a change: redeploy (./scripts/deploy.sh).
 
 # Activities

@@ -69,6 +69,32 @@ def register_history_tools(app, features):
         log.error("history search: the tools could not be registered (%s)", type(exc).__name__)
 
 
+def plan_tools_wanted(features):
+    """True when the plan read tools are registered: PLAN_TOOLS=on (feature_config allows it only with
+    HISTORY_SEARCH=on, GARMIN_AUTH=full and ROLE=app) and the history tools are registered too."""
+    return bool(getattr(features, "plan_tools", False)) and history_tools_wanted(features)
+
+
+def register_plan_tools(app, features, get_client):
+    """plan_tools.register(adder, features, get_client, writes=features.plan_writes), with the same adder as
+    register_history_tools. A failure leaves the tools out and the server up."""
+    module = optional("plan_tools")
+    if module is None:
+        return
+
+    def adder(fn, name=None, description=None, **kwargs):
+        if name is not None:
+            kwargs["name"] = name
+        if description is not None:
+            kwargs["description"] = description
+        return app.tool(**kwargs)(fn)
+
+    try:
+        module.register(adder, features, get_client, writes=bool(getattr(features, "plan_writes", False)))
+    except Exception as exc:  # noqa: BLE001
+        log.error("training plans: the tools could not be registered (%s)", type(exc).__name__)
+
+
 def build_guard(features, environ):
     """The process's GarminGuard: on the Postgres shared state (garmin_guard_pg.PgSharedState, live=True: the
     live path answers from memory and writes in the background) with HISTORY_SEARCH=on, else in memory. A
@@ -88,12 +114,52 @@ def build_guard(features, environ):
     return garmin_guard.GarminGuard(state, zone=zone)
 
 
+FORGET_REFUSED_LIVE = (
+    "history forget: REFUSED, nothing was removed: %d workout(s) the training plans wrote to Garmin may still be "
+    "on the calendar, and forgetting drops the plan records (and the install tag) that find them. Run "
+    "`python ext/launch.py --plan-cleanup` first (docs/training-plan.md), then redeploy with HISTORY_FORGET=yes "
+    "still set")
+FORGET_UNCHECKED = ("history forget: FAILED, nothing was removed: the training plans' workouts on Garmin could not "
+                    "be counted (%s); check DATABASE_URL and the Postgres service, then redeploy with "
+                    "HISTORY_FORGET=yes still set")
+
+
+def live_plan_workouts(features):
+    """How many workouts the training plans still have on Garmin that `--plan-cleanup` would delete
+    (plan_store.live_workouts(on_or_after=today): unlinked, today or later); 0 when the plan module, its
+    database driver or its tables are not there. Raises when the database does not answer."""
+    try:
+        module = importlib.import_module("plan_store")
+        store = module.PgPlanStore(features.database_url)
+    except ImportError:
+        return 0
+    if not store.ready():
+        return 0
+    try:
+        today = status_common.today_local(status_common.zone())
+    except ValueError:   # REPORT_TZ unset or unknown: a day earlier counts more, never fewer
+        today = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=1)
+    return int(store.live_workouts(on_or_after=today))
+
+
 def forget_history(features):
     """HISTORY_FORGET=yes: delete the stored history before anything uses the database: history_store's
     forget_all() (the schema with the days, weeks, jobs and vectors), then history_retrieval.forget() and
     history_embed.forget_caches() where those modules are in the image. Logs what each step removed (fixed
     texts), then how to finish. Never raises: a failed step is one ERROR line, and True only when every step
-    worked."""
+    worked.
+
+    Refused first (one ERROR line, nothing removed, False) while the training plans have workouts on Garmin
+    (live_plan_workouts() > 0): the dropped schema holds their records and the install tag --plan-cleanup
+    --orphans needs to find them, so the owner runs --plan-cleanup first."""
+    try:
+        live = live_plan_workouts(features)
+    except Exception as exc:  # noqa: BLE001
+        log.error(FORGET_UNCHECKED, type(exc).__name__)
+        return False
+    if live > 0:
+        log.error(FORGET_REFUSED_LIVE, live)
+        return False
     removed, ok = [], True
     steps = (("history_store", lambda m: m.PgHistoryStore(features.database_url).forget_all()),
              ("history_retrieval", lambda m: m.forget(features)),

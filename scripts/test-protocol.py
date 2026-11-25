@@ -31,7 +31,9 @@ Checks (each prints PASS/FAIL with a reason, or SKIP; exit status 1 on any FAIL)
   tools       tools/list in both eras: same names, expected count (default:
               the number of tools in --tools-file, config/enabled-tools.txt),
               the names equal the file's names, every tool annotated
-              readOnlyHint=true
+              readOnlyHint=true (with --write-tools: the write tools are
+              listed too and annotated as writes, every other tool
+              readOnlyHint=true)
   resources   resources/list in both eras lists the workout:// resources
   instructions
               each era's handshake result (server/discover, initialize)
@@ -51,10 +53,17 @@ Checks (each prints PASS/FAIL with a reason, or SKIP; exit status 1 on any FAIL)
   raw-http    POST server/discover at 2026-07-28 answers 200 with a
               DiscoverResult; an unsupported version gets JSON-RPC -32022
   tool-call   (with --tool-call) the tool answers with non-error text in both eras
+  write-tools (with --write-tools NAMES, a server with PLAN_WRITES=on) each
+              named tool is listed in both eras with readOnlyHint=false,
+              idempotentHint=true and the destructiveHint its kind has
+              (plan_commit, log_feedback additive; plan_cancel,
+              plan_apply_changes destructive); the instructions no longer
+              say "No tool changes any data.". No write tool is ever called.
 
 Without --tool-call the only tool call is get_daily_status with the date
 2026-02-30, which the server refuses before any Garmin call, so a server with
-no Garmin login passes (CI uses this).
+no Garmin login passes (CI uses this). Without --write-tools every check is
+the read-only one above (the default config serves no write tool).
 
 A --tool-call reply is previewed (its first 120 characters) only for a
 loopback --url (127.0.0.1, ::1, localhost), because a deployment answers with
@@ -120,6 +129,11 @@ TOOL_ERROR_PREFIX = "Error: Invalid input:"
 TOOL_ERROR_WORDS = "dates must be real calendar dates"
 TOOL_ERROR_MAX = 400
 TOOL_ERROR_LEAKS = ("2026-02-30", "Traceback", "Error executing tool")
+# --write-tools: the own write tools a server may serve with its switches on (launch.OWN_WRITE_TOOLS) and the
+# destructiveHint each must carry (ADDITIVE: False, DESTRUCTIVE: True); every one is idempotentHint=true.
+WRITE_TOOL_DESTRUCTIVE = {"plan_commit": False, "log_feedback": False, "plan_cancel": True,
+                          "plan_apply_changes": True}
+READ_ONLY_SENTENCE = "No tool changes any data."
 
 
 def tool_names(path: str = ENABLED_TOOLS_FILE) -> set[str] | None:
@@ -376,18 +390,20 @@ def check_eras(modern: dict | None, legacy: dict | None, args: argparse.Namespac
     check_server_info(eras, args)
 
     want_names = args.tool_names
+    writes = set(args.write_tools)
     for era, data in eras.items():
         tools = data["tools"]
         names = sorted(t.name for t in tools)
         not_ro = sorted(
-            t.name for t in tools if not (t.annotations is not None and t.annotations.read_only_hint is True)
+            t.name for t in tools
+            if t.name not in writes and not (t.annotations is not None and t.annotations.read_only_hint is True)
         )
         ok = len(names) == args.expect_tools and not not_ro
         reason = f"{len(names)} tools (expected {args.expect_tools})"
         if not_ro:
             reason += f"; without readOnlyHint=true: {', '.join(not_ro)}"
         else:
-            reason += ", all readOnlyHint=true"
+            reason += ", all readOnlyHint=true" if not writes else ", all but the write tools readOnlyHint=true"
         if want_names is not None:
             ok_names, how = names_match(set(names), want_names, args.expect_tools)
             ok = ok and ok_names
@@ -399,6 +415,9 @@ def check_eras(modern: dict | None, legacy: dict | None, args: argparse.Namespac
         lg = {t.name for t in legacy["tools"]}
         diff = sorted(m ^ lg)
         record("tools/same-set", not diff, "identical name sets" if not diff else f"differ: {', '.join(diff)}")
+
+    if writes:
+        check_write_tools(eras, args)
 
     want = set(args.expect_resources)
     for era, data in eras.items():
@@ -424,11 +443,13 @@ def check_eras(modern: dict | None, legacy: dict | None, args: argparse.Namespac
             record(f"instructions/{era}", False, "the handshake result carries no instructions")
             continue
         absent = [p for p in INSTRUCTION_PHRASES if p not in text]
-        ok = len(text) <= INSTRUCTIONS_MAX and text.isascii() and not absent
+        stale = bool(writes) and READ_ONLY_SENTENCE in text
+        ok = len(text) <= INSTRUCTIONS_MAX and text.isascii() and not absent and not stale
         record(f"instructions/{era}", ok,
                f"{len(text)} characters (at most {INSTRUCTIONS_MAX}); ASCII: {yn(text.isascii())}; "
                + (f"missing: {', '.join(repr(p) for p in absent)}" if absent
-                  else f"all {len(INSTRUCTION_PHRASES)} phrases present"))
+                  else f"all {len(INSTRUCTION_PHRASES)} phrases present")
+               + (f"; still says {READ_ONLY_SENTENCE!r} with write tools on" if stale else ""))
     if len(eras) == 2:
         m_text, l_text = modern.get("instructions"), legacy.get("instructions")
         same = isinstance(m_text, str) and m_text == l_text
@@ -470,6 +491,37 @@ def check_eras(modern: dict | None, legacy: dict | None, args: argparse.Namespac
             if args.preview:
                 shown += f": {text.replace(chr(10), ' ')[:PREVIEW_CHARS]!r}"
             record(f"tool-call/{era}", ok, shown, report=quiet)
+
+
+def write_hints(tool: Any) -> str | None:
+    """None when `tool` carries the hints of its write kind, else what is wrong."""
+    ann = tool.annotations
+    if ann is None:
+        return "no annotations"
+    want = WRITE_TOOL_DESTRUCTIVE.get(tool.name)
+    wrong = []
+    if ann.read_only_hint is not False:
+        wrong.append(f"readOnlyHint {ann.read_only_hint} (want false)")
+    if want is not None and ann.destructive_hint is not want:
+        wrong.append(f"destructiveHint {ann.destructive_hint} (want {str(want).lower()})")
+    if ann.idempotent_hint is not True:
+        wrong.append(f"idempotentHint {ann.idempotent_hint} (want true)")
+    return "; ".join(wrong) or None
+
+
+def check_write_tools(eras: dict, args: argparse.Namespace) -> None:
+    """write-tools/<era>: every --write-tools name is listed and annotated as a write. Nothing is called."""
+    for era, data in eras.items():
+        by_name = {t.name: t for t in data["tools"]}
+        missing = [n for n in args.write_tools if n not in by_name]
+        wrong = {n: w for n in args.write_tools if n in by_name for w in [write_hints(by_name[n])] if w}
+        parts = [f"{len(args.write_tools)} write tool(s): {', '.join(args.write_tools)}"]
+        if missing:
+            parts.append(f"not listed: {', '.join(missing)}")
+        parts += [f"{n}: {w}" for n, w in sorted(wrong.items())]
+        if not missing and not wrong:
+            parts.append("listed, readOnlyHint=false, hints of their kind")
+        record(f"write-tools/{era}", not missing and not wrong, "; ".join(parts))
 
 
 # --------------------------------------------------------------------------
@@ -678,6 +730,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(DEFAULT_RESOURCES),
         help="comma-separated resource URIs that must be listed in both eras",
     )
+    p.add_argument("--write-tools", default="", metavar="NAMES",
+                   help="comma-separated write tools a PLAN_WRITES=on server must also list, annotated as writes "
+                        "(e.g. plan_commit,plan_cancel); they join the --tools-file names and count. Never called. "
+                        f"Known: {', '.join(sorted(WRITE_TOOL_DESTRUCTIVE))}")
     p.add_argument("--tool-call", help="tool to call in both eras, e.g. get_daily_status")
     p.add_argument("--tool-args", default="{}", help='JSON arguments for --tool-call, e.g. \'{"limit": 1}\'')
     p.add_argument("--host-header", help="send this Host header (e.g. the Railway hostname to a local server)")
@@ -698,6 +754,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     args.tools_file = os.path.abspath(args.tools_file)
     args.tool_names = tool_names(args.tools_file)
+    args.write_tools = sorted({n for n in (s.strip() for s in args.write_tools.split(",")) if n})
+    unknown = [n for n in args.write_tools if n not in WRITE_TOOL_DESTRUCTIVE]
+    if unknown:
+        p.error(f"--write-tools: not a write tool of this server: {', '.join(unknown)} "
+                f"(known: {', '.join(sorted(WRITE_TOOL_DESTRUCTIVE))})")
+    if args.tool_call and args.tool_call in args.write_tools:
+        p.error("--tool-call cannot name a write tool: this script never writes")
+    if args.tool_names is not None and args.write_tools:
+        args.tool_names = args.tool_names | set(args.write_tools)
     if args.expect_tools is None:
         if args.tool_names is None:
             p.error(f"cannot read {args.tools_file}; pass --expect-tools")
