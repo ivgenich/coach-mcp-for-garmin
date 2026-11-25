@@ -232,6 +232,20 @@ def build_app(enabled=(), all_modules=False):
     return fastmcp, app, tools
 
 
+def keep_uvicorn_log_config(test):
+    """Restore uvicorn's LOGGING_CONFIG dict in place (launch._split_uvicorn_logs() changes it) when the test
+    ends."""
+    try:
+        from uvicorn import config as uvicorn_config
+    except ImportError:  # the standard-library leg
+        return
+    import copy
+
+    config = uvicorn_config.LOGGING_CONFIG
+    saved = copy.deepcopy(config)
+    test.addCleanup(lambda: (config.clear(), config.update(saved)))
+
+
 class UpstreamCase(unittest.TestCase):
     """Saves and restores the upstream globals patch() changes."""
 
@@ -254,6 +268,7 @@ class UpstreamCase(unittest.TestCase):
         self.addCleanup(restore)
         self.addCleanup(mcp2_compat.set_server_overrides)  # launch.main() sets the server name
         self.addCleanup(mcp2_compat.set_asgi_middleware)  # and, with the sign-in on, its middleware
+        keep_uvicorn_log_config(self)  # main() with a network transport changes it in place
 
     def assert_annotations(self, tools):
         for name in READ_ONLY:
@@ -1032,8 +1047,9 @@ class RegistrationGate(unittest.TestCase):
 
 
 class DescriptionNoteAtRegistration(unittest.TestCase):
-    """add_tool() ends the description of each tool in FREE_TEXT_TOOLS with the
-    data note and passes every other description through untouched."""
+    """add_tool() ends the description of each tool in TOOL_NOTES with its note
+    and of each tool in FREE_TEXT_TOOLS with the data note (after the tool's
+    own), and passes every other description through untouched."""
 
     def test_only_free_text_tools_get_the_note(self):
         class Recorder(FakeServer):
@@ -1051,15 +1067,25 @@ class DescriptionNoteAtRegistration(unittest.TestCase):
             """Daily stats."""
 
         launch = load_launch(self, Stubs().modules)
-        server = launch.read_only_server_class(Recorder, {"get_activities", "get_stats", "get_courses"})()
+        server = launch.read_only_server_class(Recorder, {"get_activities", "get_stats", "get_courses",
+                                                          "get_vo2max_trend"})()
         note = "\n\n" + server_instructions.FREE_TEXT_NOTE
         server.tool()(get_activities)  # the docstring, as the SDK would use it
         server.tool()(get_stats)  # not a free-text tool
         server.tool(name="get_courses", description="Saved courses.  \n")(get_stats)  # an explicit description
+        server.tool(name="get_vo2max_trend")(get_stats)  # a tool note only
         # The docstring loses its indentation, so the noted descriptions stay under 2,048 characters.
-        self.assertEqual(server.added, [("get_activities", "List activities.\n\nArgs:\n    limit: How many." + note),
+        self.assertEqual(server.added, [("get_activities", "List activities.\n\nArgs:\n    limit: How many.\n\n"
+                                         + launch.TOOL_NOTES["get_activities"] + note),
                                         ("get_stats", None),
-                                        ("get_courses", "Saved courses." + note)])
+                                        ("get_courses", "Saved courses." + note),
+                                        ("get_vo2max_trend", "Daily stats.\n\n" + launch.TOOL_NOTES["get_vo2max_trend"])])
+        self.assertIn("band for acute load", launch.TOOL_NOTES["get_training_status"])
+        self.assertIn("band for acute load", launch.TOOL_NOTES["get_training_load_trend"])
+        for name, text in launch.TOOL_NOTES.items():
+            with self.subTest(tool=name):
+                text.encode("ascii")
+                self.assertLessEqual(len(text), 300)
 
 
 class CheckConfig(unittest.TestCase):
@@ -2052,6 +2078,187 @@ class ToolCallOverride(unittest.TestCase):
         self.assertEqual(tools["answers"].description, answers.__doc__)
 
 
+def upstream_training_answer(tool, client, **arguments):
+    """The text upstream's training tool `tool` answers with `client` as its Garmin client: the exact shape
+    the additions see (the function is called directly, no server)."""
+    from garmin_mcp import training
+
+    tools = {}
+
+    class App:
+        def tool(self, *args, **kwargs):
+            def register(fn):
+                tools[fn.__name__] = fn
+                return fn
+            return register
+
+    saved = training.garmin_client
+    training.garmin_client = client
+    try:
+        training.register_tools(App())
+        return asyncio.run(tools[tool](**arguments))
+    finally:
+        training.garmin_client = saved
+
+
+# Garmin's fitnessstats rows as the owner's account answered them (centimeters, milliseconds, calories x 4.19).
+PROGRESS_ROWS = {
+    "distance": {"running": {"count": 5, "sum": 3504354.0, "avg": 700870.8, "min": 401200.0, "max": 1203954.0},
+                 "cycling": {"count": 1, "sum": 2510000.0, "avg": 2510000.0, "min": 2510000.0, "max": 2510000.0}},
+    "duration": {"running": {"count": 5, "sum": 11748244.0, "avg": 2349648.8, "min": 1400000.0, "max": 4100244.0}},
+    "elevationGain": {"running": {"count": 5, "sum": 139300.0, "avg": 27860.0, "min": 0.0, "max": 61300.0}},
+    "calories": {"running": {"count": 5, "sum": 2364.0113 * 4.19, "avg": 472.80226 * 4.19,
+                             "min": 301.4 * 4.19, "max": 802.6 * 4.19}},
+}
+LOAD_DTO = {"dailyTrainingLoadAcute": 612.0, "dailyTrainingLoadChronic": 455.0,
+            "dailyAcuteChronicWorkloadRatio": 1.3, "acwrStatus": "OPTIMAL", "acwrPercent": 62,
+            "minTrainingLoadChronic": 364.0, "maxTrainingLoadChronic": 682.5}
+
+
+class TrainingClient:
+    """The garminconnect calls upstream's progress and training tools make, with the owner's shapes."""
+
+    def get_progress_summary_between_dates(self, start, end, metric):
+        stats = {sport: {metric: row} for sport, row in PROGRESS_ROWS[metric].items()}
+        return [{"date": end, "countOfActivities": 9, "stats": stats}]
+
+    def get_devices(self):
+        return [{"deviceId": 3442975180, "primaryDevice": True, "displayName": "Forerunner 965"}]
+
+    def get_training_status(self, date):
+        return {"mostRecentTrainingStatus": {"latestTrainingStatusData": {"3442975180": {
+                    "deviceId": 3442975180, "calendarDate": date, "trainingStatus": 4, "sport": "RUNNING",
+                    "trainingStatusFeedbackPhrase": "PRODUCTIVE_1", "fitnessTrend": 2,
+                    "primaryTrainingDevice": True, "acuteTrainingLoadDTO": dict(LOAD_DTO)}}},
+                "mostRecentVO2Max": {"generic": {"vo2MaxValue": 53.0, "vo2MaxPreciseValue": 53.4}}}
+
+
+@unittest.skipUnless(HAVE_UPSTREAM, "needs mcp 2.x and upstream garmin_mcp")
+class AnswerAdditions(unittest.TestCase):
+    """add_to_answer() over upstream's own answers: fields added, none removed or renamed, the dump style kept,
+    and anything unexpected left as it was."""
+
+    def setUp(self):
+        self.launch = load_launch(self, Stubs().modules)
+
+    def progress(self, metric):
+        return upstream_training_answer("get_progress_summary_between_dates", TrainingClient(),
+                                        start_date="2026-11-01", end_date="2026-11-23", metric=metric)
+
+    def assert_only_added(self, before, after):
+        if isinstance(before, dict):
+            for key, value in before.items():
+                self.assertIn(key, after)
+                self.assertTrue(isinstance(value, (dict, list)) or after[key] == value, key)
+                self.assert_only_added(value, after[key])
+        elif isinstance(before, list):
+            self.assertEqual(len(before), len(after))
+            for old, new in zip(before, after):
+                self.assert_only_added(old, new)
+
+    def test_progress_summary_gets_its_unit_and_converted_copies(self):
+        add = self.launch.add_to_answer
+        expected = {
+            "distance": ("cm", {"sum_m": 35043.5, "avg_m": 7008.7, "min_m": 4012.0, "max_m": 12039.5}),
+            "duration": ("ms", {"sum_s": 11748.2, "avg_s": 2349.6, "min_s": 1400.0, "max_s": 4100.2}),
+            "elevationGain": ("cm", {"sum_m": 1393.0, "avg_m": 278.6, "min_m": 0.0, "max_m": 613.0}),
+            "calories": ("kcal", {"sum_rounded": 2364, "avg_rounded": 473, "min_rounded": 301, "max_rounded": 803}),
+        }
+        for metric, (unit, copies) in expected.items():
+            with self.subTest(metric=metric):
+                raw = self.progress(metric)
+                text = add("get_progress_summary_between_dates", raw)
+                before, after = json.loads(raw), json.loads(text)
+                self.assert_only_added(before, after)
+                self.assertEqual(after["unit"], unit)
+                self.assertEqual(list(after)[:2], ["metric", "unit"])
+                running = after["stats_by_activity_type"]["running"]
+                self.assertEqual({k: running[k] for k in copies}, copies)
+                self.assertEqual(list(running)[-4:], list(copies))
+                self.assertEqual(text, json.dumps(after, indent=2))  # upstream's indent=2, ensure_ascii
+        cycling = json.loads(add("get_progress_summary_between_dates", self.progress("distance")))
+        self.assertEqual(cycling["stats_by_activity_type"]["cycling"]["sum_m"], 25100.0)
+
+    def test_training_status_and_load_trend_get_the_acute_band(self):
+        add = self.launch.add_to_answer
+        raw = upstream_training_answer("get_training_status", TrainingClient(), date="2026-11-23")
+        after = json.loads(add("get_training_status", raw))
+        self.assert_only_added(json.loads(raw), after)
+        self.assertEqual((after["optimal_acute_load_min"], after["optimal_acute_load_max"]), (364.0, 682.5))
+        keys = list(after)
+        at = keys.index("optimal_chronic_load_max")
+        self.assertEqual(keys[at + 1:at + 3], ["optimal_acute_load_min", "optimal_acute_load_max"])
+
+        raw = upstream_training_answer("get_training_load_trend", TrainingClient(),
+                                       start_date="2026-11-21", end_date="2026-11-23")
+        text = add("get_training_load_trend", raw)
+        after = json.loads(text)
+        self.assert_only_added(json.loads(raw), after)
+        self.assertEqual(len(after["trend"]), 3)
+        for entry in after["trend"]:
+            self.assertEqual((entry["optimal_acute_load_min"], entry["optimal_acute_load_max"]), (364.0, 682.5))
+        self.assertEqual(text, json.dumps(after, indent=2))
+
+    def test_present_fields_are_never_doubled_or_overwritten(self):
+        add = self.launch.add_to_answer
+        fixed = json.dumps({"metric": "distance", "unit": "m", "stats_by_activity_type": {
+            "running": {"count": 1, "sum": 35043.5, "avg": 35043.5, "min": 35043.5, "max": 35043.5}}}, indent=2)
+        self.assertIs(add("get_progress_summary_between_dates", fixed), fixed)  # an upstream fix: left alone
+        status = json.dumps({"optimal_chronic_load_min": 364.0, "optimal_chronic_load_max": 682.5,
+                             "optimal_acute_load_min": 1.0, "optimal_acute_load_max": 2.0})
+        self.assertIs(add("get_training_status", status), status)
+        partly = json.dumps({"optimal_chronic_load_min": 364.0, "optimal_chronic_load_max": 682.5,
+                             "optimal_acute_load_min": 1.0})
+        self.assertEqual(json.loads(add("get_training_status", partly))["optimal_acute_load_min"], 1.0)
+        self.assertEqual(json.loads(add("get_training_status", partly))["optimal_acute_load_max"], 682.5)
+        compact = json.dumps({"optimal_chronic_load_min": 3.0}, separators=(",", ":"))
+        self.assertEqual(add("get_training_status", compact), '{"optimal_chronic_load_min":3.0,'
+                                                              '"optimal_acute_load_min":3.0}')
+
+    def test_unexpected_shapes_and_other_tools_come_back_unchanged(self):
+        add = self.launch.add_to_answer
+        cases = [("get_progress_summary_between_dates", text) for text in (
+            "No progress summary found for distance between 2026-11-01 and 2026-11-23.",
+            "[1, 2]", "{not json", json.dumps({"metric": "steps", "stats_by_activity_type": {}}),
+            json.dumps({"metric": "distance", "stats_by_activity_type": []}),
+            json.dumps({"metric": "distance", "stats_by_activity_type": {"running": 5}}),
+            json.dumps({"metric": "distance", "stats_by_activity_type": {"running": {"sum": "x"}}}))]
+        cases += [("get_training_status", json.dumps({"acute_load": 612.0})),
+                  ("get_training_load_trend", json.dumps({"trend": "none"})),
+                  ("get_training_load_trend", json.dumps({"trend": [{"atl": 1.0}, 7]})),
+                  ("get_activity", json.dumps({"optimal_chronic_load_min": 3.0})),
+                  ("get_training_status", None)]
+        for name, text in cases:
+            with self.subTest(text=text):
+                self.assertIs(add(name, text), text)
+        with mock.patch.dict(self.launch.ANSWER_ADDITIONS, {"get_activity": mock.Mock(side_effect=RuntimeError)}):
+            self.assertEqual(add("get_activity", "{}"), "{}")
+
+    def test_through_the_override_text_and_structured_result_agree(self):
+        FastMCP = mcp2_compat.install().FastMCP
+        names = ("get_progress_summary_between_dates", "get_training_status")
+        server = self.launch.read_only_server_class(FastMCP, set(names))("test")
+        server.tool(name=names[0], structured_output=True)(answers)
+        server.tool(name=names[1], structured_output=False)(answers)
+        quiet(self, "mcp", "garmin_ext")
+        raw = self.progress("distance")
+        status = upstream_training_answer("get_training_status", TrainingClient(), date="2026-11-23")
+        for mode in ERAS:
+            progress, training, failed = call_tools(server, mode, [(names[0], {"text": raw}),
+                                                                   (names[1], {"text": status}),
+                                                                   (names[1], {"text": RATE_TEXT})])
+            with self.subTest(mode=mode):
+                (text,) = [block.text for block in progress.content]
+                self.assertEqual(text, self.launch.add_to_answer(names[0], raw))
+                self.assertNotEqual(text, raw)
+                self.assertEqual(progress.structured_content, {"result": text})
+                (text,) = [block.text for block in training.content]
+                self.assertIn('"optimal_acute_load_max": 682.5', text)
+                self.assertIsNone(training.structured_content)
+                self.assertEqual([block.text for block in failed.content],
+                                 [tool_errors.client_text(tool_errors.RATE_LIMITED)])
+
+
 @unittest.skipUnless(HAVE_UPSTREAM and HAVE_STATUS_MODULES,
                      "needs upstream garmin_mcp and ext/daily_status.py, weekly_status.py")
 class RealServerCase(UpstreamCase):
@@ -2198,8 +2405,15 @@ class ServedTexts(RealServerCase):
         # the server instructions, may cut too (unverified). With its docstring's indentation,
         # get_activities_by_date's description was 2,075 characters and lost the end of the note there; without
         # it, it is 1,867. No noted description may cross that line.
-        late = {name for name in server_instructions.FREE_TEXT_TOOLS if len(served["legacy"][name]) > 2048}
+        noted = server_instructions.FREE_TEXT_TOOLS | set(self.launch.TOOL_NOTES)
+        late = {name for name in noted if name in tools and len(served["legacy"][name]) > 2048}
         self.assertEqual(late, set())
+        # Each tool note is served, right before the data note on a free-text tool.
+        for name, text in self.launch.TOOL_NOTES.items():
+            with self.subTest(tool=name):
+                self.assertIn(name, tools)
+                tail = note if name in server_instructions.FREE_TEXT_TOOLS else ""
+                self.assertTrue(served["legacy"][name].endswith("\n\n" + text + tail), name)
 
 
 class LoginFailed(RealServerCase):
@@ -3105,6 +3319,14 @@ class SetupFeatures(unittest.TestCase):
         root = logging.getLogger()
         saved = (list(root.handlers), root.level)
         self.addCleanup(lambda: (root.handlers.__setitem__(slice(None), saved[0]), root.setLevel(saved[1])))
+        # Runs first (cleanups are LIFO): a token thread a test started must not log into the next test.
+        self.addCleanup(self.join_token_threads)
+
+    @staticmethod
+    def join_token_threads():
+        for thread in threading.enumerate():
+            if thread.name.startswith("history-token-"):
+                thread.join(10)
 
     def setup_features(self, env, allowed=frozenset({"get_stats"})):
         env = dict(env)
@@ -3347,7 +3569,8 @@ class SetupFeatures(unittest.TestCase):
         enqueue.catch_up = mock.Mock(side_effect=RuntimeError("db down"))
         with mock.patch.dict(os.environ, {"REPORT_TZ": "UTC"}), captured_records() as records:
             self.launch._start_catch_up(cfg).join(10)
-        self.assertEqual([r.getMessage() for r in records],
+        # Only this thread's lines: a token-cleanup daemon thread left by another test may log here too.
+        self.assertEqual([r.getMessage() for r in records if r.threadName != "history-token-cleanup"],
                          ["history search: the startup catch-up could not be enqueued (RuntimeError)"])
 
     def test_full_mode_publishes_the_token_for_the_worker(self):
@@ -3923,6 +4146,368 @@ class HistoryToolPolicy(UpstreamCase):
         self.assertEqual(set(tools), KEY_MODE_TOOL_NAMES | launch.HISTORY_TOOLS)
         self.assertEqual(tools["search_history"].description, "Search the stored history.")
         self.assertTrue(tools["find_similar_weeks"].annotations.read_only_hint)
+
+
+# --- The Garmin path guard and the argument checks (security fix, 25 Nov 2026) ----------------------------
+
+TRAVERSAL_ID = "x-/../../../userprofile-service/userprofile/personal-information"
+CANONICAL_UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+# Each would reach a Garmin path as given: upstream's get_workout_by_id takes any id holding "-" for a UUID.
+BAD_WORKOUT_IDS = (TRAVERSAL_ID, "x-%2f..", "x-/%2e%2e/a", "x-?a=1", "x-#f", "123\n", CANONICAL_UUID + "\n",
+                   True, 0, -1, "1 2", "0123", 1.5, None, 10 ** 19, "١٢٣")
+GOOD_WORKOUT_IDS = (123, "123", CANONICAL_UUID)
+# date.fromisoformat() on Python 3.12 accepts the first three; the regex refuses all of them.
+BAD_DATES = ("20261101/x", "20261101?x", "20261101#x", "2026-W01-1", "20260101", "2026-02-30", "2026-11-01\n",
+             "٢٠٢٦-11-01", 20261101)
+BAD_PATHS = (TRAVERSAL_ID, "workout-service/fbt-adaptive/x-%2f..", "a/%2e%2e/b", "workout-service/x-?a=1",
+             "workout-service/x-#f", "workout-service/123\n", "a//b", "a\\b", "a/./b", "./a", "a/.", "a\tb",
+             "a/\u00a0b", "a/\uff0e\uff0e/b", "a/\uff0fb", "a/\u2024\u2024/b", "a/\x7f", "", "metrics-service/metrics/maxmet/daily/20261101?x/2026-11-10")
+GOOD_PATHS = ("/course-service/course/1", "workout-service/workout/123",
+              f"workout-service/fbt-adaptive/{CANONICAL_UUID}",
+              "/biometric-service/stats/lactateThresholdSpeed/range/2026-01-01/2026-02-01"
+              "?sport=RUNNING&aggregation=daily&aggregationStrategy=LATEST",
+              "/wellness-service/wellness/dailyEvents?calendarDate=2026-11-01",
+              # garminconnect puts the owner's display name in some paths: a space or a letter such as "Í"
+              # must pass (requests percent-encodes them; neither changes the path's structure).
+              "/usersummary-service/usersummary/daily/My Name", "/personalrecord-service/personalrecord/prs/Ívar",
+              "/personalrecord-service/personalrecord/prs/E\u0301va")
+
+
+class RefusedPath:
+    def assert_refused(self):
+        """The guard's refusal. By its text, not its class: the guard on garminconnect's Client may be the one
+        an earlier test's fresh import of launch installed (patch() never wraps it twice)."""
+        return self.assertRaisesRegex(tool_errors.KnownFailure, "^" + re.escape(self.launch.PATH_REFUSED_TEXT) + "$")
+
+
+class PathRules(RefusedPath, unittest.TestCase):
+    """launch.garmin_path_ok() and refused_argument(), the rules alone. Standard library only."""
+
+    def setUp(self):
+        self.launch = load_launch(self, Stubs().modules)
+
+    def test_bad_paths_are_refused_and_plain_ones_pass(self):
+        for path in BAD_PATHS + (None, b"a/b", 7):
+            with self.subTest(path=path):
+                self.assertFalse(self.launch.garmin_path_ok(path))
+                with self.assert_refused():
+                    self.launch.check_garmin_path(path)
+        for path in GOOD_PATHS:
+            with self.subTest(path=path):
+                self.assertTrue(self.launch.garmin_path_ok(path))
+
+    def test_only_garminconnects_own_query_names_may_follow_a_question_mark(self):
+        self.assertFalse(self.launch.garmin_path_ok("a/b?a=1"))
+        self.assertFalse(self.launch.garmin_path_ok("a/b?sport=RUNNING&x=1"))
+        self.assertFalse(self.launch.garmin_path_ok("a/b?sport="))
+        self.assertFalse(self.launch.garmin_path_ok("a/b?sport=a/b"))
+        self.assertTrue(self.launch.garmin_path_ok("a/b?start=0&limit=20"))
+
+    def test_the_refusal_is_bad_input_raised_wrapped_or_answered(self):
+        refused = self.launch.GarminPathRefused()
+        self.assertNotIn("..", str(refused))
+        self.assertEqual(tool_errors.classify_exception(refused)[:2], (tool_errors.BAD_INPUT, tool_errors.GENERIC_DETAIL))
+        try:
+            try:
+                raise refused
+            except ValueError as exc:
+                raise ConnectionError(f"Connection error: {exc}") from exc
+        except ConnectionError as wrapped:
+            self.assertEqual(tool_errors.classify_exception(wrapped)[0], tool_errors.BAD_INPUT)
+        self.assertEqual(tool_errors.classify_text(f"Error retrieving workout: Connection error: {refused}"),
+                         (tool_errors.BAD_INPUT, tool_errors.GENERIC_DETAIL))
+
+    def test_argument_checks(self):
+        refused = self.launch.refused_argument
+        for value in BAD_WORKOUT_IDS:
+            with self.subTest(workout_id=value):
+                self.assertEqual(refused("get_workout_by_id", {"workout_id": value}),
+                                 ("workout_id", tool_errors.GENERIC_DETAIL))
+        for value in GOOD_WORKOUT_IDS + (CANONICAL_UUID.upper(), 10 ** 19 - 1):
+            with self.subTest(workout_id=value):
+                self.assertIsNone(refused("get_workout_by_id", {"workout_id": value, "raw": True}))
+        good = {"start_date": "2026-11-01", "end_date": "2026-11-10"}
+        self.assertIsNone(refused("get_vo2max_trend", good))
+        for field in good:
+            for value in BAD_DATES:
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(refused("get_vo2max_trend", {**good, field: value}),
+                                     (field, tool_errors.DATE_DETAIL))
+        # Absent arguments are the SDK's to report; other tools have no row.
+        self.assertIsNone(refused("get_workout_by_id", {}))
+        self.assertIsNone(refused("get_stats", {"date": TRAVERSAL_ID}))
+        self.assertIsNone(refused("get_workout_by_id", None))
+
+
+def fake_garmin(test):
+    """A real garminconnect.Garmin whose HTTP session records (method, url, kwargs) and answers 200 {} (no
+    network: a connection attempt fails the test), with the path guard installed on garminconnect's Client
+    until the test ends."""
+    import garminconnect
+    from garminconnect.client import Client as GarminClient
+
+    class Response:
+        status_code = 200
+        text = "{}"
+        content = b"{}"
+
+        def json(self):
+            return {}
+
+    sent = []
+
+    class Session:
+        def request(self, method, url, headers=None, **kwargs):
+            sent.append((method, url, kwargs))
+            return Response()
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test tried to reach the network")
+
+    keep_tracing_hooks(test)  # restores Client._run_request
+    for patcher in (mock.patch.object(GarminClient, "_fresh_api_session", lambda client: Session()),
+                    mock.patch.object(GarminClient, "_refresh_session", lambda client: None),
+                    mock.patch.object(socket.socket, "connect", refuse),
+                    mock.patch.object(socket, "getaddrinfo", refuse)):
+        patcher.start()
+        test.addCleanup(patcher.stop)
+    garmin = garminconnect.Garmin()
+    garmin.client.di_token = fake_secret(24)
+    garmin.display_name, garmin.unit_system = "MyName", "metric"
+    return garmin, sent
+
+
+@unittest.skipUnless(HAVE_UPSTREAM, "needs upstream garmin_mcp and garminconnect")
+class PathGuardOnTheClient(RefusedPath, UpstreamCase):
+    """The guard on garminconnect's Client._run_request refuses a bad path whoever builds it, before any
+    request leaves, and leaves params= alone."""
+
+    def setUp(self):
+        super().setUp()
+        self.launch = load_launch(self, Stubs().modules)
+        self.garmin, self.sent = fake_garmin(self)
+        quiet(self, "garminconnect", "mcp", "garmin_ext")
+        self.launch._install_path_guard()
+
+    def test_every_api_method_refuses_a_bad_path_and_sends_nothing(self):
+        from garminconnect import GarminConnectConnectionError
+
+        calls = (lambda p: self.garmin.client.connectapi(p), lambda p: self.garmin.client.download(p),
+                 lambda p: self.garmin.client.request("GET", "connectapi", p),
+                 lambda p: self.garmin.client.post("connectapi", p, json={}))
+        for path in BAD_PATHS:
+            for call in calls:
+                with self.subTest(path=path), self.assert_refused():
+                    call(path)
+            # Garmin's own wrappers re-raise it as a connection error, which still classifies as bad input.
+            for wrapper in (self.garmin.connectapi, self.garmin.download):
+                with self.subTest(path=path), self.assertRaises(GarminConnectConnectionError) as cm:
+                    wrapper(path)
+                self.assertEqual(tool_errors.classify_exception(cm.exception)[0], tool_errors.BAD_INPUT)
+        self.assertEqual(self.sent, [])
+
+    def test_plain_paths_pass_and_params_are_untouched(self):
+        params = {"q": "../x?%#", "startDate": "2026-11-01"}
+        self.garmin.connectapi("/course-service/course/1", params=params)
+        self.garmin.get_workout_by_id(123)
+        (first, second) = self.sent
+        self.assertTrue(first[1].endswith("/course-service/course/1"))
+        self.assertEqual(first[2]["params"], {"q": "../x?%#", "startDate": "2026-11-01"})
+        self.assertTrue(second[1].endswith("/workout-service/workout/123"))
+
+    def test_install_is_idempotent_and_survives_the_tracing_wrapper(self):
+        from garminconnect.client import Client as GarminClient
+
+        guarded = GarminClient._run_request
+        self.launch._install_path_guard()
+        self.assertIs(GarminClient._run_request, guarded)
+        self.launch._trace_garmin_requests()
+        self.assertTrue(GarminClient._run_request._coach_traced)
+        self.launch._install_path_guard()
+        self.assertTrue(GarminClient._run_request._coach_traced)  # not wrapped twice
+        self.assertTrue(self.launch._path_guard_installed(GarminClient._run_request))
+        with self.assert_refused():
+            self.garmin.client.connectapi(TRAVERSAL_ID)
+        self.assertEqual(self.sent, [])
+
+    def test_patch_installs_it_in_full_mode_only(self):
+        from garminconnect.client import Client as GarminClient
+
+        original = GarminClient.__dict__["_run_request"]
+        while getattr(original, "__wrapped__", None) is not None:
+            original = original.__wrapped__
+        GarminClient._run_request = original
+        self.launch.patch(garmin_auth="key")
+        self.assertFalse(self.launch._path_guard_installed(GarminClient._run_request))
+        self.launch.patch()
+        self.assertTrue(self.launch._path_guard_installed(GarminClient._run_request))
+
+    def test_a_moved_hook_fails_the_build_check(self):
+        from garminconnect.client import Client as GarminClient
+
+        def _run_request(self, method, url, **kwargs):  # a bump that renamed the parameter
+            return None
+
+        with mock.patch.object(GarminClient, "_run_request", _run_request):
+            with self.assertRaisesRegex(RuntimeError, "path guard needs a new hook"):
+                self.launch._check_path_guard_hook()
+        with mock.patch.object(GarminClient, "connectapi", lambda self, path, **kw: None):
+            with self.assertRaisesRegex(RuntimeError, "path guard needs a new hook"):
+                self.launch._check_path_guard_hook()
+
+    def test_an_upstream_tool_that_builds_a_bad_path_answers_bad_input(self):
+        garmin = self.garmin
+
+        def catches(workout_id: str) -> str:
+            """As upstream's tools: the failure becomes an "Error ...: ..." answer."""
+            try:
+                return json.dumps(garmin.connectapi(f"workout-service/fbt-adaptive/{workout_id}"))
+            except Exception as e:  # noqa: BLE001 - upstream's pattern
+                return f"Error retrieving workout: {str(e)}"
+
+        def raises(workout_id: str) -> str:
+            """A tool that lets the failure out."""
+            return json.dumps(garmin.connectapi(f"workout-service/fbt-adaptive/{workout_id}"))
+
+        FastMCP = mcp2_compat.install().FastMCP
+        server = self.launch.read_only_server_class(FastMCP, {"catches", "raises"})("test")
+        server.tool(name="catches", structured_output=False)(catches)
+        server.tool(name="raises", structured_output=False)(raises)
+        guard = mock.Mock()
+        guard.cooldown.return_value = (None, None)
+        with mock.patch.object(self.launch, "_GUARD", guard):
+            results = call_tools(server, "legacy", [("catches", {"workout_id": TRAVERSAL_ID}),
+                                                    ("raises", {"workout_id": "x-/%2e%2e/a"})])
+        expected = tool_errors.client_text(tool_errors.BAD_INPUT, detail=tool_errors.GENERIC_DETAIL)
+        for result in results:
+            self.assertTrue(result.is_error)
+            self.assertEqual([block.text for block in result.content], [expected])
+        self.assertEqual(self.sent, [])
+        outcomes = [c.args[1] for c in guard.after_outcome.call_args_list]
+        self.assertEqual(outcomes, [tool_errors.BAD_INPUT] * 2)
+
+
+class ArgumentChecksThroughTheServer(RealServerCase):
+    """launch.main()'s server with upstream's real get_workout_by_id and get_vo2max_trend over a fake Garmin
+    session: a bad argument answers bad input before the call guard and before Garmin; good ones reach
+    Garmin."""
+
+    def setUp(self):
+        super().setUp()
+        keep_tracing_hooks(self)  # main()'s patch() installs the path guard on garminconnect's Client
+        from uvicorn import config as uvicorn_config
+
+        self.uvicorn_config = uvicorn_config.LOGGING_CONFIG
+        self.uvicorn_before = json.dumps(self.uvicorn_config, sort_keys=True, default=repr)
+        self.server = self.serve()
+        self.garmin_answering(200, {})
+        self.guard = mock.Mock()
+        self.guard.cooldown.return_value = (None, None)
+        patcher = mock.patch.object(self.launch, "_GUARD", self.guard)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_bad_workout_ids_never_reach_the_guard_or_garmin(self):
+        expected = tool_errors.client_text(tool_errors.BAD_INPUT, detail=tool_errors.GENERIC_DETAIL)
+        with captured_records() as records:
+            results = call_tools(self.server, "legacy",
+                                 [("get_workout_by_id", {"workout_id": value}) for value in BAD_WORKOUT_IDS])
+        for value, result in zip(BAD_WORKOUT_IDS, results):
+            with self.subTest(workout_id=value):
+                self.assertTrue(result.is_error)
+                self.assertEqual([block.text for block in result.content], [expected])
+        self.assertEqual(self.garmin_requests, [])
+        self.guard.before_call.assert_not_called()
+        self.guard.after_outcome.assert_not_called()
+        lines = [r.getMessage() for r in tool_error_records(records)]
+        self.assertEqual(len(lines), len(BAD_WORKOUT_IDS))
+        self.assertTrue(all("group=bad_input" in line for line in lines), lines)
+        self.assertFalse(any("userprofile" in line for line in lines), lines)
+
+    def test_good_workout_ids_reach_garmin(self):
+        results = call_tools(self.server, "legacy",
+                             [("get_workout_by_id", {"workout_id": value}) for value in GOOD_WORKOUT_IDS])
+        expected = tool_errors.client_text(tool_errors.BAD_INPUT, detail=tool_errors.GENERIC_DETAIL)
+        for result in results:
+            self.assertNotEqual([block.text for block in result.content], [expected])
+        self.assertEqual(len(self.garmin_requests), 3)
+        self.assertTrue(self.garmin_requests[0].endswith("/workout-service/workout/123"))
+        self.assertTrue(self.garmin_requests[1].endswith("/workout-service/workout/123"))
+        self.assertTrue(self.garmin_requests[2].endswith(f"/workout-service/fbt-adaptive/{CANONICAL_UUID}"))
+        self.assertEqual(self.guard.before_call.call_count, 3)
+
+    def test_vo2max_dates(self):
+        expected = tool_errors.client_text(tool_errors.BAD_INPUT, detail=tool_errors.DATE_DETAIL,
+                                            today=self.launch._today_iso())
+        calls = [("get_vo2max_trend", {"start_date": value, "end_date": "2026-11-10"}) for value in BAD_DATES]
+        calls += [("get_vo2max_trend", {"start_date": "2026-11-01", "end_date": value}) for value in BAD_DATES]
+        for (_, arguments), result in zip(calls, call_tools(self.server, "legacy", calls)):
+            with self.subTest(arguments=arguments):
+                self.assertTrue(result.is_error)
+                self.assertEqual([block.text for block in result.content], [expected])
+        self.assertEqual(self.garmin_requests, [])
+        self.guard.before_call.assert_not_called()
+        (result,) = call_tools(self.server, "legacy",
+                               [("get_vo2max_trend", {"start_date": "2026-11-01", "end_date": "2026-11-10"})])
+        self.assertNotEqual([block.text for block in result.content], [expected])
+        self.assertTrue(self.garmin_requests)
+        self.assertTrue(all(".." not in url and "?x" not in url for url in self.garmin_requests))
+
+    def test_stdio_leaves_uvicorns_log_config_alone(self):
+        self.assertEqual(json.dumps(self.uvicorn_config, sort_keys=True, default=repr), self.uvicorn_before)
+
+
+@unittest.skipUnless(importlib.util.find_spec("uvicorn") is not None, "needs uvicorn")
+class UvicornLogSplit(unittest.TestCase):
+    """uvicorn's own INFO lines on stdout with a network transport, its warnings on stderr; never on stdio."""
+
+    def setUp(self):
+        from uvicorn import config as uvicorn_config
+
+        self.launch = load_launch(self, Stubs().modules)
+        self.config = uvicorn_config.LOGGING_CONFIG
+        keep_uvicorn_log_config(self)
+        loggers = [logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access")]
+        state = [(lg, list(lg.handlers), lg.level, lg.propagate, lg.disabled) for lg in loggers]
+
+        def restore():
+            for lg, handlers, level, propagate, disabled in state:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate, lg.disabled = propagate, disabled
+
+        self.addCleanup(restore)
+
+    def lines(self):
+        """(stdout, stderr) of one INFO and one WARNING line on uvicorn.error after uvicorn's own dictConfig."""
+        import uvicorn
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            # Config() runs uvicorn's dictConfig; its plain StreamHandler binds sys.stderr then.
+            uvicorn.Config(app=None, log_level="info")
+            logging.getLogger("uvicorn.error").info("Started server process [1]")
+            logging.getLogger("uvicorn.error").warning("something to look at")
+        return out.getvalue(), err.getvalue()
+
+    def test_network_transport_splits(self):
+        for transport in ("streamable-http", " SSE "):
+            with self.subTest(transport=transport):
+                self.assertTrue(self.launch._split_uvicorn_logs(transport))
+        out, err = self.lines()
+        self.assertIn("Started server process [1]", out)
+        self.assertNotIn("something to look at", out)
+        self.assertIn("something to look at", err)
+        self.assertNotIn("Started server process", err)
+
+    def test_stdio_does_not(self):
+        for transport in ("stdio", None, " STDIO "):
+            with self.subTest(transport=transport):
+                self.assertFalse(self.launch._split_uvicorn_logs(transport))
+        self.assertEqual(self.config["handlers"]["default"]["stream"], "ext://sys.stderr")
+        out, err = self.lines()
+        self.assertEqual(out, "")
+        self.assertIn("Started server process [1]", err)
 
 
 if __name__ == "__main__":

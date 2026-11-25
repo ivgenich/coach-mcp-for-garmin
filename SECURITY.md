@@ -36,6 +36,8 @@ In scope, this repository's code and configuration:
   refresh tokens, revocation, and the optional static bearer token.
 - The read-only tool policy: any way to make the server expose or run a tool that changes Garmin
   data.
+- Tool arguments: any way to make a tool read a Garmin address other than its own (for example a
+  path segment such as `../` in an id).
 - Leaks of secrets, tokens, Garmin credentials or keys, or health data through tool answers,
   errors, logs, files or telemetry. With tracing on, the server's traces carry metadata only
   (tool names, timings, error groups), never health values or text; the eval runs, which only

@@ -448,44 +448,84 @@ def match_completions(scheduled: List[Dict[str, Any]], activities: List[Dict[str
     return [shift is not None for shift in match_completion_shifts(scheduled, activities, 0)]
 
 
-def _day_gap(a: Any, b: Any) -> Optional[int]:
-    """Whole days between two 'YYYY-MM-DD' strings; None when either is not a date."""
+def _signed_day_gap(activity_day: Any, planned_day: Any) -> Optional[int]:
+    """activity_day - planned_day in whole days (negative = done early); None when either is not a date."""
     try:
-        return abs((dt.date.fromisoformat(str(a)) - dt.date.fromisoformat(str(b))).days)
+        return (dt.date.fromisoformat(str(activity_day)) - dt.date.fromisoformat(str(planned_day))).days
     except ValueError:
-        return 0 if a is not None and a == b else None
+        return 0 if activity_day is not None and activity_day == planned_day else None
 
 
 def match_completion_shifts(
     scheduled: List[Dict[str, Any]],
     activities: List[Dict[str, Any]],
     max_shift_days: int = 0,
+    *,
+    max_early_days: Optional[int] = None,
+    max_late_days: Optional[int] = None,
 ) -> List[Optional[int]]:
     """Per scheduled workout: how many days away it was done, or None if not done.
 
     Same inputs as match_completions. 0 = linked by Garmin, or an activity of
     the same sport group on the planned day; n = the nearest unused activity of
-    that sport n days before or after (n <= max_shift_days). People move
-    sessions inside a week, so the weekly report passes max_shift_days=6 over
-    that week's activities; the daily report uses 0. Same-day matches are made
-    first for every workout, then 1 day away, and so on, so a moved session
-    never takes the activity of a session done on its own day. Each activity
+    that sport n days before or after (n <= max_shift_days). max_early_days /
+    max_late_days, when given, replace max_shift_days for that direction: the
+    weekly report passes 1 early / 2 late, so a session done days before the
+    plan (or before the workout existed) never completes it; the daily report
+    uses 0. Same-day matches are made first for every workout, then 1 day away,
+    and so on, so a moved session never takes the activity of a session done on
+    its own day. Then each workout still without one tries an augmenting path
+    (an already matched workout moves to another activity in its own window), so
+    the number of completed workouts is the largest possible: planned Tue + Wed,
+    runs Mon + Tue gives Mon->Tue and Tue->Wed, not Tue->Tue alone. Each activity
     completes at most one workout.
     """
+    early = max(0, int(max_shift_days if max_early_days is None else max_early_days))
+    late = max(0, int(max_shift_days if max_late_days is None else max_late_days))
     linked_ids = {s.get("activity_id") for s in scheduled if s.get("activity_id") is not None}
     used = {i for i, act in enumerate(activities) if act.get("id") is not None and act.get("id") in linked_ids}
     shifts: List[Optional[int]] = [0 if s.get("activity_id") is not None else None for s in scheduled]
-    for shift in range(0, max(0, int(max_shift_days)) + 1):
-        for n, item in enumerate(scheduled):
+
+    def gap_of(n: int, i: int) -> Optional[int]:
+        """Signed day gap when activity i may complete workout n (same sport, inside the window), else None."""
+        act, item = activities[i], scheduled[n]
+        if act.get("sport") is None or act.get("sport") != item.get("sport"):
+            return None
+        gap = _signed_day_gap(act.get("date"), item.get("date"))
+        if gap is None or (-gap > early if gap < 0 else gap > late):
+            return None
+        return gap
+
+    owner: Dict[int, int] = {}  # activity index -> workout index (matched here, not Garmin-linked)
+    for shift in range(0, max(early, late) + 1):
+        for n in range(len(scheduled)):
             if shifts[n] is not None:
                 continue
-            for i, act in enumerate(activities):
-                if i in used or act.get("sport") != item.get("sport"):
+            for i in range(len(activities)):
+                if i in used or i in owner:
                     continue
-                if _day_gap(act.get("date"), item.get("date")) == shift:
-                    used.add(i)
+                gap = gap_of(n, i)
+                if gap is not None and abs(gap) == shift:
+                    owner[i] = n
                     shifts[n] = shift
                     break
+
+    def augment(n: int, seen: set) -> bool:
+        candidates = [(abs(g), i) for i in range(len(activities)) if i not in used and (g := gap_of(n, i)) is not None]
+        for _, i in sorted(candidates):
+            if i in seen:
+                continue
+            seen.add(i)
+            if i not in owner or augment(owner[i], seen):
+                owner[i] = n
+                return True
+        return False
+
+    for n in range(len(scheduled)):
+        if shifts[n] is None and scheduled[n].get("activity_id") is None:
+            augment(n, set())
+    for i, n in owner.items():
+        shifts[n] = abs(gap_of(n, i))
     return shifts
 
 
@@ -497,6 +537,38 @@ Call = Tuple[Callable[..., Any], tuple, dict]
 def call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Call:
     """Describe one client call for fetch_all: call(client.get_stats, "2026-11-10")."""
     return (fn, args, kwargs)
+
+
+# Ids taken from one Garmin answer go into the path or query of the next Garmin request. Garmin's answer is
+# not trusted input: a value like "x/../../userprofile-service" would steer the request to another endpoint,
+# so each id must have its exact shape or the item is treated as having no id. fullmatch, not $: "$" also
+# matches before a trailing newline.
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_UUID_HEX_RE = re.compile(r"[0-9a-fA-F]{32}")
+_DIGITS_RE = re.compile(r"[0-9]{1,19}")
+
+
+def path_uuid(value: Any, dashless: bool = False) -> Optional[str]:
+    """value if it is a canonical 8-4-4-4-12 hex UUID (or, with dashless, 32 hex digits), else None.
+
+    Never stripped or repaired: a value with any other character is not an id.
+    """
+    if not isinstance(value, str):
+        return None
+    if _UUID_RE.fullmatch(value) or (dashless and _UUID_HEX_RE.fullmatch(value)):
+        return value
+    return None
+
+
+def path_int_id(value: Any) -> Optional[int]:
+    """A positive integer id (an int, or a string of ASCII digits), else None. bool is not an id."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and _DIGITS_RE.fullmatch(value) and int(value) > 0:
+        return int(value)
+    return None
 
 
 # garminconnect's activity search path (Garmin.garmin_connect_activities); used when the client has none.

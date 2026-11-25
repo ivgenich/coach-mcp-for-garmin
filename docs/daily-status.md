@@ -14,11 +14,44 @@ The tool returns JSON with:
 - `load`: acute and chronic load, ACWR with Garmin's status, yesterday's sessions.
 - `today` and `tomorrow`: planned workouts, each classed `hard_or_long` or easy and
   marked `completed` once done.
+- `today_done`: the activities already recorded on that date, planned or not, oldest
+  first: sport and Garmin's type, name, `start_local` (HH:MM), minutes, km, average and
+  max heart rate, training `load`, aerobic and anaerobic training effect (`null` when
+  Garmin has none). `null` when the activity search failed. No rule reads it; the report
+  text shows it as one "Done today" line.
 - `flags` (which rules fired) and `missing` (which values Garmin had none for).
+
+Garmin writes several Training Readiness readings a day. `recovery.readiness` (and its
+level) is the morning one, taken at `readiness_at`; `recovery_hours` comes from the
+newest reading, taken at `recovery_hours_at` (local HH:MM; for today it is counted down
+to `generated_at`), because every workout resets it. When a later reading has another
+score (after a workout, say), that score is `readiness_latest`, otherwise `null`.
+`readiness_context` says which kind of reading the score is: `wake_up` normally; when
+there is no wake-up reading (the watch was not worn overnight) the newest other reading is
+used, `post_exercise` or `realtime`, and the report text says so ("Readiness after a
+workout: 77"). The split is on purpose: `low_readiness` asks how well the night went, and
+`recovery_incomplete` asks whether the latest workout is absorbed, so a morning workout is
+not counted twice.
+`body_battery` is the latest value of the day (for a past date, its last reading) and
+`body_battery_wake` the value at wake-up; `stress_avg` is the whole-day average (so far,
+for today).
 
 Every number, flag, level and recommendation is computed on the server by the rules
 below; Claude only phrases them. A value Garmin doesn't have is `null` and listed in
-`missing`, never guessed, and a rule that needs it is skipped. Arguments: `date`
+`missing`, never guessed, and a rule that needs it is skipped. `missing` covers every
+`null` field of `recovery`, `load`, `today`, `today_done` and `tomorrow` (the fields the
+report text prints first, then the rest in answer order), except the ones `null` by
+design:
+
+- `recovery.readiness_latest` (null whenever no later reading differs);
+- `recovery.readiness_at` and `recovery.recovery_hours_at` while their value is null too
+  (the value itself is listed);
+- fields inside list items (a session's heart rate, a planned swim's minutes); a planned
+  workout whose steps could not be read is listed as `today[0].structured`;
+- `thresholds_athlete` values no planned workout needed (see "Hard or long");
+- in key mode, the fields listed under "In key mode".
+
+Arguments: `date`
 (YYYY-MM-DD, default today in the time zone of the required service variable
 `REPORT_TZ`; see [Settings](deploy-railway.md#settings)), `text_format` (`markdown` adds the
 report text, in English), `probe` (only "have last night's sleep and Training Readiness
@@ -81,7 +114,11 @@ has:
 Without the threshold a range needs (and always for swim pace), a range counts only on an
 interval step inside a repeat of 2 or more. A range alone proves little: workouts synced
 from TrainingPeaks put pace ranges even on easy single-step runs. Your lactate threshold
-and FTP are read from Garmin only when a workout needs them. A workout without steps
+and FTP are read from Garmin only when a workout needs them, so the others are `null` in
+`thresholds_athlete` and not listed in `missing`. A step with an intensity target but no
+zone and no values (Garmin's swim workouts often have a bare pace target) counts as
+not at intensity; when no step qualifies and such steps exist, the reason reads
+"intensity unknown: targets without values". A workout without steps
 counts as hard when its name says so, in English (interval, tempo, threshold, VO2, race,
 hard, brick). A name in another language does not count. Phrases that say the opposite do
 not count either: "pre-race" and "post-race", "race" in a shakeout's name, "not hard" or "no
@@ -119,8 +156,11 @@ deploy. A changed threshold changes the public API: see
 With a Garmin Personal API key, Garmin shares no training readiness, training status or load,
 and no planned workouts, so the daily status never asks for them. `recovery.readiness`,
 `recovery.readiness_level`, `recovery.recovery_hours`, `load.acwr`, `load.acwr_status`,
-`load.acwr_percent`, `today` and `tomorrow` are always null (those the report text shows are
-listed in `missing`), and with
+`load.acwr_percent`, `load.acute`, `load.chronic`, `load.readiness_acute_load`, `today` and
+`tomorrow` are always null. Those the report text shows (readiness, recovery time, ACWR and
+its status, today, tomorrow) are listed in `missing`; `recovery.readiness_level`,
+`load.acute`, `load.chronic`, `load.acwr_percent` and `load.readiness_acute_load` are not.
+With
 `include_sources` each skipped source reads
 `skipped: not available with a Garmin Personal API key`. The rules `low_readiness`,
 `load_spike`, `load_rising` and `recovery_incomplete` never fire; the HRV, resting heart rate

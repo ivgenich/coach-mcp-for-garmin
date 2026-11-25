@@ -88,12 +88,14 @@ import datetime
 import importlib
 import importlib.util
 import inspect
+import json
 import logging
 import os
 import re
 import sys
 import threading
 import time
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -324,6 +326,189 @@ def allowed_tools(environ):
     return allowed
 
 
+# --- Argument checks before Garmin ----------------------------------------------------------------------------
+# Upstream tools that put a caller value into a Garmin path with too little checking: get_workout_by_id takes
+# any id holding "-" for a UUID and builds "workout-service/fbt-adaptive/<id>"; get_vo2max_trend checks its
+# dates with date.fromisoformat() only, which on Python 3.12 also accepts "20261101/x", "20261101?x" or
+# "20261101#x", and puts the raw strings in its "<metrics url>/<start>/<end>" path. call_tool() runs these
+# checks first, before the call guard and before Garmin; a failing one is a plain bad-input answer. The
+# path guard (check_garmin_path) stays the backstop for every other path. One row per tool:
+# {argument: (check, bad-input detail)}; a missing argument is left to the SDK's own validation.
+_WORKOUT_ID_RE = re.compile(r"[1-9][0-9]{0,18}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                            re.ASCII | re.IGNORECASE)
+_ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+_ID_MAX = 10 ** 19 - 1  # the most digits a string id may have (19), so both forms take the same ids
+
+
+def _workout_id_ok(value):
+    """A positive int (not bool, at most 19 digits), or a str: such a number without a sign or leading zero,
+    or a canonical UUID (8-4-4-4-12 hex)."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 < value <= _ID_MAX
+    return isinstance(value, str) and _WORKOUT_ID_RE.fullmatch(value) is not None
+
+
+def _iso_date_ok(value):
+    """A str written YYYY-MM-DD in ASCII digits that is a real calendar date."""
+    if not isinstance(value, str) or _ISO_DATE_RE.fullmatch(value) is None:
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+ARGUMENT_CHECKS = {
+    "get_workout_by_id": {"workout_id": (_workout_id_ok, tool_errors.GENERIC_DETAIL)},
+    "get_vo2max_trend": {"start_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
+                         "end_date": (_iso_date_ok, tool_errors.DATE_DETAIL)},
+}
+
+
+# --- Description notes for upstream tools ---------------------------------------------------------------------
+# What upstream's answers leave unclear, said where the model reads it (claude.ai drops server instructions).
+# add_tool() ends the description with "\n\n" + the note, before the free-text note. Short: a noted description
+# stays under the 2,048 characters Claude Code kept before v2.1.296.
+_ACUTE_BAND_NOTE = ("optimal_chronic_load_min/max is the band for acute load (also given as "
+                    "optimal_acute_load_min/max), not a target for chronic load.")
+_LOCAL_START_NOTE = "Note: start_time is local time, not GMT."
+TOOL_NOTES = {
+    "get_training_status": ("Note: " + _ACUTE_BAND_NOTE + " Garmin's load_ratio (the ACWR) may be cut to one "
+                            "decimal; get_daily_status computes it from the loads to two."),
+    "get_training_load_trend": ("Note: " + _ACUTE_BAND_NOTE + " Garmin's acwr may be cut to one decimal; "
+                                "get_daily_status computes it from the loads to two."),
+    "get_progress_summary_between_dates": (
+        "Note: sum/avg/min/max are in Garmin's raw unit, named in unit: cm for distance and elevationGain, ms "
+        "for duration and movingDuration. The *_m and *_s fields are the same values in meters and seconds; "
+        "for calories, *_rounded are whole kcal."),
+    "get_body_battery": "Note: event start_time is GMT, not local time.",
+    "get_activity_splits": "Note: lap and length start_time is GMT, not local time.",
+    "get_activities": _LOCAL_START_NOTE,
+    "get_activities_by_date": _LOCAL_START_NOTE,
+    "get_training_readiness": "Note: timestamp is local time, not GMT.",
+    "get_vo2max_trend": ("Note: returns one sport only (the one with more readings). The running VO2max is vo2_max "
+                         "in get_training_status."),
+}
+
+
+# --- Answer additions for upstream tools ----------------------------------------------------------------------
+# Upstream's answers are not this repo's public API (docs/updates.md), so fields are added where an answer is
+# easy to misread: never removed or renamed, and only when absent (an upstream fix is not doubled). One function
+# per tool: it gets the parsed answer and returns the object to dump, or None for "unchanged". It runs after
+# text_hygiene's clean, on successful answers only; an unexpected shape, or any exception, keeps the answer.
+
+# get_progress_summary_between_dates: Garmin's fitnessstats sums are centimeters and milliseconds (live:
+# a running sum 3,504,354 for 35,043.5 m, 11,748,244 for 11,748.2 s); upstream converts calories only, unrounded.
+_PROGRESS_UNITS = {"distance": ("cm", "_m", 100), "elevationGain": ("cm", "_m", 100),
+                   "duration": ("ms", "_s", 1000), "movingDuration": ("ms", "_s", 1000),
+                   "calories": ("kcal", "_rounded", None)}
+_PROGRESS_STATS = ("sum", "avg", "min", "max")
+
+
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _with_after(mapping, after, extra):
+    """A copy of dict `mapping` with the absent keys of `extra` placed right after key `after` (at the end
+    when `after` is missing); None when nothing is added."""
+    extra = {k: v for k, v in extra.items() if k not in mapping}
+    if not extra:
+        return None
+    if after not in mapping:
+        return {**mapping, **extra}
+    out = {}
+    for key, value in mapping.items():
+        out[key] = value
+        if key == after:
+            out.update(extra)
+    return out
+
+
+def _add_progress_units(obj):
+    """unit after metric, and converted copies of sum/avg/min/max in each activity type."""
+    if not isinstance(obj, dict) or "unit" in obj or obj.get("metric") not in _PROGRESS_UNITS:
+        return None
+    by_type = obj.get("stats_by_activity_type")
+    if not isinstance(by_type, dict):
+        return None
+    unit, suffix, factor = _PROGRESS_UNITS[obj["metric"]]
+    types = {}
+    for sport, stats in by_type.items():
+        if not isinstance(stats, dict):
+            return None
+        copies = {}
+        for key in _PROGRESS_STATS:
+            value = stats.get(key)
+            if value is None:
+                continue
+            if not _number(value):
+                return None
+            copies[key + suffix] = round(value) if factor is None else round(value / factor, 1)
+        types[sport] = _with_after(stats, "max", copies) or stats
+    return _with_after({**obj, "stats_by_activity_type": types}, "metric", {"unit": unit})
+
+
+def _acute_band(entry):
+    """optimal_acute_load_min/max (the same values) after optimal_chronic_load_max; None when not there."""
+    if not isinstance(entry, dict):
+        return None
+    extra = {f"optimal_acute_load_{end}": entry[f"optimal_chronic_load_{end}"]
+             for end in ("min", "max") if f"optimal_chronic_load_{end}" in entry}
+    if not extra:
+        return None
+    after = "optimal_chronic_load_max" if "optimal_chronic_load_max" in entry else "optimal_chronic_load_min"
+    return _with_after(entry, after, extra)
+
+
+def _add_acute_band_trend(obj):
+    if not isinstance(obj, dict) or not isinstance(obj.get("trend"), list):
+        return None
+    trend = [_acute_band(e) or e for e in obj["trend"]]
+    if all(new is old for new, old in zip(trend, obj["trend"])):
+        return None
+    return {**obj, "trend": trend}
+
+
+ANSWER_ADDITIONS = {
+    "get_progress_summary_between_dates": _add_progress_units,
+    "get_training_status": _acute_band,
+    "get_training_load_trend": _add_acute_band_trend,
+}
+
+
+def add_to_answer(name, text):
+    """`text` (a cleaned upstream answer of tool `name`) with ANSWER_ADDITIONS' fields, dumped as
+    text_hygiene.clean_tool_answer dumps (ensure_ascii; indent=2 when the text has a newline, else compact).
+    Unchanged for a tool without a row, a text that is not a JSON object, an unexpected shape, or any failure."""
+    add = ANSWER_ADDITIONS.get(name)
+    if add is None or not isinstance(text, str) or not text.lstrip(" \t\n\r").startswith("{"):
+        return text
+    try:
+        new = add(json.loads(text))
+        if new is None:
+            return text
+        style = {"indent": 2} if "\n" in text else {"separators": (",", ":")}
+        return json.dumps(new, ensure_ascii=True, **style)
+    except Exception:  # noqa: BLE001 - an addition never costs the answer
+        return text
+
+
+def refused_argument(name, arguments):
+    """(argument name, bad-input detail) for the first argument of tool `name` that fails its check in
+    ARGUMENT_CHECKS, or None. Arguments that are absent, and tools without a row, are not checked here."""
+    checks = ARGUMENT_CHECKS.get(name)
+    if not checks or not isinstance(arguments, dict):
+        return None
+    for argument, (check, detail) in checks.items():
+        if argument in arguments and not check(arguments[argument]):
+            return argument, detail
+    return None
+
+
 def read_only_server_class(base, allowed):
     """A subclass of upstream's server class that registers only `allowed`,
     answers every failed tool call with a fixed text, and cleans upstream's
@@ -332,7 +517,8 @@ def read_only_server_class(base, allowed):
     MCPServer.tool() registers through add_tool(), so gating add_tool covers
     both. A refused tool is logged and left out (never served), whatever
     upstream's own filter decided. add_tool() also ends the description of
-    each tool in server_instructions.FREE_TEXT_TOOLS with FREE_TEXT_NOTE.
+    each tool in TOOL_NOTES with its note, and of each tool in
+    server_instructions.FREE_TEXT_TOOLS with FREE_TEXT_NOTE.
 
     MCPServer sends every tools/call through call_tool(name, arguments,
     context) (gate() checks that at build time). The override below:
@@ -347,7 +533,8 @@ def read_only_server_class(base, allowed):
       tool_errors.NO_SLEEP_TEXT;
     - a successful answer of an upstream tool -> its JSON free text cleaned by
       text_hygiene.clean_tool_answer() in a worker thread (a 16 MB FIT answer
-      takes a fraction of a second); this repo's 3 tools, which clean their
+      takes a fraction of a second), then the fields of ANSWER_ADDITIONS added
+      (structured "result" kept equal to the text); this repo's 3 tools, which clean their
       own read points and whose markdown keeps its bidi isolates, unchanged;
     - an MCPError (a protocol error) passes through, and an
       InputRequiredResult is returned as is.
@@ -363,18 +550,35 @@ def read_only_server_class(base, allowed):
                 print(f"launch: refused to register tool {tool_name!r}: not in the read-only allowlist",
                       file=sys.stderr)
                 return None
-            if not args and tool_name in server_instructions.FREE_TEXT_TOOLS:
+            free_text = tool_name in server_instructions.FREE_TEXT_TOOLS
+            if not args and (free_text or tool_name in TOOL_NOTES):
                 # The SDK passes keywords, and uses the raw docstring when no
                 # description is given, so every other description stays as is.
                 # The docstring loses its indentation (cleandoc): that keeps every
-                # noted description, note included, under the 2,048 characters
-                # Claude Code kept before v2.1.296 (the longest is 1,867).
+                # noted description, notes included, under the 2,048 characters
+                # Claude Code kept before v2.1.296. The tool's own note (TOOL_NOTES)
+                # comes before the free-text note.
                 doc = kwargs.get("description") or getattr(fn, "__doc__", None) or ""
-                kwargs["description"] = (inspect.cleandoc(doc).rstrip() + "\n\n"
-                                         + server_instructions.FREE_TEXT_NOTE)
+                parts = [inspect.cleandoc(doc).rstrip()]
+                if tool_name in TOOL_NOTES:
+                    parts.append(TOOL_NOTES[tool_name])
+                if free_text:
+                    parts.append(server_instructions.FREE_TEXT_NOTE)
+                kwargs["description"] = "\n\n".join(parts)
             return super().add_tool(fn, name, *args, **kwargs)
 
         async def call_tool(self, name, arguments, context=None):
+            # A caller value that would reach a Garmin path unchecked: refused before the guard (it must not
+            # count as a call, nor start a cooldown) and before Garmin. Never logs the value.
+            try:
+                refused = refused_argument(name, arguments) if name in allowed else None
+            except Exception:  # noqa: BLE001 - a check that breaks refuses rather than passes
+                refused = ("an argument", tool_errors.GENERIC_DETAIL)
+            if refused is not None:
+                result = _failure(name, tool_errors.BAD_INPUT, refused[1],
+                                  f"argument {refused[0]} refused before Garmin")
+                _record_tool_call(name, "error", tool_errors.BAD_INPUT, 0.0, result, None)
+                return result
             # The guard (set up by main()) for a Garmin tool; the history tools never call Garmin.
             guard = _GUARD if (name in allowed and name not in HISTORY_TOOLS) else None
             if guard is not None:
@@ -440,7 +644,7 @@ def read_only_server_class(base, allowed):
                 # Every text block is cleaned, not only the first (one worker-thread hop for all of them).
                 texts = [b.text if getattr(b, "type", None) == "text" and isinstance(getattr(b, "text", None), str)
                          else None for b in result.content]
-                cleaned_texts = await anyio.to_thread.run_sync(_clean_texts, texts)
+                cleaned_texts = await anyio.to_thread.run_sync(_clean_texts, texts, name)
                 if cleaned_texts == texts:
                     return result
                 content = []
@@ -473,9 +677,13 @@ def _guard_outcome(group, source_groups):
     return status_common.guard_group(source_groups) or group
 
 
-def _clean_texts(texts):
-    """text_hygiene.clean_tool_answer() of each str in `texts`; None entries (blocks that are no text) stay None."""
-    return [None if t is None else text_hygiene.clean_tool_answer(t) for t in texts]
+def _clean_texts(texts, name=None):
+    """text_hygiene.clean_tool_answer() of each str in `texts`; None entries (blocks that are no text) stay None.
+    The first block, the answer itself, then gets tool `name`'s ANSWER_ADDITIONS (add_to_answer)."""
+    cleaned = [None if t is None else text_hygiene.clean_tool_answer(t) for t in texts]
+    if cleaned and cleaned[0] is not None and name in ANSWER_ADDITIONS:
+        cleaned[0] = add_to_answer(name, cleaned[0])
+    return cleaned
 
 
 # Log levels of _failure()'s line: these groups need the owner;
@@ -670,6 +878,9 @@ def _traced_run_request(original):
     every request. Exceptions pass through unchanged; only their group is recorded."""
 
     def _run_request(self, method, path, *args, **kwargs):
+        # The tracing hook is installed after the path guard (patch()), so it is the outer wrapper: a refused
+        # path is refused here too, before it counts as a Garmin request in the metrics.
+        check_garmin_path(path)
         tel = _TELEMETRY
         if tel is None:
             return original(self, method, path, *args, **kwargs)
@@ -734,6 +945,144 @@ def _trace_garmin_requests():
     if not getattr(original, "_coach_traced", False):
         cls._run_request = _traced_run_request(original)
     return True
+
+
+# --- Garmin request path guard (full mode) ------------------------------------------------------------
+# garminconnect's Client._run_request builds f"{connectapi}/{path.lstrip('/')}" and requests (urllib3) then
+# removes dot segments, so a caller value that reaches a path ("x-/../../../userprofile-service/...", from
+# upstream's get_workout_by_id) reads ANOTHER Garmin API with the owner's token. Every Garmin API call of
+# garminconnect (connectapi, download, request, post, put, delete, and Garmin's wrappers around them) goes
+# through Client._run_request, so patch() wraps it at class level: upstream re-creates clients on login, and
+# each new instance gets the guard. The rules mirror key_mode.KeyModeClient.connectapi (_PATH_BAD):
+# no control characters or whitespace but a plain space, no "..", "%", "#", "\", "//", no "." segment.
+# Unlike key mode, a space and non-ASCII LETTERS pass: garminconnect puts the owner's display name in some
+# paths (usersummary/daily/<name>, prs/<name>), and a name such as "My Name" or "Ívar" must keep working;
+# requests percent-encodes them, and neither can change the path's structure. Any other non-ASCII character
+# (a full-width dot or slash, a lookalike) is refused. Query parameters passed as params= are not part of
+# the path and stay untouched.
+_PATH_REFUSED_PARTS = ("..", "%", "#", "\\", "//")
+# garminconnect itself writes a few query strings into its paths (get_lactate_threshold, the daily events,
+# the gear calls: garminconnect/__init__.py at 0.3.2). Only these names, with plain values, may follow a "?";
+# a caller's "?" anywhere else (a date "20261101?x") is refused like any other bad path.
+_PATH_QUERY_NAMES = frozenset({"sport", "aggregation", "aggregationStrategy", "calendarDate", "userProfilePk",
+                               "start", "limit"})
+_PATH_QUERY_VALUE_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}", re.ASCII)
+PATH_REFUSED_TEXT = "Invalid input: a Garmin request path was refused (it is not a plain API path)"
+
+
+class GarminPathRefused(tool_errors.KnownFailure, ValueError):
+    """A Garmin API path the guard refused before any request left. Its fixed text starts "Invalid input:"
+    (never the path, which is caller data), so tool_errors puts it in the bad-input group whether it arrives
+    raised, wrapped by garminconnect ("Connection error: Invalid input: ...") or as an upstream tool's
+    "Error ...: ..." answer: never a Garmin failure, never a guard cooldown."""
+
+    def __init__(self):
+        super().__init__(PATH_REFUSED_TEXT)
+
+
+def _without_dot_segments(route):
+    """`route` with "." and ".." segments resolved (RFC 3986 5.2.4, as urllib3 does before sending)."""
+    out = []
+    for segment in route.split("/"):
+        if segment == ".":
+            continue
+        if segment == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(segment)
+    return "/".join(out)
+
+
+def garmin_path_ok(path):
+    """True when `path` is a plain Garmin API path the guard lets through (see the rules above)."""
+    if not isinstance(path, str) or not path or not path.isprintable():
+        return False
+    # Non-ASCII: letters and combining accents only ("E" + U+0301 is how some systems write "É").
+    if any((ch.isspace() and ch != " ") or (not ch.isascii() and not (ch.isalpha() or unicodedata.combining(ch)))
+           for ch in path):
+        return False
+    if any(bad in path for bad in _PATH_REFUSED_PARTS):
+        return False
+    route, has_query, query = path.partition("?")
+    if has_query:
+        for pair in query.split("&"):
+            name, has_value, value = pair.partition("=")
+            if name not in _PATH_QUERY_NAMES or not has_value or not _PATH_QUERY_VALUE_RE.fullmatch(value):
+                return False
+    return _without_dot_segments(route) == route
+
+
+def check_garmin_path(path):
+    """Raise GarminPathRefused unless garmin_path_ok(path)."""
+    if not garmin_path_ok(path):
+        raise GarminPathRefused()
+
+
+def _path_guarded_run_request(original):
+    """garminconnect Client._run_request with check_garmin_path() first; params= and the rest pass as given."""
+
+    def _run_request(self, method, path, *args, **kwargs):
+        check_garmin_path(path)
+        return original(self, method, path, *args, **kwargs)
+
+    _run_request._coach_path_guard = True
+    _run_request.__wrapped__ = original
+    return _run_request
+
+
+def _path_guard_installed(fn):
+    """True when `fn` or any function it wraps (__wrapped__, as the tracing hook wraps) is the path guard."""
+    for _ in range(8):
+        if fn is None:
+            return False
+        if getattr(fn, "_coach_path_guard", False):
+            return True
+        fn = getattr(fn, "__wrapped__", None)
+    return False
+
+
+_PATH_HOOK_ERROR = ("launch: garminconnect no longer sends every API call through Client._run_request(method, "
+                    "path, ...) building the URL from the path; the Garmin path guard needs a new hook")
+
+
+def _check_path_guard_hook():
+    """RuntimeError unless the installed garminconnect still builds every API URL in
+    Client._run_request(self, method, path, ...) from `path`, and its API methods (Client.connectapi,
+    download, request, post, put, delete; Garmin.connectapi and download through them) still call it. A
+    garminconnect bump that moved this would leave the guard installed on a method nothing calls; patch()
+    runs this at build time (Dockerfile), so the build fails instead."""
+    try:
+        import garminconnect
+        from garminconnect import client as gc_client
+
+        cls = gc_client.Client
+        hook = cls.__dict__["_run_request"]
+        while getattr(hook, "__wrapped__", None) is not None:  # this module's own wrappers
+            hook = hook.__wrapped__
+        params = list(inspect.signature(hook).parameters)[:3]
+        source = inspect.getsource(hook)
+        callers = [inspect.getsource(cls.__dict__[name])
+                   for name in ("connectapi", "download", "request", "post", "put", "delete")]
+        wrappers = {name: inspect.getsource(garminconnect.Garmin.__dict__[name]) for name in ("connectapi", "download")}
+    except (ImportError, KeyError, AttributeError, OSError, TypeError, ValueError) as exc:
+        raise RuntimeError(_PATH_HOOK_ERROR) from exc
+    if (params != ["self", "method", "path"] or "{path.lstrip('/')}" not in source
+            or not all("self._run_request(" in text for text in callers)
+            or not all(f"self.client.{name}(" in text for name, text in wrappers.items())):
+        raise RuntimeError(_PATH_HOOK_ERROR)
+
+
+def _install_path_guard():
+    """Wrap garminconnect's Client._run_request with the path guard (idempotent, also under the tracing
+    wrapper). Raises RuntimeError when the hook moved (_check_path_guard_hook())."""
+    _check_path_guard_hook()
+    from garminconnect import client as gc_client
+
+    cls = gc_client.Client
+    current = cls.__dict__["_run_request"]
+    if not _path_guard_installed(current):
+        cls._run_request = _path_guarded_run_request(current)
 
 
 def _source_outcome(result):
@@ -951,10 +1300,12 @@ def patch(garmin_auth="full"):
 
     garmin_auth "key" registers the status tools in key mode (they skip the
     sources Garmin's Personal API does not serve); "full" (the default, and
-    the Dockerfile's build check) changes nothing.
+    the Dockerfile's build check) registers them as they are and installs the
+    Garmin request path guard on garminconnect's Client (_install_path_guard()).
 
     Raises, before changing anything in upstream, if a status module's
-    selfcheck fails (an upstream helper it imports is gone) or a hook moved,
+    selfcheck fails (an upstream helper it imports is gone) or a hook moved
+    (the path guard's included, _check_path_guard_hook()),
     if upstream now has a tool named like one of this repo's, or if
     mcp2_compat cannot adapt the installed mcp SDK.
     """
@@ -966,6 +1317,9 @@ def patch(garmin_auth="full"):
 
     daily_status.selfcheck()
     weekly_status.selfcheck()
+    # The Garmin path guard's hook (garminconnect's Client._run_request), checked in both modes so the
+    # Dockerfile's patch() fails the build when a garminconnect bump moves it.
+    _check_path_guard_hook()
     # The SDK keeps the first tool registered under a name: an upstream tool
     # named like one of this repo's, registered before it, would be served in
     # its place, labelled read-only by the READ_ONLY_TOOLS merge below.
@@ -1000,6 +1354,9 @@ def patch(garmin_auth="full"):
     # annotations_for() reads this module global at registration time.
     tool_annotations.READ_ONLY_TOOLS = tool_annotations.READ_ONLY_TOOLS | OWN_TOOLS
     courses.register_tools = register_tools
+    if not keyed:
+        # Full mode: no Garmin request leaves with a path a caller bent (key mode's client refuses its own).
+        _install_path_guard()
 
 
 def _optional(name):
@@ -1355,6 +1712,36 @@ def _configure_logging():
     configure_logging("INFO")
 
 
+def _uvicorn_line_handler(split=True):
+    """The handler uvicorn's dictConfig builds for its "default" handler: INFO on stdout, warnings and errors
+    on stderr (log_privacy.LevelStreamHandler; uvicorn's own formatter replaces the format given here)."""
+    return log_privacy.LevelStreamHandler(LOG_FORMAT, split=split)
+
+
+def _split_uvicorn_logs(transport):
+    """With a network transport, uvicorn's own lines ("INFO:     Started server process ...") go to stdout and
+    only its warnings and errors to stderr, as _LineHandler splits ours: uvicorn's LOGGING_CONFIG sends its
+    "default" handler to stderr, and Railway marks every stderr line as an error. Never on the stdio
+    transport, whose stdout carries the protocol.
+
+    The SDK builds uvicorn.Config(app, host, port, log_level) without log_config (mcp 2.3.0,
+    MCPServer.run_streamable_http_async and run_sse_async), so Config uses its default argument, which is the
+    LOGGING_CONFIG dict object itself: it is changed in place, before the server starts. True when changed."""
+    if (transport or "stdio").strip().lower() == "stdio":
+        return False
+    try:
+        from uvicorn import config as uvicorn_config
+    except ImportError:  # the standard-library test leg; the image has uvicorn
+        return False
+    handlers = uvicorn_config.LOGGING_CONFIG.get("handlers", {})
+    default = handlers.get("default")
+    if not isinstance(default, dict):
+        return False
+    formatter = default.get("formatter", "default")
+    handlers["default"] = {"()": _uvicorn_line_handler, "split": True, "formatter": formatter}
+    return True
+
+
 # The sign-in's secret variables (auth_config reads them): their values are hidden in every log line.
 AUTH_SECRET_ENVS = ("OWNER_SECRET", "MCP_BEARER_TOKEN")
 
@@ -1468,6 +1855,9 @@ def main(argv=None):
         log.info("sign-in: on, issuer %s, static bearer %s", config.public_url, "on" if config.static_bearer else "off")
     mcp2_compat.set_asgi_middleware(*middleware)
     mcp2_compat.set_server_overrides(**overrides)
+    # uvicorn's INFO lines on stdout with a network transport (Railway shows stderr red); upstream's main()
+    # starts uvicorn through the SDK after this point.
+    _split_uvicorn_logs(os.environ.get("GARMIN_MCP_TRANSPORT"))
     from garmin_mcp import main as upstream_main
 
     upstream_main()

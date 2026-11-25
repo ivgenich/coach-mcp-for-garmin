@@ -17,6 +17,7 @@
   "bodyBatteryHighestValue": 77,
   "bodyBatteryLowestValue": 27,
   "bodyBatteryMostRecentValue": 71,
+  "bodyBatteryAtWakeTime": 64,
   "averageSpo2": 95.0,
   "lowestSpo2": 88,
   "latestSpo2": 96,

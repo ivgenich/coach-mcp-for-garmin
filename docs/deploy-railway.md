@@ -15,7 +15,7 @@ with a custom domain it is the host in your `PUBLIC_URL`.
 - **Turn on 2FA for Railway.** Anyone with your Railway account can read your Garmin
   session and your owner secret.
 - **Railway CLI:** `brew install railway`, or `npm i -g @railway/cli` (any system with
-  Node.js), or `scoop install railway` on Windows. `railway ssh` also needs an SSH key
+  Node.js; on Windows, inside WSL: a CLI installed in Windows itself is not seen there). `railway ssh` also needs an SSH key
   registered with Railway. The CLI offers to register `~/.ssh/id_ed25519.pub`; if you have no
   key, run `ssh-keygen -t ed25519` first.
 - **bash, git and python3.** deploy.sh is a bash script and reads the Railway CLI's JSON with
@@ -34,14 +34,12 @@ with a custom domain it is the host in your `PUBLIC_URL`.
 Get the files, in a terminal:
 
 ```
-git clone <repository URL>
+git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
 cd coach-mcp-for-garmin
-git checkout v1.0.3
+git checkout v1.0.4
 ```
 
-`<repository URL>` is the HTTPS address under the **Code** button on this repository's GitHub
-page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.3`.
-If no release is listed yet, skip the `git checkout` line and stay on `main`.
+Use the newest release tag from the repository's **Releases** page in place of `v1.0.4`.
 
 ```bash
 GARMIN_AUTH=full REPORT_TZ=Area/City ./scripts/deploy.sh    # your IANA zone, e.g. REPORT_TZ=Europe/London

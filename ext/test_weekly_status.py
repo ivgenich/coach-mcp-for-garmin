@@ -216,14 +216,15 @@ class ProxyClient:
         return getattr(self._inner, name)
 
 
-def fit_helpers(pct=-6.1, error=None):
-    """A _load_fit_helpers stand-in whose _parse_fit returns upstream's shape."""
+def fit_helpers(pct=-6.1, error=None, **session_fields):
+    """A _load_fit_helpers stand-in whose _parse_fit returns upstream's shape (session_fields: extra summary
+    fields such as avg_power_w, normalized_power_w, total_ascent_m, total_timer_time_s, sub_sport)."""
 
     def parse_fit(raw, include_records):
         if error is not None:
             raise error
         assert raw == b"FIT-BYTES" and include_records is False
-        session = {"sport": "cycling"}
+        session = {"sport": "cycling", **session_fields}
         if pct is not None:
             session["hr_drift"] = {"hr_drift_pct": pct, "first_half_power_hr_ratio": 1.52,
                                    "second_half_power_hr_ratio": 1.43, "interpretation": "moderate_drift"}
@@ -332,9 +333,9 @@ class Flags(unittest.TestCase):
         labels = {f["id"]: f["label_en"] for f in flags}
         self.assertIn("under 6 h", labels["short_nights"])
         self.assertIn("30%", labels["volume_jump"])
-        # Not done this week on any day, not "on the planned day".
+        # Rules v2: done on the day or moved by a day or two, not "on any day of the week".
         self.assertIn("70%", labels["low_completion"])
-        self.assertIn("done this week (on any day)", labels["low_completion"])
+        self.assertIn("done (within a day or two)", labels["low_completion"])
         # Every label keeps the "Name: detail" shape (the page shows the name as a chip).
         for label in labels.values():
             self.assertRegex(label, r"^[A-Z][^:]+: \S")
@@ -418,14 +419,55 @@ class Plan(unittest.TestCase):
         # week's other run is linked, and the previous week's run 5 days before
         # it never counts.
         plan = self.plan(FX["schedule"], FX["activities"])
-        self.assertEqual(plan, {"scheduled": 8, "completed": 7, "on_planned_day": 6, "linked": 5,
-                                "completion_pct": 88})
+        self.assertEqual(plan, {"scheduled": 8, "completed": 7, "on_planned_day": 6, "moved": 1, "upcoming": 0,
+                                "linked": 5, "completion_pct": 88})
 
-    def test_moved_session_counts_anywhere_in_the_week(self):
-        plan = self.plan(schedule_payload(("2026-03-01", "running", None)),
-                         [activity("2026-03-07 06:00:00", "running", aid=1)])  # 6 days later
-        self.assertEqual(plan, {"scheduled": 1, "completed": 1, "on_planned_day": 0, "linked": 0,
-                                "completion_pct": 100})
+    def test_moved_session_counts_within_one_day_early_or_two_days_late(self):
+        # Rules v2: on the day, 1 day earlier or 2 days later; v1 took any day of the week.
+        for when, done in (("2026-03-03", 1), ("2026-03-05", 1), ("2026-03-06", 1),
+                           ("2026-03-02", 0), ("2026-03-07", 0)):
+            with self.subTest(when=when):
+                plan = self.plan(schedule_payload(("2026-03-04", "running", None)),
+                                 [activity(f"{when} 06:00:00", "running", aid=1)])
+                self.assertEqual(plan, {"scheduled": 1, "completed": done, "on_planned_day": 0, "moved": done,
+                                        "upcoming": 0, "linked": 0, "completion_pct": done * 100})
+
+    def test_owner_week_activities_before_the_plan_do_not_count(self):
+        # Live case (19-25 Nov): 4 rides planned Mon-Wed, created on Sun; the week's rides were Thu-Sat. v1 said
+        # 4 of 4 done, 0 on the planned day. Only Sat -> Mon would be 2 days early: still out.
+        start, end, today = dt.date(2026, 11, 19), dt.date(2026, 11, 25), dt.date(2026, 11, 25)
+        payload = schedule_payload(("2026-11-23", "cycling", None), ("2026-11-23", "running", None),
+                                   ("2026-11-24", "cycling", None), ("2026-11-25", "cycling", None))
+        acts = ws.parse_activities([activity("2026-11-19 07:00:00", "road_biking", aid=1),
+                                    activity("2026-11-20 07:00:00", "running", aid=2),
+                                    activity("2026-11-21 07:00:00", "road_biking", aid=3)], TZ)
+        plan = ws.plan_section(ws.parse_schedule(payload, start, end), acts, start, end, today)
+        self.assertEqual(plan, {"scheduled": 4, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0,
+                                "linked": 0, "completion_pct": 0})
+        self.assertIn("low_completion", flag_ids(neutral(plan=plan)))
+        # A ride on Sunday (1 day before Monday) is a moved session; the rest stay undone.
+        acts += ws.parse_activities([activity("2026-11-22 07:00:00", "road_biking", aid=4)], TZ)
+        plan = ws.plan_section(ws.parse_schedule(payload, start, end), acts, start, end, today)
+        self.assertEqual((plan["completed"], plan["on_planned_day"], plan["moved"]), (1, 0, 1))
+
+    def test_workout_after_today_is_never_done(self):
+        # end_date in the future (the week in progress): Thu's and Fri's workouts are still ahead. An activity
+        # dated after today (a clock or time-zone slip) never counts either.
+        today = dt.date(2026, 3, 4)
+        payload = schedule_payload(("2026-03-04", "running", None), ("2026-03-05", "running", None),
+                                   ("2026-03-06", "cycling", None), ("2026-03-03", "cycling", None))
+        acts = ws.parse_activities([activity("2026-03-04 06:00:00", "running", aid=1),
+                                    activity("2026-03-05 06:00:00", "running", aid=2),
+                                    activity("2026-03-06 06:00:00", "road_biking", aid=3)], TZ)
+        plan = ws.plan_section(ws.parse_schedule(payload, START, END), acts, START, END, today)
+        self.assertEqual(plan, {"scheduled": 4, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 2,
+                                "linked": 0, "completion_pct": 25})
+        # 1 of the 2 due workouts done: under 70% of due ones, but only 2 due (< 3), so no flag.
+        self.assertNotIn("low_completion", flag_ids(neutral(plan=plan)))
+        due_three = dict(plan, scheduled=5, upcoming=2, completed=3, completion_pct=60)  # 3 of 3 due done
+        self.assertNotIn("low_completion", flag_ids(neutral(plan=due_three)))
+        self.assertIn("low_completion", flag_ids(neutral(plan=dict(due_three, completed=2, completion_pct=40))))
+        self.assertIn("Plan: 1 of 4 done (25%), 2 still ahead", ws.render_text(dict(build(), plan=plan), "markdown"))
 
     def test_previous_week_activity_does_not_count(self):
         plan = self.plan(schedule_payload(("2026-03-01", "running", None)),
@@ -440,8 +482,8 @@ class Plan(unittest.TestCase):
             ("2026-03-05", "swimming", None),  # the ride is another sport
         ), [activity("2026-03-04 06:00:00", "treadmill_running", aid=2),
             activity("2026-03-04 18:00:00", "virtual_ride", aid=3)])
-        self.assertEqual(plan, {"scheduled": 4, "completed": 1, "on_planned_day": 1, "linked": 0,
-                                "completion_pct": 25})
+        self.assertEqual(plan, {"scheduled": 4, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0,
+                                "linked": 0, "completion_pct": 25})
         self.assertIn("low_completion", flag_ids(neutral(plan=plan)))
 
     def test_other_sports_match_by_their_own_type(self):
@@ -458,8 +500,8 @@ class Plan(unittest.TestCase):
     def test_linked_activity_is_never_reused(self):
         plan = self.plan(schedule_payload(("2026-03-04", "running", 2), ("2026-03-05", "running", None)),
                          [activity("2026-03-04 06:00:00", "running", aid=2)])
-        self.assertEqual(plan, {"scheduled": 2, "completed": 1, "on_planned_day": 1, "linked": 1,
-                                "completion_pct": 50})
+        self.assertEqual(plan, {"scheduled": 2, "completed": 1, "on_planned_day": 1, "moved": 0, "upcoming": 0,
+                                "linked": 1, "completion_pct": 50})
 
     def test_without_activities_only_full_links_count(self):
         plan = self.plan(schedule_payload(("2026-03-03", "running", 1), ("2026-03-04", "cycling", 2)), None)
@@ -471,8 +513,8 @@ class Plan(unittest.TestCase):
 
     def test_nothing_scheduled_gives_null_pct_and_no_flag(self):
         plan = self.plan({"data": {"workoutScheduleSummariesScalar": []}}, [])
-        self.assertEqual(plan, {"scheduled": 0, "completed": 0, "on_planned_day": 0, "linked": 0,
-                                "completion_pct": None})
+        self.assertEqual(plan, {"scheduled": 0, "completed": 0, "on_planned_day": 0, "moved": 0, "upcoming": 0,
+                                "linked": 0, "completion_pct": None})
         self.assertNotIn("low_completion", flag_ids(neutral(plan=plan)))
         null_list = ws.parse_schedule({"data": {"workoutScheduleSummariesScalar": None}}, START, END)
         self.assertEqual(null_list, [])
@@ -591,6 +633,89 @@ class LongSession(unittest.TestCase):
         self.assertIsNone(ws.decoupling_from_details(None))
 
 
+# The owner's 21 Nov ride: 163 min, 1307 m up, -15.5% from the halves; laps showed terrain, not drift.
+HILLY = {"avg_power_w": 170, "normalized_power_w": 205, "total_ascent_m": 1307, "total_timer_time_s": 163 * 60}
+
+
+class Steadiness(unittest.TestCase):
+    """Rules v2: decoupling is judged only for an even effort (long_session.steady)."""
+
+    def test_effort_steady_rules(self):
+        steady = ws.effort_steady
+        hilly = dict(avg_power=170, normalized_power=205, ascent_m=1307, seconds=163 * 60)
+        self.assertIs(steady("bike", "road_biking", **hilly), False)
+        self.assertIs(steady("bike", "road_biking", **dict(hilly, normalized_power=175)), False)  # 481 m/h
+        self.assertIs(steady("bike", "road_biking", **dict(hilly, ascent_m=200)), False)  # VI 1.21
+        self.assertIs(steady("bike", "road_biking", avg_power=200, normalized_power=210, ascent_m=500,
+                             seconds=7200), True)  # VI 1.05, 250 m/h
+        self.assertIs(steady("bike", "road_biking", avg_power=200, normalized_power=210, ascent_m=600,
+                             seconds=7200), False)  # 300 m/h is not below 300
+        self.assertIs(steady("bike", "road_biking", avg_power=200, normalized_power=220, ascent_m=100,
+                             seconds=7200), True)  # VI 1.10: flat ride with stops still counts
+        self.assertIs(steady("bike", "road_biking", avg_power=200, normalized_power=222, ascent_m=100,
+                             seconds=7200), False)  # VI 1.11
+        self.assertIs(steady("bike", "virtual_ride", **hilly), True)  # indoor: steady whatever the numbers
+        self.assertIs(steady("bike", "cycling", sub_sport="indoor_cycling", **hilly), True)
+        self.assertIs(steady("run", "treadmill_running"), True)
+        self.assertIs(steady("run", "running", ascent_m=90, seconds=3600), True)
+        self.assertIs(steady("run", "trail_running", ascent_m=250, seconds=3600), False)
+        self.assertIsNone(steady("bike", "road_biking", avg_power=200, normalized_power=205))  # no ascent
+        self.assertIsNone(steady("bike", None))
+
+    def test_hilly_ride_is_not_applicable(self):
+        ws._drift_cache.clear()
+        self.addCleanup(ws._drift_cache.clear)
+        status = build(fit=fit_helpers(pct=-15.5, **HILLY), text_format="markdown")
+        ls = status["long_session"]
+        self.assertEqual((ls["decoupling_pct"], ls["steady"], ls["interpretation_code"]),
+                         (-15.5, False, "not_applicable"))
+        self.assertEqual(ls["interpretation"], "Uneven effort (hills or coasting): drift is not meaningful")
+        self.assertIn("HR drift -15.5% · Uneven effort (hills or coasting)", status["text"])
+        self.assertNotIn("Large drift", status["text"])
+        self.assertNotIn("long_session.decoupling_pct", status["missing"])
+
+    def test_indoor_ride_keeps_the_normal_reading(self):
+        ws._drift_cache.clear()
+        self.addCleanup(ws._drift_cache.clear)
+        fx = copy.deepcopy(FX)
+        for item in fx["activities"]:
+            if item["startTimeLocal"].startswith("2026-03-07"):
+                item["activityType"]["typeKey"] = "virtual_ride"
+        status = build(FakeClient(fx), fit=fit_helpers(pct=-12.0, **HILLY))  # Zwift climbs: still steady
+        ls = status["long_session"]
+        self.assertEqual((ls["steady"], ls["interpretation_code"]), (True, "large_drift"))
+        flat = build(fit=fit_helpers(pct=-6.1, avg_power_w=200, normalized_power_w=206, total_ascent_m=150,
+                                     total_timer_time_s=11100), end_date="2026-03-07")
+        self.assertEqual((flat["long_session"]["steady"], flat["long_session"]["interpretation_code"]),
+                         (True, "moderate_drift"))
+
+    def test_without_terrain_data_steady_is_null_and_reading_unchanged(self):
+        ws._drift_cache.clear()
+        self.addCleanup(ws._drift_cache.clear)
+        ls = build()["long_session"]
+        self.assertEqual((ls["steady"], ls["interpretation_code"]), (None, "moderate_drift"))
+        self.assertIsNone(ws.long_session_section(
+            {"date": END, "sport": "bike", "type": "road_biking", "name": None, "seconds": 7200}, None)["steady"])
+
+    def test_details_fallback_uses_the_elevation_samples(self):
+        act = {"sport": "bike", "type": "road_biking", "seconds": 11100.0}
+        self.assertIsNone(ws.decoupling_from_details(FX["activity_details"], act)["steady"])  # no elevation
+        hilly = copy.deepcopy(FX["activity_details"])
+        hilly["metricDescriptors"].append({"metricsIndex": 4, "key": "directElevation"})
+        rows = hilly["activityDetailMetrics"]
+        for n, row in enumerate(rows):  # 150 m up / down every 10 samples (+-0.5 m noise): 1350 m in 3:05 h
+            row["metrics"].append(100.0 + (150.0 if (n // 10) % 2 else 0.0) + (0.5 if n % 2 else 0.0))
+        drift = ws.decoupling_from_details(hilly, act)
+        self.assertIs(drift["steady"], False)
+        self.assertEqual(ws.long_session_section(dict(act, date=END, name=None),
+                                                 dict(drift, source="details"))["interpretation_code"],
+                         "not_applicable")
+        flat = copy.deepcopy(hilly)
+        for n, row in enumerate(flat["activityDetailMetrics"]):  # +-2 m noise only
+            row["metrics"][4] = 100.0 + (2.0 if n % 2 else 0.0)
+        self.assertIs(ws.decoupling_from_details(flat, act)["steady"], True)
+        self.assertIs(ws.decoupling_from_details(hilly, dict(act, type="indoor_cycling"))["steady"], True)
+
 
 class DriftCache(unittest.TestCase):
     """A found drift is kept in memory: a second report does not download the FIT again."""
@@ -615,6 +740,18 @@ class DriftCache(unittest.TestCase):
         self.assertEqual(other.names().count("download_activity"), 1)
         build(client, fit=fit_helpers(pct=-12.0))  # another parser
         self.assertEqual(client.names().count("download_activity"), 2)
+
+    def test_the_steadiness_verdict_comes_back_from_memory(self):
+        client, fit = FakeClient(), fit_helpers(pct=-15.5, **HILLY)
+        first = build(client, fit=fit)
+        second = build(client, fit=fit)
+        self.assertEqual(client.names().count("download_activity"), 1)
+        self.assertEqual(first["long_session"], second["long_session"])
+        self.assertEqual((second["long_session"]["steady"], second["long_session"]["interpretation_code"]),
+                         (False, "not_applicable"))
+        (entry,) = ws._drift_cache.values()
+        self.assertEqual(entry[2], {"pct": -15.5, "basis": "power", "steady": False, "variability_index": 1.206,
+                                    "ascent_m_per_h": 481})
 
     def test_a_failure_or_no_drift_is_not_kept(self):
         client = FakeClient(fail={"download_activity": GarminConnectConnectionError("down")})
@@ -642,7 +779,7 @@ class EndToEnd(unittest.TestCase):
         client = FakeClient()
         status = build(client)
         self.assertEqual((status["kind"], status["rules_version"], status["start"], status["end"]),
-                         ("weekly_status", 1, "2026-03-01", "2026-03-07"))
+                         ("weekly_status", 2, "2026-03-01", "2026-03-07"))
         self.assertEqual((status["generated_at"], status["tz"]), ("2026-03-08T06:30:00+02:00", TZ_NAME))
         self.assertEqual([f["id"] for f in status["flags"]], ["short_nights", "gear_near_limit"])
         self.assertEqual((status["level"], status["level_en"]), ("yellow", "Yellow"))
@@ -653,8 +790,8 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(status["load"]["chronic_7d_ago"], 731)
         self.assertEqual((status["load"]["chronic_change"], status["load"]["optimal_min"],
                           status["load"]["optimal_max"]), (45, 621, 1164))
-        self.assertEqual(status["plan"], {"scheduled": 8, "completed": 7, "on_planned_day": 6, "linked": 5,
-                                          "completion_pct": 88})
+        self.assertEqual(status["plan"], {"scheduled": 8, "completed": 7, "on_planned_day": 6, "moved": 1,
+                                          "upcoming": 0, "linked": 5, "completion_pct": 88})
         long_session = status["long_session"]
         self.assertEqual((long_session["date"], long_session["date_en"], long_session["weekday_en"],
                           long_session["sport"]), ("2026-03-07", "7 Mar", "Saturday", "bike"))
@@ -738,9 +875,10 @@ class EndToEnd(unittest.TestCase):
 
     def test_activity_list_failure_leaves_completion_missing(self):
         status = build(FakeClient(fail={"connectapi": RuntimeError("API Error 500 - boom")}))
-        self.assertEqual(status["plan"], {"scheduled": 8, "completed": None, "on_planned_day": None, "linked": 5,
-                                          "completion_pct": None})
-        for key in ("volume", "plan.completed", "plan.on_planned_day", "plan.completion_pct", "long_session"):
+        self.assertEqual(status["plan"], {"scheduled": 8, "completed": None, "on_planned_day": None, "moved": None,
+                                          "upcoming": 0, "linked": 5, "completion_pct": None})
+        for key in ("volume", "plan.completed", "plan.on_planned_day", "plan.moved", "plan.completion_pct",
+                    "long_session"):
             self.assertIn(key, status["missing"])
         self.assertNotIn("low_completion", [f["id"] for f in status["flags"]])
 
@@ -1142,7 +1280,7 @@ class TypedNames(unittest.TestCase):
     def test_gear_make_and_model_are_capped_together(self):
         # EVW-2: without a display name or customMakeModel the name is "<make> <model>", each part cleaned and capped
         # at 100, and the joined name capped at 100 again.
-        gear = {"gearStatusName": "active", "gearTypeName": "Shoes", "uuid": "synthetic-uuid-1",
+        gear = {"gearStatusName": "active", "gearTypeName": "Shoes", "uuid": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e01",
                 "displayName": None, "customMakeModel": None,
                 "gearMakeName": "M" * 100, "gearModelName": f"N{RLO}" + "n" * 120}
         (item,) = ws.parse_gear([gear])
@@ -1159,6 +1297,79 @@ class TypedNames(unittest.TestCase):
         self.assertEqual(ws._short("<Trainer> & *marks* and a very long synthetic gear name", 30),
                          "<Trainer> & *marks* and a ver…")  # plain text: the same cut as before
         self.assertEqual(ws._short(None), "")
+
+
+class PathIds(unittest.TestCase):
+    """Ids from Garmin's answers go into the next request's URL: only their exact shape is used."""
+
+    BAD = ("x/../../userprofile-service", "abc?x", "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01\n",
+           "0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a01\n")
+
+    def test_bad_gear_uuid_is_never_called(self):
+        for bad in self.BAD:
+            with self.subTest(bad=bad):
+                fx = copy.deepcopy(FX)
+                fx["gear"][0]["uuid"] = bad
+                client = FakeClient(fx=fx)
+                status = build(client, include_sources=True, text_format="markdown")
+                stats_args = [c[1][0] for c in client.calls if c[0] == "get_gear_stats"]
+                self.assertNotIn(bad, stats_args)
+                self.assertTrue(stats_args)                          # the other items still get their stats
+                self.assertTrue(all(ws.sc.path_uuid(a, dashless=True) for a in stats_args))
+                self.assertNotIn(bad.strip(), json.dumps(status, ensure_ascii=False))
+                self.assertIn("text", status)
+
+    def test_good_gear_uuids_are_called(self):
+        client = FakeClient()
+        build(client)
+        self.assertEqual(sorted(c[1][0] for c in client.calls if c[0] == "get_gear_stats"),
+                         sorted(g["uuid"] for g in ws.parse_gear(FX["gear"])))
+        dashed = {"gearStatusName": "active", "gearTypeName": "Shoes", "uuid": "5e5e5e5e-5e5e-5e5e-5e5e-5e5e5e5e5e01"}
+        self.assertEqual([g["uuid"] for g in ws.parse_gear([dashed])], [dashed["uuid"]])
+
+    def test_bad_profile_number_skips_the_gear_list(self):
+        for bad in ("71000001/../x", "71000001\n", "abc?x", -5, 0, True, 1.5):
+            with self.subTest(bad=bad):
+                fx = copy.deepcopy(FX)
+                fx["device_last_used"]["userProfileNumber"] = bad
+                client = FakeClient(fx=fx)
+                status = build(client, include_sources=True)
+                self.assertNotIn("get_gear", client.names())
+                self.assertNotIn("get_gear_stats", client.names())
+                self.assertEqual(status["sources"]["gear"]["error"], "skipped: device_last_used gave no profile number")
+        fx = copy.deepcopy(FX)
+        fx["device_last_used"]["userProfileNumber"] = "71000001"
+        client = FakeClient(fx=fx)
+        build(client)
+        self.assertIn(("get_gear", (71000001,), {}), client.calls)
+
+    def test_bad_long_session_id_is_never_downloaded(self):
+        # Each activity keeps a distinct id (the list is deduplicated by id); -1 and True: test_id_helpers.
+        for bad in ("x/../../userprofile-service/", "abc?x=", "\n"):
+            with self.subTest(bad=bad):
+                fx = copy.deepcopy(FX)
+                for act in fx["activities"]:
+                    act["activityId"] = f"{bad}{act['activityId']}" if bad != "\n" else f"{act['activityId']}\n"
+                client = FakeClient(fx=fx)
+                status = build(client, include_sources=True, text_format="markdown")
+                self.assertNotIn("download_activity", client.names())
+                self.assertNotIn("get_activity_details", client.names())
+                self.assertIsNotNone(status["long_session"])
+                self.assertIsNone(status["long_session"].get("decoupling_pct"))
+                self.assertNotIn("decoupling_fit", status["sources"])
+        client = FakeClient()
+        build(client)
+        (download,) = [c for c in client.calls if c[0] == "download_activity"]
+        self.assertIsInstance(download[1][0], int)
+
+    def test_id_helpers(self):
+        self.assertEqual(ws.sc.path_int_id("12"), 12)
+        for bad in ("１２", "12 ", "+12", "0", "", None, 0, -1, False, 2.0, "9" * 20):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ws.sc.path_int_id(bad))
+        self.assertIsNone(ws.sc.path_uuid("0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01"))
+        self.assertIsNone(ws.sc.path_uuid(" 0a0a0a0a-0a0a-0a0a-0a0a-0a0a0a0a0a01"))
+        self.assertIsNone(ws.sc.path_uuid(b"0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a01", dashless=True))
 
 
 class DebugOutput(unittest.TestCase):
@@ -1193,9 +1404,9 @@ WEEKLY_SECTION_KEYS = {
                "change_pct"},
     "load": {"acute", "chronic", "acwr", "acwr_status", "acwr_status_en", "chronic_7d_ago", "chronic_change",
              "optimal_min", "optimal_max"},
-    "plan": {"scheduled", "completed", "on_planned_day", "linked", "completion_pct"},
+    "plan": {"scheduled", "completed", "on_planned_day", "moved", "upcoming", "linked", "completion_pct"},
     "long_session": {"date", "date_en", "weekday_en", "sport", "type", "name", "minutes", "hhmm", "decoupling_pct",
-                     "interpretation", "interpretation_code", "basis", "source"},
+                     "interpretation", "interpretation_code", "basis", "source", "steady"},
     "fitness": {"vo2max_run", "vo2max_bike", "training_status", "training_status_en", "training_balance",
                 "training_balance_en"},
     "body": {"weight_kg", "weight_change_kg", "body_fat_pct", "weighed_on", "weighed_on_en", "compared_with"},
@@ -1207,7 +1418,7 @@ SOURCE_KEYS = {"ok", "fetched_at", "ms"}  # plus "error" when ok is false
 class PublicApi(unittest.TestCase):
     def assert_shape(self, status):
         self.assertEqual(set(status), WEEKLY_KEYS)
-        self.assertEqual(status["rules_version"], 1)
+        self.assertEqual(status["rules_version"], 2)
         for section, keys in WEEKLY_SECTION_KEYS.items():
             if status[section] is not None:
                 self.assertEqual(set(status[section]), keys, section)
@@ -1217,7 +1428,7 @@ class PublicApi(unittest.TestCase):
             self.assertEqual(set(meta), SOURCE_KEYS if meta["ok"] else SOURCE_KEYS | {"error"}, name)
 
     def test_weekly_key_sets(self):
-        self.assertEqual(ws.RULES_VERSION, 1)
+        self.assertEqual(ws.RULES_VERSION, 2)
         status = build()
         self.assert_shape(status)
         self.assertTrue(status["gear"])

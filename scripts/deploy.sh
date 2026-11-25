@@ -66,6 +66,20 @@ warn() { printf '\033[1;33m!!  %s\033[0m\n' "$*"; }
 # tool, unofficial interface) or key (Garmin's official Personal API key:
 # read-only, fewer tools, less data). As in the server, spaces and case do
 # not matter, and a wrong value is never shown. Checked before anything changes.
+# Up to READY_WAIT_S seconds for $1/readyz to answer 200: the server has
+# started and, in full mode, loaded the Garmin login. Silent; no curl, no wait.
+# DEPLOY_READY_WAIT_S changes the limit (0: no wait).
+READY_WAIT_S="${DEPLOY_READY_WAIT_S:-90}"
+[[ $READY_WAIT_S =~ ^[0-9]{1,4}$ ]] || READY_WAIT_S=90
+wait_ready() {
+  command -v curl >/dev/null 2>&1 || return 1
+  local end=$((SECONDS + READY_WAIT_S))
+  while :; do
+    curl -fsS -o /dev/null --max-time 5 "$1/readyz" 2>/dev/null && return 0
+    ((SECONDS + 3 < end)) || return 1
+    sleep 3
+  done
+}
 lower_trim() { printf '%s' "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'; }
 WANT_AUTH="$(lower_trim "${GARMIN_AUTH:-}")"
 if [[ -n $WANT_AUTH && $WANT_AUTH != full && $WANT_AUTH != key ]]; then
@@ -296,8 +310,8 @@ read_project() {
 # After init, add or service link: the link must now be this folder's own.
 reread_link() { read_link && [[ $LINK_DIR == "$REPO_DIR" ]] && read_project; }
 cannot_read_project() {
-  warn "Could not read the linked Railway project (network, or an expired login)."
-  warn "Nothing was changed. Check 'railway whoami' and 'railway status', then re-run."
+  warn "Could not read the linked Railway project (network, an expired login, or a Railway CLI too old for this script)."
+  warn "Nothing was changed. Check 'railway whoami' and 'railway status' (and update the CLI), then re-run."
   exit 1
 }
 if ! read_link; then
@@ -385,8 +399,8 @@ fi
 # simply empty.
 if ! EXISTING="$(railway variable list --kv --service "$SERVICE" 2>/dev/null)" ||
   { [[ -n $EXISTING ]] && ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=' < <(printf '%s\n' "$EXISTING"); }; then
-  warn "Could not read the service variables from Railway (network, or an expired login)."
-  warn "Nothing was changed. Check 'railway whoami' and 'railway variable list', then re-run."
+  warn "Could not read the service variables from Railway (network, an expired login, or a Railway CLI too old for this script)."
+  warn "Nothing was changed. Check 'railway whoami' and 'railway variable list' (and update the CLI), then re-run."
   exit 1
 fi
 
@@ -568,7 +582,7 @@ railway volume list --json 2>/dev/null | railway_json volume "$SERVICE" || vol_r
 if [[ $vol_rc -eq 0 ]]; then
   echo "Already attached."
 elif [[ $vol_rc -ne 3 ]]; then
-  warn "Could not read the volumes from Railway (network, or an expired login). Nothing was deployed."
+  warn "Could not read the volumes from Railway (network, an expired login, or a Railway CLI too old for this script). Nothing was deployed."
   exit 1
 elif ! railway volume --service "$SERVICE_ID" add --mount-path /data; then
   warn "Could not add the volume. In the Railway dashboard: open the $SERVICE service,"
@@ -773,12 +787,29 @@ if [[ $AUTH_MODE == full && $RAILWAY_AUTH != full && -t 0 && -t 1 ]]; then
       ;;
   esac
 fi
+# Key mode, or full mode after the login: wait for /readyz (in a terminal
+# only) so "add the connector" comes when the server can answer.
+READY=false
+BASE_URL="${PUBLIC_URL:-${DOMAIN:+https://$DOMAIN}}"
+if [[ -n $BASE_URL && -t 1 && $READY_WAIT_S -gt 0 && ($LOGIN_DONE == true || $AUTH_MODE == key) ]]; then
+  echo
+  echo "Waiting for $BASE_URL/readyz (up to $READY_WAIT_S s) ..."
+  if wait_ready "$BASE_URL"; then
+    READY=true
+    echo "The server is ready."
+  else
+    warn "No 200 from /readyz yet; give it another minute (docs/troubleshooting.md if it stays so)."
+  fi
+fi
+if [[ $READY == true ]]; then
+  WAIT_THEN="Now add"
+else
+  WAIT_THEN="Wait ~30 s while the server loads, then add"
+fi
 if [[ $LOGIN_DONE == true ]]; then
-  cat <<'EOF'
-
-Garmin login done. Wait ~30 s while the server loads the tokens, then add the connector on
-claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
-EOF
+  echo
+  echo "Garmin login done. $WAIT_THEN the connector on claude.ai in a browser"
+  echo "(docs/connect-claude.md). It shows up in the mobile app by itself."
 elif [[ $AUTH_MODE == full ]]; then
   cat <<'EOF'
 
@@ -790,13 +821,11 @@ Wait ~30 s while the server reloads the tokens, then add the connector on
 claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
 EOF
 else
-  cat <<'EOF'
-
-Next: key mode needs no Garmin login. Wait ~30 s, then add the connector on
-claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself.
-Before Garmin's key expires, create a new key and run:
-    ./scripts/deploy.sh --set-garmin-key
-EOF
+  echo
+  echo "Next: key mode needs no Garmin login. $WAIT_THEN the connector on"
+  echo "claude.ai in a browser (docs/connect-claude.md). It shows up in the mobile app by itself."
+  echo "Before Garmin's key expires, create a new key and run:"
+  echo "    ./scripts/deploy.sh --set-garmin-key"
 fi
 if [[ $ROTATE_SECRET == true ]]; then
   warn "Owner secret rotated: every sign-in is revoked when the new deployment starts. Every client must sign in again:"

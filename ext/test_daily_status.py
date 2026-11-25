@@ -205,6 +205,10 @@ def schedule_with_ids():
     return data
 
 
+# A synthetic Garmin Coach workout uuid (canonical shape).
+COACH_UUID = "c0ac0000-1111-2222-3333-444455556666"
+
+
 def default_data():
     return {
         f"stats:{DAY}": fixture("stats"),
@@ -604,7 +608,9 @@ class RecoveryHours(unittest.TestCase):
 
     def test_fixture_values(self):
         out = readiness(fixture("readiness"), is_today=False)
-        self.assertEqual(out, {"readiness": 52, "readiness_level": "MODERATE", "recovery_hours": 9.0, "acute_load": 610})
+        self.assertEqual(out, {"readiness": 52, "readiness_level": "MODERATE", "readiness_at": "05:58",
+                               "readiness_context": "wake_up", "readiness_latest": None, "recovery_hours": 9.0, "recovery_hours_at": "05:58",
+                               "acute_load": 610})
 
     def test_fixture_is_a_wake_up_row(self):
         self.assertEqual(fixture("readiness")[0]["inputContext"], ds.WAKEUP_CONTEXT)
@@ -654,6 +660,16 @@ class MorningReadiness(unittest.TestCase):
         late = row("2026-03-18T11:00:00.0", ds.POST_EXERCISE_CONTEXT, minutes=480, score=47)
         out = readiness([early, late, PRE_SLEEP], is_today=False)
         self.assertEqual((out["readiness"], out["recovery_hours"]), (47, 8.0))
+        # No wake-up row: the score is a post-workout one, and the answer says so.
+        self.assertEqual(out["readiness_context"], "post_exercise")
+
+    def test_readiness_context_is_named_in_the_text(self):
+        data = default_data()
+        data[f"readiness:{DAY}"] = [row("2026-03-18T11:00:00.0", ds.POST_EXERCISE_CONTEXT, minutes=480, score=47)]
+        out = build(FakeClient(data))
+        self.assertEqual(out["recovery"]["readiness_context"], "post_exercise")
+        self.assertIn("- Readiness after a workout: 47", ds.render_text(out))
+        self.assertEqual(readiness([WAKE], is_today=False)["readiness_context"], "wake_up")
 
     def test_scored_realtime_row_counts_before_the_wake_up_row(self):
         scored = row("2026-03-18T05:20:00.0", ds.REALTIME_CONTEXT, score=57)
@@ -1180,8 +1196,8 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(
             list(out),
             ["kind", "rules_version", "date", "weekday_en", "generated_at", "tz", "level", "level_en",
-             "recommendation", "recommendation_en", "recovery", "load", "today", "tomorrow", "flags", "missing",
-             "thresholds", "thresholds_athlete", "sources"],
+             "recommendation", "recommendation_en", "recovery", "load", "today", "today_done", "tomorrow", "flags",
+             "missing", "thresholds", "thresholds_athlete", "sources"],
         )
         self.assertEqual((out["kind"], out["rules_version"], out["date"], out["weekday_en"]),
                          ("daily_status", 1, DAY, "Wednesday"))
@@ -1191,8 +1207,9 @@ class EndToEnd(unittest.TestCase):
             list(rec),
             ["sleep_hours", "sleep_hhmm", "sleep_hours_prev", "sleep_score", "rem_min", "deep_min", "awake_min",
              "sleep_end_local", "hrv", "hrv_7d", "hrv_delta", "hrv_status", "hrv_range", "rhr", "rhr_7d",
-             "rhr_delta", "readiness", "readiness_level", "recovery_hours", "body_battery", "stress_avg",
-             "spo2_avg", "spo2_min", "resp_sleep_avg"],
+             "rhr_delta", "readiness", "readiness_level", "readiness_at", "readiness_context", "readiness_latest", "recovery_hours",
+             "recovery_hours_at", "body_battery", "body_battery_wake", "stress_avg", "spo2_avg", "spo2_min",
+             "resp_sleep_avg"],
         )
         self.assertEqual((rec["sleep_hours"], rec["sleep_hhmm"], rec["sleep_hours_prev"]), (6.25, "6:15", 5.7))
         self.assertEqual((rec["hrv"], rec["hrv_7d"], rec["hrv_delta"], rec["hrv_status"]), (58, 63, -5, "BALANCED"))
@@ -1200,7 +1217,10 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual((rec["rhr"], rec["rhr_7d"], rec["rhr_delta"]), (49, 46, 3))
         # 9.0 h at 05:58:41, report at 06:30.
         self.assertEqual((rec["readiness"], rec["readiness_level"], rec["recovery_hours"]), (52, "MODERATE", 8.5))
-        self.assertEqual((rec["body_battery"], rec["stress_avg"]), (71, 24))
+        self.assertEqual((rec["body_battery"], rec["body_battery_wake"], rec["stress_avg"]), (71, 64, 24))
+        self.assertEqual((rec["readiness_at"], rec["readiness_latest"], rec["recovery_hours_at"]),
+                         ("05:58", None, "05:58"))
+        self.assertEqual(out["today_done"], [])                  # nothing recorded yet today
         ld = out["load"]
         self.assertEqual(list(ld), ["acute", "chronic", "acwr", "acwr_status", "acwr_percent",
                                     "readiness_acute_load", "yesterday"])
@@ -1512,12 +1532,47 @@ class EndToEnd(unittest.TestCase):
     def test_coach_workout_by_uuid(self):
         data = default_data()
         data["schedule"] = {"data": {"workoutScheduleSummariesScalar": [
-            entry("Coach tempo", secs=2400, workoutUuid="coach-uuid-1")]}}
-        data["workout:coach-uuid-1"] = fixture("workout_threshold_run")
+            entry("Coach tempo", secs=2400, workoutUuid=COACH_UUID)]}}
+        data[f"workout:{COACH_UUID}"] = fixture("workout_threshold_run")
         client = FakeClient(data)
         out = build(client)
-        self.assertIn("workout:coach-uuid-1", client.calls)
+        self.assertIn(f"workout:{COACH_UUID}", client.calls)
         self.assertEqual((out["today"][0]["hard"], out["today"][0]["structured"]), (True, True))
+
+    @unittest.skipUnless(HAVE_UPSTREAM, NEEDS_UPSTREAM)
+    def test_coach_workout_bad_uuid_is_never_called(self):
+        # The uuid goes into the URL path: any other shape is no uuid (no call), never an error.
+        for bad in ("x/../../userprofile-service", "abc?x", COACH_UUID + "\n", " " + COACH_UUID,
+                    COACH_UUID.replace("-", ""), 42):
+            with self.subTest(bad=bad):
+                data = default_data()
+                data["schedule"] = {"data": {"workoutScheduleSummariesScalar": [
+                    entry("Coach tempo", secs=2400, workoutUuid=bad)]}}
+                client = FakeClient(data)
+                out = build(client, include_sources=True, text_format="markdown")
+                self.assertEqual([c for c in client.calls if str(c).startswith("workout:")], [])
+                self.assertEqual(out["today"][0]["name"], "Coach tempo")
+                self.assertFalse(out["today"][0]["structured"])
+                self.assertIn("text", out)
+                self.assertNotIn("userprofile-service", json.dumps(out))
+                self.assertNotIn("abc?x", json.dumps(out))
+
+    def test_workout_call_needs_a_canonical_uuid(self):
+        client = FakeClient()
+        self.assertIsNone(ds._workout_call(client, {"workoutUuid": "x/../../userprofile-service"}))
+        self.assertIsNone(ds._workout_call(client, {"workoutUuid": COACH_UUID + "\n"}))
+        fn, args, _ = ds._workout_call(client, {"workoutUuid": COACH_UUID})
+        self.assertEqual(args, (f"workout-service/fbt-adaptive/{COACH_UUID}",))
+
+    def test_workout_call_needs_a_positive_ascii_id(self):
+        # "²".isdigit() is True but int("²") raises: one such entry must not fail the whole report.
+        client = FakeClient()
+        for bad in ("²", "0", 0, -3, True, "12 ", "1/2"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ds._workout_call(client, {"workoutId": bad}))
+        for good, want in (("123", 123), (123, 123)):
+            fn, args, _ = ds._workout_call(client, {"workoutId": good})
+            self.assertEqual(args, (want,))
 
     def test_flags_level_and_recommendation_end_to_end(self):
         data = default_data()
@@ -1592,7 +1647,7 @@ class Text(unittest.TestCase):
         self.assertIn("Sleep: 6:15 (score 74)", text)
         self.assertIn("HRV: 58 (7-day avg: 63)", text)
         self.assertIn("Resting HR: 49 (7-day avg: 46)", text)
-        self.assertIn("Readiness: 52 (moderate), recovery: 8.5 h", text)
+        self.assertIn("Readiness at wake-up: 52 (moderate), recovery: 8.5 h", text)
         self.assertIn("Load: ACWR 1.1 (optimal)", text)
         self.assertIn("Yesterday: strength 30 min", text)
         self.assertIn("bike 67 min 33.6 km, load 92", text)
@@ -1972,15 +2027,15 @@ class DebugOutput(unittest.TestCase):
 # file's FakeClient (both interpreters gave the same sets); a change to them is a change to the public API.
 DAILY_KEYS = frozenset({
     "kind", "rules_version", "date", "weekday_en", "generated_at", "tz", "level", "level_en", "recommendation",
-    "recommendation_en", "recovery", "load", "today", "tomorrow", "flags", "missing", "thresholds",
+    "recommendation_en", "recovery", "load", "today", "today_done", "tomorrow", "flags", "missing", "thresholds",
     "thresholds_athlete", "sources"})
 PROBE_KEYS = frozenset({"kind", "date", "generated_at", "tz", "sleep_synced", "sleep_end_local", "readiness_ready",
                         "sources"})
 RECOVERY_KEYS = frozenset({
     "sleep_hours", "sleep_hhmm", "sleep_hours_prev", "sleep_score", "rem_min", "deep_min", "awake_min",
     "sleep_end_local", "hrv", "hrv_7d", "hrv_delta", "hrv_status", "hrv_range", "rhr", "rhr_7d", "rhr_delta",
-    "readiness", "readiness_level", "recovery_hours", "body_battery", "stress_avg", "spo2_avg", "spo2_min",
-    "resp_sleep_avg"})
+    "readiness", "readiness_level", "readiness_at", "readiness_context", "readiness_latest", "recovery_hours", "recovery_hours_at",
+    "body_battery", "body_battery_wake", "stress_avg", "spo2_avg", "spo2_min", "resp_sleep_avg"})
 LOAD_KEYS = frozenset({"acute", "chronic", "acwr", "acwr_status", "acwr_percent", "readiness_acute_load",
                        "yesterday"})
 WORKOUT_KEYS = frozenset({"name", "sport", "km", "minutes", "class", "hard", "long", "structured", "reason",
@@ -2226,6 +2281,155 @@ class SelfCheck(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ds.selfcheck()
 
+
+
+# --- today's finished activities, reading times, every null in "missing" ------
+
+class TodayDone(unittest.TestCase):
+    def test_finished_activity_is_listed_and_printed(self):
+        data = default_data()
+        acts = fixture("activities_today")
+        acts[0]["activityName"] = "Morning\u200b run"
+        data[f"activities:{DAY}"] = acts
+        out = build(FakeClient(data), text_format="markdown")
+        self.assertEqual(out["today_done"], [{
+            "sport": "run", "type": "running", "name": "Morning run", "start_local": "05:10", "minutes": 46,
+            "km": 6.9, "avg_hr": 134, "max_hr": 148, "load": 58, "aerobic_te": 2.5, "anaerobic_te": 0.1}])
+        self.assertIn("- Done today: 05:10 run 46 min 6.9 km, load 58", out["text"].split("\n"))
+        # Additive: yesterday's sessions keep their shape; the run completes the planned easy run as before.
+        self.assertNotIn("start_local", out["load"]["yesterday"][0])
+        self.assertEqual((out["level"], out["recommendation"], out["flags"]), ("green", "done_today", []))
+
+    def test_failed_search_is_null_and_missing(self):
+        out = build(FakeClient(fail={f"activities:{DAY}": RuntimeError("x")}), text_format="markdown")
+        self.assertIsNone(out["today_done"])
+        self.assertIn("today_done", out["missing"])
+        self.assertNotIn("Done today", out["text"])
+
+    def test_many_activities_stay_within_the_word_budget(self):
+        data = default_data()
+        data[f"activities:{DAY}"] = fixture("activities_today") * 12
+        text = build(FakeClient(data), text_format="markdown")["text"]
+        self.assertLessEqual(sc.word_count(text), ds.MAX_WORDS)
+        self.assertIn("Done today", text)
+
+
+class ReadingTimes(unittest.TestCase):
+    def test_readiness_and_recovery_from_different_readings(self):
+        wake = row("2026-03-18T06:10:00.0", ds.WAKEUP_CONTEXT, minutes=240, score=94)
+        ride = row("2026-03-18T09:40:00.0", ds.POST_EXERCISE_CONTEXT, minutes=900, score=77)
+        out = readiness([ride, wake, PRE_SLEEP], is_today=False)
+        self.assertEqual((out["readiness"], out["readiness_at"], out["readiness_latest"]), (94, "06:10", 77))
+        self.assertEqual((out["recovery_hours"], out["recovery_hours_at"]), (15.0, "09:40"))
+
+    def test_latest_only_when_another_row_differs(self):
+        out = readiness([WAKE, PRE_SLEEP], is_today=False)
+        self.assertEqual((out["readiness_at"], out["readiness_latest"], out["recovery_hours_at"]),
+                         ("06:10", None, "06:10"))
+        same = row("2026-03-18T09:40:00.0", ds.POST_EXERCISE_CONTEXT, minutes=900, score=63)
+        self.assertIsNone(readiness([same, WAKE], is_today=False)["readiness_latest"])
+        # A pre-sleep row alone is no morning reading: no score, no time, no "latest".
+        out = readiness([PRE_SLEEP], is_today=False)
+        self.assertEqual((out["readiness_at"], out["readiness_latest"], out["recovery_hours_at"]),
+                         (None, None, "00:13"))
+
+    def test_gmt_timestamp_is_shown_in_the_report_zone(self):
+        out = readiness(fixture("readiness"), is_today=False)      # timestamp 03:58:41 GMT, Athens UTC+2
+        self.assertEqual((out["readiness_at"], out["recovery_hours_at"]), ("05:58", "05:58"))
+
+
+class BodyBatteryWake(unittest.TestCase):
+    def test_wake_value_beside_the_latest(self):
+        out = ds.extract_stats({"bodyBatteryMostRecentValue": 30, "bodyBatteryAtWakeTime": 82})
+        self.assertEqual((out["body_battery"], out["body_battery_wake"]), (30, 82))
+        self.assertIsNone(ds.extract_stats({"bodyBatteryAtWakeTime": -1})["body_battery_wake"])
+
+    def test_in_the_debug_slim(self):
+        out = build(include_sources=True)
+        self.assertEqual(out["debug"]["stats"]["slim"]["bodyBatteryAtWakeTime"], 64)
+
+
+class MissingEveryNull(unittest.TestCase):
+    def nulls(self, out):
+        """Every null field under the data sections, walked like missing_paths."""
+        found = []
+
+        def walk(value, path):
+            if value is None:
+                found.append(path)
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    walk(v, f"{path}.{k}")
+
+        for section in ds.MISSING_SECTIONS:
+            walk(out.get(section), section)
+        return found
+
+    def test_spo2_null_is_listed(self):
+        data = default_data()
+        del data[f"sleep:{DAY}"]["wellnessSpO2SleepSummaryDTO"]
+        out = build(FakeClient(data))
+        self.assertEqual((out["recovery"]["spo2_avg"], out["recovery"]["spo2_min"]), (None, None))
+        self.assertEqual(out["missing"][-2:], ["recovery.spo2_avg", "recovery.spo2_min"])
+
+    def test_future_date_lists_every_null(self):
+        out = build(date=NEXT)
+        for path in ("recovery.body_battery", "recovery.stress_avg", "recovery.rem_min", "recovery.deep_min",
+                     "recovery.awake_min", "recovery.sleep_end_local", "recovery.body_battery_wake"):
+            self.assertIn(path, out["missing"])
+        # Null by design: not listed. The timestamps are null with their values, which are listed.
+        for path in ("recovery.readiness_latest", "recovery.readiness_at", "recovery.recovery_hours_at"):
+            self.assertNotIn(path, out["missing"])
+        self.assertIn("recovery.readiness", out["missing"])
+        expected = set(self.nulls(out)) - ds.NULL_BY_DESIGN - set(ds.COMPANION_FIELDS)
+        self.assertEqual(expected - set(out["missing"]), set())
+        self.assertEqual(len(out["missing"]), len(set(out["missing"])))
+
+    def test_old_entries_keep_their_order_first(self):
+        out = build(FakeClient(fail={f"stats:{DAY}": RuntimeError("x"), f"hrv:{PREV2}": RuntimeError("x")}))
+        text_part = [p for p in ds.TEXT_FIELDS if ds._path_value(out, p) is None]
+        self.assertEqual(out["missing"][:len(text_part)], text_part)
+        self.assertLess(out["missing"].index("hrv_trend.d-2"), out["missing"].index("recovery.body_battery"))
+        self.assertLess(out["missing"].index("recovery.rhr_delta"), out["missing"].index("recovery.body_battery"))
+
+    def test_unneeded_thresholds_are_not_listed(self):
+        out = build()
+        self.assertIsNone(out["thresholds_athlete"]["ftp_w"])
+        self.assertEqual(out["missing"], [] if HAVE_UPSTREAM else
+                         ["today[0].structured", "tomorrow[0].structured", "tomorrow[1].structured"])
+
+    def test_key_mode_leaves_out_its_by_design_nulls(self):
+        out = build(KeyModeClient(), date=DAY, key_mode=True)
+        for path in ds.KEY_MODE_NULL:
+            self.assertIsNone(ds._path_value(out, path), path)
+            self.assertNotIn(path, out["missing"])
+        for path in ("recovery.readiness", "recovery.recovery_hours", "load.acwr", "load.acwr_status", "today"):
+            self.assertIn(path, out["missing"])
+        # The same nulls in full mode (a failed source) are listed.
+        full = build(FakeClient(fail={f"training_status:{DAY}": RuntimeError("x")}))
+        for path in ("load.acute", "load.chronic", "load.acwr_percent"):
+            self.assertIn(path, full["missing"])
+
+
+class ValuelessTargets(unittest.TestCase):
+    def test_swim_pace_target_without_values_is_unknown_intensity(self):
+        leaves = [(step("warmup", target="pace.zone"), 1), (step("interval", target="pace.zone"), 4)]
+        self.assertEqual(ds.hard_from_steps(leaves, "swim"), (False, "intensity unknown: targets without values"))
+
+    def test_class_unchanged_and_plain_steps_keep_the_old_reason(self):
+        old = f"no step at zone {ds._HARD_ZONE}+ or at threshold intensity"
+        self.assertEqual(ds.hard_from_steps([(step("interval"), 4)], "swim"), (False, old))
+        self.assertEqual(ds.hard_from_steps([(step("interval", target="pace.zone", zone=2), 4)], "swim"),
+                         (False, old))
+        # A rule that fires still decides: a zone 4 step next to a valueless one.
+        hard, reason = ds.hard_from_steps([(step("interval", target="pace.zone"), 1),
+                                           (step("interval", target="heart.rate.zone", zone=4), 1)], "run")
+        self.assertTrue(hard)
+        self.assertIn("HR zone 4", reason)
+        cls = ds.classify_workout({"workoutName": "Swim", "workoutType": "swimming"},
+                                  {"segments": [{"steps": [step("interval", "distance", 100.0, target="pace.zone")]}]})
+        self.assertEqual((cls["class"], cls["hard"]), ("easy", False))
+        self.assertIn("intensity unknown: targets without values", cls["reason"])
 
 
 # --- key mode (GARMIN_AUTH=key) -------------------------------------------------

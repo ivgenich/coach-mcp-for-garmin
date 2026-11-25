@@ -6,7 +6,12 @@ today and tomorrow, then decides flags, a level (green / yellow / red /
 incomplete) and a recommendation with fixed rules (RULES_VERSION,
 THRESHOLDS). Code decides every number; a chat model only words them. A
 value Garmin has not produced yet is null and listed in "missing", and a
-rule that needs it is skipped, never guessed.
+rule that needs it is skipped, never guessed. "missing" lists every null
+field of recovery, load, today, today_done and tomorrow, except the ones
+null by design (missing_paths(): NULL_BY_DESIGN, KEY_MODE_NULL and
+COMPANION_FIELDS); fields inside list items are not listed (only a planned
+workout's null "structured" is), and a thresholds_athlete value only when a
+workout needed it.
 
 Training Readiness is the morning picture. Garmin writes several rows a day
 (inputContext): a realtime row just after midnight, before the night is
@@ -16,7 +21,11 @@ before it exists, from the newest row that is not a pre-sleep realtime row
 (a post-exercise row still counts); with neither they are null, and the
 probe says readiness is not ready yet. The recovery clock (recovery_hours)
 and the readiness acute load come from the newest row of the date, because
-they move with every workout.
+they move with every workout. readiness_at and recovery_hours_at say which
+row each came from (local HH:MM), readiness_context which kind of row the
+score is from (wake_up / post_exercise / realtime: without a wake-up row the
+fallback above can be a post-workout row); readiness_latest is the newest row's score
+when that is a later row with another score (null otherwise).
 
 Everything except the adapter in build_daily_status (the Garmin calls) and
 selfcheck() is a pure function over Garmin payload dicts, so the unit tests
@@ -115,13 +124,30 @@ FLAG_LEVELS = {
     "recovery_incomplete": "yellow",
 }
 
-# Fields the daily text prints. When null they are listed in "missing" even
-# if no rule needs them.
+# Fields the daily text prints, listed first in "missing" when null (the order
+# "missing" has always had); every other null field follows (missing_paths()).
 TEXT_FIELDS = (
     "recovery.sleep_hours", "recovery.sleep_score", "recovery.hrv", "recovery.hrv_7d",
     "recovery.rhr", "recovery.rhr_7d", "recovery.readiness", "recovery.recovery_hours",
     "load.acwr", "load.acwr_status", "load.yesterday", "today", "tomorrow",
 )
+
+# Data sections whose null fields "missing" lists, in answer order.
+MISSING_SECTIONS = ("recovery", "load", "today", "today_done", "tomorrow")
+# Null by design, never listed: readiness_latest is null whenever the newest
+# reading is the morning one or has the same score.
+NULL_BY_DESIGN = frozenset({"recovery.readiness_latest"})
+# Key mode: null because Garmin's Personal API does not serve them (never
+# listed then). The ones the text prints (TEXT_FIELDS) are still listed.
+KEY_MODE_NULL = frozenset({
+    "recovery.readiness_level", "load.acute", "load.chronic", "load.acwr_percent", "load.readiness_acute_load",
+})
+# A timestamp is listed only when the value it times is there.
+COMPANION_FIELDS = {
+    "recovery.readiness_at": "recovery.readiness",
+    "recovery.readiness_context": "recovery.readiness",
+    "recovery.recovery_hours_at": "recovery.recovery_hours",
+}
 
 ACWR_SPIKE_STATUSES = ("HIGH", "VERY_HIGH")
 
@@ -405,8 +431,10 @@ def extract_stats(payload: Any) -> Dict[str, Any]:
         "rhr": _pos_int(p.get("restingHeartRate")),
         # Garmin's 7-day average probably includes today; accepted.
         "rhr_7d": _pos_int(p.get("lastSevenDaysAvgRestingHeartRate")),
+        # The day's latest value (for a past date: its last reading, not the morning's).
         "body_battery": _nonneg_int(p.get("bodyBatteryMostRecentValue")),
-        # Negative stress values mean "not enough data".
+        "body_battery_wake": _nonneg_int(p.get("bodyBatteryAtWakeTime")),
+        # Whole-day average (so far, for today). Negative values mean "not enough data".
         "stress_avg": _nonneg_int(p.get("averageStressLevel")),
     }
 
@@ -464,6 +492,10 @@ def readiness_snapshots(payload: Any, day: str) -> List[Dict[str, Any]]:
 WAKEUP_CONTEXT = "AFTER_WAKEUP_RESET"
 POST_EXERCISE_CONTEXT = "AFTER_POST_EXERCISE_RESET"
 REALTIME_CONTEXT = "UPDATE_REALTIME_VARIABLES"
+# recovery.readiness_context: which kind of row the readiness score came from. Usually "wake_up"; without a
+# wake-up row (the watch not worn overnight) morning_snapshot falls back to a newer row, and the context says so.
+READINESS_CONTEXTS = {WAKEUP_CONTEXT: "wake_up", POST_EXERCISE_CONTEXT: "post_exercise", REALTIME_CONTEXT: "realtime"}
+_READINESS_CONTEXT_EN = {"wake_up": "at wake-up", "post_exercise": "after a workout", "realtime": "during the day"}
 
 
 def _pre_sleep_row(snap: Dict[str, Any]) -> bool:
@@ -513,6 +545,12 @@ def snapshot_time(snap: Dict[str, Any], zone: ZoneInfo) -> Optional[dt.datetime]
     return local.replace(tzinfo=zone) if local is not None else None
 
 
+def _snapshot_clock(snap: Dict[str, Any], zone: ZoneInfo) -> Optional[str]:
+    """Local HH:MM (in zone) of a readiness snapshot, or None."""
+    taken = snapshot_time(snap, zone)
+    return taken.astimezone(zone).strftime("%H:%M") if taken is not None else None
+
+
 def primary_device_id(training_status: Any) -> Optional[str]:
     """Id of the device Garmin marks as the primary training device, or None.
 
@@ -543,7 +581,10 @@ def extract_readiness(
     otherwise all rows. recoveryTime is the recovery clock at snapshot time;
     for today the hours elapsed since then are subtracted (floor 0).
     """
-    out: Dict[str, Any] = {"readiness": None, "readiness_level": None, "recovery_hours": None, "acute_load": None}
+    out: Dict[str, Any] = {
+        "readiness": None, "readiness_level": None, "readiness_at": None, "readiness_context": None,
+        "readiness_latest": None, "recovery_hours": None, "recovery_hours_at": None, "acute_load": None,
+    }
     snaps = readiness_snapshots(payload, day)
     if device_id is not None:
         own = [s for s in snaps if s.get("deviceId") is not None and str(s.get("deviceId")) == device_id]
@@ -551,10 +592,15 @@ def extract_readiness(
     if not snaps:
         return out
     morning = morning_snapshot(snaps)
+    newest = snaps[0]
     if morning is not None:
         out["readiness"] = _nonneg_int(morning.get("score"))
         out["readiness_level"] = _status_code(morning.get("level"))
-    newest = snaps[0]
+        out["readiness_at"] = _snapshot_clock(morning, zone)
+        out["readiness_context"] = READINESS_CONTEXTS.get(morning.get("inputContext"))
+        latest = _nonneg_int(newest.get("score"))
+        if newest is not morning and latest != out["readiness"]:
+            out["readiness_latest"] = latest
     out["acute_load"] = _nonneg_int(newest.get("acuteLoad"))
     # recoveryTimeChangePhrase says how the clock changed at this snapshot.
     # On a post-exercise row REACHED_ZERO means the clock had run out BEFORE
@@ -573,6 +619,8 @@ def extract_readiness(
             if elapsed > 0:
                 hours = max(0.0, hours - elapsed)
     out["recovery_hours"] = round(float(hours), 1) if hours is not None else None
+    if hours is not None:
+        out["recovery_hours_at"] = _snapshot_clock(newest, zone)
     return out
 
 
@@ -605,10 +653,11 @@ def extract_load(payload: Any) -> Dict[str, Any]:
     }
 
 
-def extract_sessions(payload: Any) -> Optional[List[Dict[str, Any]]]:
+def extract_sessions(payload: Any, *, start: bool = False) -> Optional[List[Dict[str, Any]]]:
     """Completed activities from the activity-list search, oldest first.
 
     None when the fetch failed (unknown), [] when Garmin listed nothing.
+    start=True adds "start_local", the local start time (HH:MM).
     """
     if payload is None:
         return None
@@ -619,10 +668,15 @@ def extract_sessions(payload: Any) -> Optional[List[Dict[str, Any]]]:
         type_key = _text(sc.dig(a, "activityType", "typeKey"))
         aerobic = sc.num(a.get("aerobicTrainingEffect"))
         anaerobic = sc.num(a.get("anaerobicTrainingEffect"))
-        sessions.append({
+        session = {
             "sport": sc.sport_group(type_key),
             "type": type_key,
             "name": th.name_or_none(a.get("activityName")),
+        }
+        if start:
+            started = _parse_local_ts(a.get("startTimeLocal"))
+            session["start_local"] = started.strftime("%H:%M") if started is not None else None
+        session.update({
             "minutes": _minutes(a.get("duration")),
             "km": _km(a.get("distance")),
             "avg_hr": _pos_int(a.get("averageHR")),
@@ -631,6 +685,7 @@ def extract_sessions(payload: Any) -> Optional[List[Dict[str, Any]]]:
             "aerobic_te": round(aerobic, 1) if aerobic is not None else None,
             "anaerobic_te": round(anaerobic, 1) if anaerobic is not None else None,
         })
+        sessions.append(session)
     return sessions
 
 
@@ -812,6 +867,24 @@ def thresholds_needed(workouts: List[Tuple[str, Optional[Dict[str, Any]]]]) -> L
     return [key for key, _ in ATHLETE_FIELDS if key in found]
 
 
+def _has_valueless_target(step: Dict[str, Any]) -> bool:
+    """An intensity target (primary or secondary) with no zone number and no usable low/high pair.
+
+    Swim workouts arrive like this (pace.zone, nothing else): the step's
+    intensity is unknown, not easy.
+    """
+    for prefix in ("", "secondary_"):
+        if not _target_kind(_TARGET_KINDS, step.get(f"{prefix}target_type")):
+            continue
+        if step.get(f"{prefix}target_zone") is not None:
+            continue
+        low = sc.num(step.get(f"{prefix}target_value_low"))
+        high = sc.num(step.get(f"{prefix}target_value_high"))
+        if low is None or high is None or low <= 0 or high <= 0:
+            return True
+    return False
+
+
 def hard_from_steps(
     leaves: List[Tuple[Dict[str, Any], int]],
     sport: str = "other",
@@ -831,10 +904,13 @@ def hard_from_steps(
     first: Optional[str] = None
     seconds = metres = 0.0
     open_ended = False
+    valueless = 0  # steps with an intensity target that carries no zone and no low/high values
     for step, times in leaves:
         step_type = step.get("type")
         if step_type in _EASY_STEP_TYPES:
             continue
+        if _has_valueless_target(step):
+            valueless += 1
         rule: Optional[str] = None
         for prefix, label in (("", ""), ("secondary_", "secondary ")):
             kind = _target_kind(_TARGET_KINDS, step.get(f"{prefix}target_type"))
@@ -873,7 +949,10 @@ def hard_from_steps(
             open_ended = True
 
     if first is None:
-        reason = f"no step at zone {_HARD_ZONE}+ or at threshold intensity"
+        if valueless:
+            reason = "intensity unknown: targets without values"
+        else:
+            reason = f"no step at zone {_HARD_ZONE}+ or at threshold intensity"
         return False, reason + (f"; highest {best[1]}" if best else "")
     parts = ([f"{int(round(seconds))} s"] if seconds else []) + ([f"{int(round(metres))} m"] if metres else [])
     parts += ["an open-ended step"] if open_ended else []
@@ -1182,14 +1261,16 @@ def daily_status_from(
     thresholds: Dict[str, Any] = THRESHOLDS,
     athlete: Optional[Dict[str, Any]] = None,
     athlete_needed: Tuple[str, ...] = (),
+    key_mode: bool = False,
 ) -> Dict[str, Any]:
     """The daily status dict (no sources/debug/text) from raw payloads by source name.
 
     Sources: stats, sleep, sleep_prev, readiness, hrv, hrv_d1.., training_status,
-    activities_prev (None = not fetched). today/tomorrow are classified
-    workouts with "completed" settled (None = calendar unknown). athlete is
-    athlete_thresholds(); athlete_needed lists the thresholds a range target
-    needed (a null one is listed in "missing").
+    activities_prev, activities_today (None = not fetched). today/tomorrow are
+    classified workouts with "completed" settled (None = calendar unknown).
+    athlete is athlete_thresholds(); athlete_needed lists the thresholds a
+    range target needed (a null one is listed in "missing"). key_mode leaves
+    KEY_MODE_NULL out of "missing".
     """
     d0 = day.isoformat()
     sleep = extract_sleep(payloads.get("sleep"), d0, zone)
@@ -1221,8 +1302,13 @@ def daily_status_from(
         "rhr_delta": stats["rhr"] - stats["rhr_7d"] if stats["rhr"] is not None and stats["rhr_7d"] is not None else None,
         "readiness": ready["readiness"],
         "readiness_level": ready["readiness_level"],
+        "readiness_at": ready["readiness_at"],
+        "readiness_context": ready["readiness_context"],
+        "readiness_latest": ready["readiness_latest"],
         "recovery_hours": ready["recovery_hours"],
+        "recovery_hours_at": ready["recovery_hours_at"],
         "body_battery": stats["body_battery"],
+        "body_battery_wake": stats["body_battery_wake"],
         "stress_avg": stats["stress_avg"],
         "spo2_avg": sleep["spo2_avg"],
         "spo2_min": sleep["spo2_min"],
@@ -1253,6 +1339,8 @@ def daily_status_from(
         "recovery": recovery,
         "load": load_out,
         "today": today,
+        # Finished activities of the date (any sport, planned or not); never read by the rules.
+        "today_done": extract_sessions(payloads.get("activities_today"), start=True),
         "tomorrow": tomorrow,
         "flags": flags,
         "missing": [],
@@ -1268,8 +1356,35 @@ def daily_status_from(
     for key, field in ATHLETE_FIELDS:
         if key in athlete_needed and (athlete or {}).get(key) is None:
             missing.append(f"thresholds_athlete.{field}")
+    missing += [p for p in missing_paths(status, key_mode=key_mode) if p not in missing]
     status["missing"] = missing
     return status
+
+
+def _null_paths(value: Any, path: str) -> Iterator[str]:
+    """Paths of the null fields under value (dicts are walked; lists and their items are not)."""
+    if value is None:
+        yield path
+    elif isinstance(value, dict):
+        for key, sub in value.items():
+            yield from _null_paths(sub, f"{path}.{key}")
+
+
+def missing_paths(status: Dict[str, Any], *, key_mode: bool = False) -> List[str]:
+    """Every null field of the MISSING_SECTIONS, in answer order, less the ones null by design.
+
+    Left out: NULL_BY_DESIGN; KEY_MODE_NULL in key mode; a COMPANION_FIELDS
+    timestamp whose value is null too (the value itself is listed).
+    """
+    skip = NULL_BY_DESIGN | (KEY_MODE_NULL if key_mode else frozenset())
+    out = []
+    for section in MISSING_SECTIONS:
+        for path in _null_paths(status.get(section), section):
+            companion = COMPANION_FIELDS.get(path)
+            if path in skip or (companion is not None and _path_value(status, companion) is None):
+                continue
+            out.append(path)
+    return out
 
 
 # --- debug payloads (include_sources) -----------------------------------------
@@ -1296,7 +1411,7 @@ _SLIM_ACTIVITIES = [{
 _SLIM_SPECS: Dict[str, Any] = {
     "stats": {
         "calendarDate": None, "restingHeartRate": None, "lastSevenDaysAvgRestingHeartRate": None,
-        "bodyBatteryMostRecentValue": None, "averageStressLevel": None,
+        "bodyBatteryMostRecentValue": None, "bodyBatteryAtWakeTime": None, "averageStressLevel": None,
     },
     "sleep": _SLIM_SLEEP,
     "sleep_prev": _SLIM_SLEEP,
@@ -1412,12 +1527,13 @@ def _day_activities_call(client: Any) -> Callable[[str], Any]:
 
 
 def _workout_call(client: Any, entry: Dict[str, Any]) -> Optional[sc.Call]:
-    workout_id = entry.get("workoutId")
-    if isinstance(workout_id, int) and not isinstance(workout_id, bool) and workout_id > 0:
+    # A positive int or ASCII digits only: str.isdigit() also takes "²", which int() refuses.
+    workout_id = sc.path_int_id(entry.get("workoutId"))
+    if workout_id is not None:
         return sc.call(sc.client_method(client, "get_workout_by_id"), workout_id)
-    if isinstance(workout_id, str) and workout_id.isdigit():
-        return sc.call(sc.client_method(client, "get_workout_by_id"), int(workout_id))
-    uuid = _text(entry.get("workoutUuid"))
+    # Strict shape, not stripped: the uuid goes into the URL path, so anything but a canonical UUID
+    # counts as no uuid (no call; the entry keeps its calendar fields only).
+    uuid = sc.path_uuid(entry.get("workoutUuid"))
     if uuid:
         # Garmin Coach workouts have only a uuid; upstream's get_workout_by_id
         # reads them from this endpoint.
@@ -1591,7 +1707,7 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
 
     status = daily_status_from(
         payloads, day=day, zone=zone, now=now, today=classified(d0), tomorrow=classified(d_next),
-        athlete=athlete, athlete_needed=tuple(needed),
+        athlete=athlete, athlete_needed=tuple(needed), key_mode=key_mode,
     )
     status["sources"] = {
         **sc.source_meta(results, calls), **sc.source_meta(details, detail_calls),
@@ -1736,6 +1852,12 @@ def _session_txt(s: Dict[str, Any], detail: bool) -> str:
     return text
 
 
+def _done_txt(s: Dict[str, Any], detail: bool) -> str:
+    """One finished activity of today: start time, then like a session of yesterday."""
+    text = _session_txt(s, detail)
+    return f"{s['start_local']} {text}" if s.get("start_local") else text
+
+
 def _metric_vs_avg(label: str, value: Any, avg: Any) -> str:
     if value is None and avg is None:
         return f"{label}: {NO_VALUE}"
@@ -1764,7 +1886,9 @@ def _daily_lines(status: Dict[str, Any], f: _Fmt, compact: int) -> Tuple[str, Li
     lines.append(("hrv", f.esc(_metric_vs_avg("HRV", rec.get("hrv"), rec.get("hrv_7d")))))
     lines.append(("rhr", f.esc(_metric_vs_avg("Resting HR", rec.get("rhr"), rec.get("rhr_7d")))))
 
-    ready = f"Readiness: {sc.num_txt(rec.get('readiness'))}"
+    # Says which reading the score is (wake-up, or the fallback after a workout); the recovery clock is newer.
+    where = _READINESS_CONTEXT_EN.get(rec.get("readiness_context") or "") if rec.get("readiness") is not None else None
+    ready = f"Readiness{' ' + where if where else ''}: {sc.num_txt(rec.get('readiness'))}"
     level_word = _READINESS_LEVEL_EN.get(rec.get("readiness_level") or "")
     if rec.get("readiness") is not None and level_word:
         ready += f" ({level_word})"
@@ -1793,6 +1917,15 @@ def _daily_lines(status: Dict[str, Any], f: _Fmt, compact: int) -> Tuple[str, Li
         lines.append(("today", f.esc(f"Today: {NO_VALUE}")))
     elif today:
         lines.append(("today", f.esc("Today: " + _workouts_txt(today, name_words, max_items))))
+    done = status.get("today_done")
+    if done:
+        if compact >= 2:
+            count = len(done)
+            lines.append(("done", f.esc(f"Done today: {count} activit{'y' if count == 1 else 'ies'}")))
+        else:
+            shown = "; ".join(_done_txt(s, compact == 0) for s in done[:max_items])
+            extra = len(done) - max_items
+            lines.append(("done", f.esc("Done today: " + shown + (f"; {extra} more" if extra > 0 else ""))))
     rec_text = status.get("recommendation_en") or RECOMMENDATION_EN.get(status.get("recommendation"), NO_VALUE)
     lines.append(("recommendation", f"Recommendation: {f.bold(rec_text)}"))
 
@@ -1843,7 +1976,7 @@ def render_text(status: Dict[str, Any], fmt: str = "markdown") -> str:
             return text
     # Not reachable with Garmin data (compact 2 has no names and at most two
     # workouts per line); kept so the limit holds whatever the input.
-    for key in ("yesterday", "tomorrow", "today"):
+    for key in ("yesterday", "done", "tomorrow", "today"):
         pairs = [(k, line) for k, line in pairs if k != key]
         text = f.join(title, [line for _, line in pairs]) + end
         if sc.word_count(text) <= MAX_WORDS:

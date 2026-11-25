@@ -15,11 +15,15 @@ is in [history-worker.md](history-worker.md).
 
 Both read only Postgres and never call Garmin. Every answer is compact JSON:
 
-- `index`: `from`, `to`, `weeks`, `days`, `complete` (every day from `from` to yesterday is stored, every day
-  older than 3 days is final, and the history reaches a year back or the account start; see
+- `index`: `from`, `to`, `weeks`, `weeks_to` (the Sunday that ends the newest final indexed week), `days`,
+  `complete` (every day from `from` to yesterday is stored, every day older than 3 days is final, and the
+  history reaches a year back or the account start; see
   [How far back the history goes](#how-far-back-the-history-goes)), `stale` (the newest stored day is more than
-  3 days before yesterday);
-- `reference` (find_similar_weeks): the reference week's dates and stored numbers;
+  3 days before yesterday, or `weeks_to` is before the last Sunday that is at least 4 days old: a week is
+  built once all 7 of its days are final, 3 days after each day, and the worker gets one more day);
+- `reference` (find_similar_weeks): the reference week's dates and stored numbers; with no `end_date` and the
+  last complete week not indexed yet, the newest stored week, with a `note` that says from about which date
+  the missing week will be indexed (its Sunday plus 3 days);
 - `results`: for each week or day its dates, level, flags, tags, the stored `numbers`, a code-built `why`
   (find_similar_weeks: the closest numbers as "result vs reference"; search_history: each matching flag or tag
   with the stored numbers it is decided from, e.g. "has short_nights (nights_under_6h 5)", or for a word or

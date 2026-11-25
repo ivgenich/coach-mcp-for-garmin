@@ -317,6 +317,29 @@ class Payloads(unittest.TestCase):
         linked = [{"date": "2026-03-18", "sport": "run", "activity_id": 9}, {"date": "2026-03-18", "sport": "run", "activity_id": None}]
         self.assertEqual(sc.match_completion_shifts(linked, [{"date": "2026-03-18", "sport": "run", "id": 9}], 6), [0, None])
 
+    def test_match_completion_shifts_finds_the_most_matches(self):
+        # Nearest-day first alone gives Tue->Tue and leaves Wed undone; the whole week moved one day early.
+        def run(day):
+            return {"date": day, "sport": "run", "activity_id": None}
+
+        def act(day, ident):
+            return {"date": day, "sport": "run", "id": ident}
+
+        window = {"max_early_days": 1, "max_late_days": 2}
+        self.assertEqual(sc.match_completion_shifts([run("2026-11-17"), run("2026-11-18")],
+                                                    [act("2026-11-16", 1), act("2026-11-17", 2)], **window), [1, 1])
+        self.assertEqual(sc.match_completion_shifts([run("2026-11-19"), run("2026-11-20")],
+                                                    [act("2026-11-20", 1), act("2026-11-22", 2)], **window), [1, 2])
+        three = [run("2026-11-17"), run("2026-11-18"), run("2026-11-19")]
+        acts = [act("2026-11-16", 1), act("2026-11-17", 2), act("2026-11-18", 3)]
+        self.assertEqual(sc.match_completion_shifts(three, acts, **window), [1, 1, 1])
+        # A same-day match stays when nothing is gained by moving it.
+        self.assertEqual(sc.match_completion_shifts([run("2026-11-17")], [act("2026-11-16", 1), act("2026-11-17", 2)],
+                                                    **window), [0])
+        # An activity without a sport never completes a workout without one.
+        self.assertEqual(sc.match_completion_shifts([{"date": "2026-11-17", "sport": None, "activity_id": None}],
+                                                    [{"date": "2026-11-17", "sport": None, "id": 1}], **window), [None])
+
     def test_compact_json_keeps_hebrew(self):
         word = "\u05e9\u05d9\u05e0\u05d4"  # a Hebrew word, written as escapes
         self.assertEqual(sc.compact_json({"a": word}), '{"a":"' + word + '"}')

@@ -5,7 +5,7 @@ history.doc_vectors) and never call Garmin, so they are fast and cannot trip Gar
 Retrieval is history_retrieval's LangChain composition; this module validates the arguments, picks the
 reference week, builds the answer and keeps every text fixed.
 
-Answer (compact JSON): "index" (from, to, weeks, days, complete, stale, mode), the "reference" week for
+Answer (compact JSON): "index" (from, to, weeks, weeks_to, days, complete, stale, mode), the "reference" week for
 find_similar_weeks, and "results": each with its dates, the stored numbers, a code-built "why", what
 "followed_by" in the next 1-2 weeks (days: the next 3 days), "matched_on" (numbers, keywords, meaning) and
 what is "missing". Every number is a stored value computed by the server's rules; the descriptions tell
@@ -249,10 +249,15 @@ class HistoryService:
             return None, TEXT_EMPTY
         return fp, None
 
-    def index_block(self, fp: str) -> Dict[str, Any]:
+    def index_block(self, fp: str, weeks: Optional[Sequence[Mapping[str, Any]]] = None) -> Dict[str, Any]:
         """complete: every day from the index start to yesterday is stored, every one older than the last
         FINAL_AFTER_DAYS is final (a day whose source failed counts as missing), and the index reaches a year
-        back or the backfill floor (the account start). Days stored before the floor (its probes) are left out."""
+        back or the backfill floor (the account start). Days stored before the floor (its probes) are left out.
+
+        weeks_to: the end (Sunday) of the newest final stored week, or None; from `weeks` (the stored week
+        rows, read here when not given), since the store's coverage also counts weeks that are not final.
+        stale: the newest stored day is more than STALE_DAYS before yesterday, or the newest final week ends
+        before expected_week_end() (a week is built once its 7 days are final)."""
         import history_extract as hx
         import history_store as hs
 
@@ -270,9 +275,15 @@ class HistoryService:
             still_open = self.store.open_days(fp, _d(start), settled) if _d(start) <= settled else []
             reached = _d(start) <= today - dt.timedelta(days=364) or bool(floor)
             complete = not missing and not still_open and reached
+        if weeks is None:
+            weeks = self._weeks(fp)
+        weeks_to = newest_final_week_end(weeks)
+        stale = bool(end) and _d(end) < yesterday - dt.timedelta(days=STALE_DAYS)
+        if weeks_to is not None and _d(weeks_to) < expected_week_end(today):
+            stale = True
         block = {"from": start, "to": end, "weeks": cov.get("final_weeks", cov.get("weeks", 0)),
-                 "days": cov.get("days_with_data", cov.get("days", 0)), "complete": complete,
-                 "stale": bool(end) and _d(end) < yesterday - dt.timedelta(days=STALE_DAYS)}
+                 "weeks_to": weeks_to, "days": cov.get("days_with_data", cov.get("days", 0)),
+                 "complete": complete, "stale": stale}
         modes = self.store.meta_get("index_mode")
         if modes:
             block["mode"] = modes
@@ -414,7 +425,7 @@ class HistoryService:
         if not weeks:
             return TEXT_EMPTY
         by_start = {_iso(w["start"]): w for w in weeks}
-        index = self.index_block(fp)
+        index = self.index_block(fp, weeks)
         note = None
         if ref_day is not None:
             ref_start = _monday(ref_day).isoformat()
@@ -423,8 +434,8 @@ class HistoryService:
         else:
             ref_start = (_monday(self.today()) - dt.timedelta(days=7)).isoformat()
             if ref_start not in by_start:
+                note = not_indexed_note(_d(ref_start) + dt.timedelta(days=6))
                 ref_start = max(by_start)
-                note = "The last complete week is not indexed yet; the reference is the newest stored week."
         reference = by_start[ref_start]
         docs = self._week_docs(weeks)
         req_index = self.index_for(fp)
@@ -491,7 +502,7 @@ class HistoryService:
         weeks = self._weeks(fp)
         if not weeks and kind == "week":
             return TEXT_EMPTY
-        index = self.index_block(fp)
+        index = self.index_block(fp, weeks)
         if kind == "week":
             rows = {_iso(w["start"]): w for w in weeks}
             docs = self._week_docs(weeks)
@@ -663,6 +674,33 @@ def _metric(tool: str, outcome: str, channels: Sequence[str]) -> None:
 
 _SERVICE: Dict[str, Any] = {}
 _SERVICE_LOCK = threading.Lock()
+
+
+def newest_final_week_end(weeks: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    """The end date (ISO) of the newest final week in `weeks` (stored week rows), or None."""
+    ends = [_d(w["end"]) if w.get("end") is not None else _d(w["start"]) + dt.timedelta(days=6)
+            for w in weeks if w.get("final")]
+    return max(ends).isoformat() if ends else None
+
+
+def expected_week_end(today: dt.date) -> dt.date:
+    """The newest Sunday whose week should be indexed by `today`: the last Sunday at least FINAL_AFTER_DAYS + 1
+    days old (its days are final FINAL_AFTER_DAYS after their date; one more day for the worker to build it)."""
+    import history_extract as hx
+
+    latest = today - dt.timedelta(days=hx.FINAL_AFTER_DAYS + 1)
+    return latest - dt.timedelta(days=(latest.weekday() + 1) % 7)
+
+
+def not_indexed_note(week_end: dt.date) -> str:
+    """The reference note when the last complete week (ending on Sunday `week_end`) is not indexed yet."""
+    import history_extract as hx
+
+    start = week_end - dt.timedelta(days=6)
+    ready = week_end + dt.timedelta(days=hx.FINAL_AFTER_DAYS)
+    return (f"The last complete week ({start.isoformat()} to {week_end.isoformat()}) is not indexed yet: a week "
+            f"is indexed once all its days are final, {hx.FINAL_AFTER_DAYS} days after each day, so from about "
+            f"{ready.isoformat()}. The reference is the newest stored week.")
 
 
 def _today() -> dt.date:

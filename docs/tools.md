@@ -70,3 +70,23 @@ weeks that match words, flags or dates), in both modes. They read only your own 
 never call Garmin. They are not in `config/enabled-tools.txt`: the switch adds them, and
 `GARMIN_ENABLED_TOOLS`, when set, can narrow them away like any other tool.
 [History search](history-search.md).
+
+## What the server adds to upstream's answers
+
+Upstream's answers are Garmin's data as JSON and are not this project's public API
+([updates](updates.md)). Where they are easy to misread, the server adds fields (never removes or
+renames one, and skips a field upstream already sends) and ends the tool's description with a short
+note (`TOOL_NOTES` and `ANSWER_ADDITIONS` in `ext/launch.py`):
+
+- `get_progress_summary_between_dates`: `unit`, Garmin's raw unit of `sum`, `avg`, `min` and `max`
+  (`cm` for `distance` and `elevationGain`, `ms` for `duration` and `movingDuration`, `kcal` for
+  `calories`), and per sport the same values converted: `sum_m` ... `max_m` (meters), `sum_s` ...
+  `max_s` (seconds), or `sum_rounded` ... `max_rounded` (whole kcal).
+- `get_training_status`, `get_training_load_trend`: `optimal_acute_load_min` and
+  `optimal_acute_load_max`, the same values as `optimal_chronic_load_min/max`: the band is where
+  acute load should sit, not a target for chronic load. Garmin's ratio (`load_ratio`, `acwr`) may be cut
+  to one decimal; `get_daily_status` computes it to two.
+- Description notes only: `get_body_battery` event and `get_activity_splits` lap `start_time` are
+  GMT; `get_activities` and `get_activities_by_date` `start_time` and `get_training_readiness`
+  `timestamp` are local time; `get_vo2max_trend` returns one sport (the one with more readings), and
+  the running VO2max is `vo2_max` in `get_training_status`.

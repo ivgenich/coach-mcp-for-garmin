@@ -190,6 +190,11 @@ class _Sandbox:
         with open(fake, "w", encoding="utf-8") as f:
             f.write(FAKE_RAILWAY)
         os.chmod(fake, 0o755)
+        # A curl that never reaches the network: /readyz answers 200 unless FAKE_READYZ=fail.
+        curl = os.path.join(bindir, "curl")
+        with open(curl, "w", encoding="utf-8") as f:
+            f.write('#!/bin/sh\necho "curl $*" >>"$FAKE_LOG"\n[ "$FAKE_READYZ" != fail ]\n')
+        os.chmod(curl, 0o755)
         with open(os.path.join(self.root, "vars"), "w", encoding="utf-8") as f:
             f.write(vars_text)
         self.log_path = os.path.join(self.root, "log")
@@ -631,6 +636,27 @@ class DeployScriptFakeRailway(unittest.TestCase):
                    in log and log.index("up --ci") < log.index("ssh") and "Garmin login done." in out, out, log)
         rc, out, log = run_pty("", {"GARMIN_AUTH": "full", **TZ, "FAKE_SSH_FAIL": "1"}, answers=[(LOGIN_PROMPT, "y")])
         self.check(rc == 0 and "The Garmin login did not finish" in out and "railway ssh" in out, out, log)
+
+    @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
+    def test_33b_ready_wait_after_the_login_and_in_key_mode(self):
+        """In a terminal, key mode and a finished full-mode login wait for /readyz before 'add the connector'."""
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "full", **TZ}, answers=[(LOGIN_PROMPT, "")])
+        self.check(rc == 0 and "/readyz" in log and "The server is ready." in out
+                   and "Garmin login done. Now add the connector" in out, out, log)
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "key", **TZ}, fake_key())
+        self.check(rc == 0 and "/readyz" in log and "key mode needs no Garmin login. Now add the connector" in out,
+                   out, log)
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "key", **TZ, "FAKE_READYZ": "fail", "DEPLOY_READY_WAIT_S": "4"},
+                               fake_key())
+        self.check(rc == 0 and "No 200 from /readyz yet" in out and "Wait ~30 s while the server loads" in out,
+                   out, log)
+
+    def test_33c_no_ready_wait_without_a_terminal_or_a_login(self):
+        rc, out, log = run(self.existing_full, {"FAKE_HC": "1"})
+        self.check(rc == 0 and "curl" not in log and "Waiting for" not in out, out, log)
+        rc, out, log = run_pty("", {"GARMIN_AUTH": "full", **TZ, "FAKE_SSH_FAIL": "1"} if HAVE_PTY else {},
+                               answers=[(LOGIN_PROMPT, "y")]) if HAVE_PTY else (0, "", "")
+        self.check(rc == 0 and "curl" not in log, out, log)
 
     @unittest.skipUnless(HAVE_PTY, "needs a pty (Linux or macOS)")
     def test_34_a_full_mode_redeploy_does_not_offer_the_login(self):

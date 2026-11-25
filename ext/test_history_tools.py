@@ -146,6 +146,48 @@ class Arguments(unittest.TestCase):
         block = svc.index_block(fp)
         self.assertEqual((block["from"], block["complete"]), (start.isoformat(), True))
 
+    def _owner_store(self, days_to, final_weeks):
+        """The owner's case: a final stored day for every date up to `days_to` and final weeks ending on the
+        Sundays in `final_weeks`, plus one week that is stored but not final (it must not count)."""
+        fp = "c" * 64
+        store = hs.MemoryHistoryStore()
+        store.meta_set(hs.META_ACCOUNT, fp)
+        store.meta_set(hs.META_BACKFILL_FLOOR, "2026-10-01")
+        day = dt.date(2026, 10, 1)
+        while day <= days_to:
+            store.upsert_day(fp, day, {"mode": "key", "rhr": 50, "missing": []}, True)
+            day += dt.timedelta(days=1)
+        for end in final_weeks:
+            store.upsert_week(fp, end - dt.timedelta(days=6), {"mode": "key", "rhr_avg": 50}, True)
+        newest = max(final_weeks)
+        store.upsert_week(fp, newest + dt.timedelta(days=1), {"mode": "key", "rhr_avg": 50}, False)
+        return fp, store
+
+    def test_stale_when_the_newest_final_week_is_behind(self):
+        """Live: the daily index reached 23 Nov, the newest week was 9-15 Nov, and stale stayed false."""
+        weeks = [dt.date(2026, 11, 1), dt.date(2026, 11, 8), dt.date(2026, 11, 15)]
+        fp, store = self._owner_store(dt.date(2026, 11, 23), weeks)
+        cases = ((dt.date(2026, 11, 24), False),   # 9-15 Nov is the newest week due
+                 (dt.date(2026, 11, 25), False),   # Sunday 22 Nov is final today; the worker gets a day
+                 (dt.date(2026, 11, 26), True),    # 16-22 Nov should be built by now
+                 (dt.date(2026, 11, 27), True))
+        for today, stale in cases:
+            with self.subTest(today=today):
+                svc = ht.HistoryService(store, lambda fp: None, today=lambda today=today: today)
+                block = svc.index_block(fp)
+                self.assertEqual(block["weeks_to"], "2026-11-15", "the non-final week 16-22 Nov does not count")
+                self.assertEqual(block["stale"], stale)
+                # The day rule alone flags nothing here (newest day 23 Nov, at most 3 days before yesterday).
+        self.assertEqual(ht.expected_week_end(dt.date(2026, 11, 26)), dt.date(2026, 11, 22))
+        self.assertEqual(ht.expected_week_end(dt.date(2026, 11, 25)), dt.date(2026, 11, 15))
+        self.assertEqual(ht.newest_final_week_end([]), None)
+
+    def test_the_not_indexed_note_says_when_the_week_appears(self):
+        note = ht.not_indexed_note(dt.date(2026, 11, 22))
+        self.assertIn("2026-11-16 to 2026-11-22", note)
+        self.assertIn("from about 2026-11-25", note)
+        note.encode("ascii")
+
     def test_descriptions(self):
         for d in (ht.FIND_DESCRIPTION, ht.SEARCH_DESCRIPTION):
             self.assertLessEqual(len(d), 2048)
@@ -175,7 +217,7 @@ class SimilarWeeks(unittest.TestCase):
         out = json.loads(self.svc.find_similar_weeks(ref, "overall", 5))
         self.assertEqual(out["kind"], "similar_weeks")
         self.assertEqual(out["reference"]["start"], ref)
-        self.assertEqual(set(out["index"]), {"from", "to", "weeks", "days", "complete", "stale"})
+        self.assertEqual(set(out["index"]), {"from", "to", "weeks", "weeks_to", "days", "complete", "stale"})
         self.assertTrue(out["index"]["complete"])
         self.assertFalse(out["index"]["stale"])
         starts = [r["start"] for r in out["results"]]

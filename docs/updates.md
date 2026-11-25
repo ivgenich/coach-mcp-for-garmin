@@ -12,9 +12,7 @@ newest first, in [CHANGELOG.md](../CHANGELOG.md). For a version MAJOR.MINOR.PATC
   says what to change.
 
 The server reports its version to clients as `serverInfo.version`. Each release has a
-`vX.Y.Z` tag and an entry on the repository's **Releases** page. If no release is listed yet,
-stay on `main`: the commands below then use `git pull` in place of `git fetch --tags` and
-`git checkout vX.Y.Z`.
+`vX.Y.Z` tag and an entry on the repository's **Releases** page.
 
 ## The public API
 

@@ -28,10 +28,15 @@ Decisions worth knowing:
   excluded). Garmin rarely links a finished activity to its workout
   (associatedActivityId stays null) and people move sessions inside a week,
   so completed comes from status_common.match_completion_shifts over THIS
-  week's activities only: linked by Garmin, or an activity of the same sport
-  group (for "other", of the same type) on the planned day, else up to 6 days
-  from it; one activity per workout. on_planned_day counts the first two; "linked" keeps Garmin's own
-  count. Without the activity list, completed and on_planned_day are null
+  week's activities only, up to min(end_date, today): linked by Garmin, or an
+  activity of the same sport group (for "other", of the same type) on the
+  planned day, else at most 1 day earlier or 2 days later (rules v2; v1 took
+  any day of the week); one activity per workout. on_planned_day counts the
+  first two, moved the rest; "linked" keeps Garmin's own count. A workout
+  dated after today is "upcoming": never done, and left out of
+  low_completion. The schedule summary carries no created date, so "not
+  before the workout existed" is approximated by the 1-day early limit.
+  Without the activity list, completed, on_planned_day and moved are null
   unless every workout is linked.
 - Long session: the week's longest bike or run of at least 60 minutes. Its
   decoupling comes from upstream's FIT analysis (_parse_fit ->
@@ -41,6 +46,11 @@ Decisions worth knowing:
   first-half ratio) / first-half ratio x 100, so NEGATIVE = heart rate rose
   relative to output (drift) and positive = output rose relative to heart
   rate (not drift). |x| < 5 stable, 5-10 moderate drift, > 10 large drift.
+  Rules v2: the halves comparison only means something for an even effort,
+  so long_session.steady says whether it was (effort_steady: indoor, or a
+  ride's variability index <= 1.10 and climbing below 300 m/h, a run's below
+  100 m/h); when false the number is kept but interpretation_code is
+  "not_applicable". null = the data could not tell; read as before.
 - Weight: the latest weigh-in up to end_date within 90 days, with its date.
   weight_change_kg only when that weigh-in falls inside the week: the change
   against the latest weigh-in before the week (same 90 days).
@@ -72,9 +82,10 @@ import mcp2_compat
 import status_common as sc
 import text_hygiene as th
 
-RULES_VERSION = 1
+RULES_VERSION = 2
 
-# Weekly rules v1: starting values, to calibrate after a few weeks of use.
+# Weekly rules v2 (v1 + the plan window and the steadiness check below): starting values, to calibrate
+# after a few weeks of use.
 THRESHOLDS: Dict[str, Any] = {
     "hrv_drop_ms": 5,               # hrv_down: avg_7d <= avg_28d - 5 (or avg_7d < balanced_low)
     "sleep_h": 6,                   # a night shorter than this is a short night
@@ -106,7 +117,22 @@ DRIFT_CACHE_SIZE = 16
 # incomplete volume comparison (_activities_cut).
 ACTIVITY_LIMIT = 100
 WEIGHT_LOOKBACK_DAYS = 90
-PLAN_MAX_SHIFT_DAYS = 6  # a planned workout counts when done on any day of its week
+# v2: a planned workout counts when done on its day, at most 1 day earlier or 2 days later (v1: any day of the
+# week, which credited sessions done before the workout was even planned). Never after end_date or today.
+PLAN_EARLY_DAYS = 1
+PLAN_LATE_DAYS = 2
+# v2 steadiness check for the long session's decoupling: a halves comparison means something only when the
+# effort was even. Indoor sessions are steady; outdoors a ride needs a variability index (normalized / average
+# power) of at most STEADY_MAX_VI and both sports less climbing per hour than their limit, else the hills (or
+# coasting) move output and heart rate apart and the drift number is terrain, not fatigue.
+# 1.10, not the textbook 1.05: an outdoor ride with stops and coasting on flat roads sits near 1.05-1.10
+# and still gives a meaningful drift; the hilly rides this rule targets sit well above (or fail the climb limit).
+STEADY_MAX_VI = 1.10
+STEADY_MAX_ASCENT_M_PER_H = {"bike": 300.0, "run": 100.0}
+# Activity types / FIT sub-sports done indoors (substrings, lower-case).
+INDOOR_MARKERS = ("indoor", "virtual", "treadmill", "trainer", "spin")
+# Elevation steps smaller than this are noise when the details chart's ascent is summed.
+ELEVATION_NOISE_M = 3.0
 # get_gear_stats calls per report (gear with a distance limit first).
 GEAR_STATS_MAX = 8
 # Days before end_date whose hrvSummary.weeklyAvg feeds avg_7d / avg_28d.
@@ -416,7 +442,9 @@ def parse_gear(raw: Any) -> List[Dict[str, Any]]:
         if str(gear.get("gearStatusName") or "").lower() != "active":
             continue
         kind = _gear_kind(gear.get("gearTypeName"))
-        uuid = gear.get("uuid")
+        # get_gear_stats puts the uuid into its URL path: Garmin's gear uuids are 32 hex digits; any other
+        # shape counts as no uuid and the item is left out, as one without a uuid is.
+        uuid = sc.path_uuid(gear.get("uuid"), dashless=True)
         if kind is None or not uuid:
             continue
         parts = (th.name_or_none(gear.get("gearMakeName")), th.name_or_none(gear.get("gearModelName")))
@@ -425,7 +453,7 @@ def parse_gear(raw: Any) -> List[Dict[str, Any]]:
                 or make_model or GEAR_EN[kind])
         max_m = sc.num(gear.get("maximumMeters"))
         out.append({
-            "uuid": str(uuid),
+            "uuid": uuid,
             "name": name,
             "type": kind,
             "max_m": max_m if max_m and max_m > 0 else None,
@@ -550,32 +578,37 @@ def _match_sport(item: Dict[str, Any]) -> Any:
 
 
 def plan_section(items: Optional[List[Dict[str, Any]]], acts: Optional[List[Dict[str, Any]]],
-                 start: dt.date, end: dt.date) -> Dict[str, Any]:
-    """{scheduled, completed, on_planned_day, linked, completion_pct} for the week start..end.
+                 start: dt.date, end: dt.date, today: Optional[dt.date] = None) -> Dict[str, Any]:
+    """{scheduled, completed, on_planned_day, moved, upcoming, linked, completion_pct} for the week start..end.
 
     sc.match_completion_shifts over THIS week's activities only (local start
-    date in start..end; the previous week's never count), up to
-    PLAN_MAX_SHIFT_DAYS from the planned day. completed = done on any day of
-    the week; on_planned_day = linked by Garmin or done on the planned day.
+    date in start..min(end, today); the previous week's never count), at most
+    PLAN_EARLY_DAYS before or PLAN_LATE_DAYS after the planned day. completed =
+    done in that window; on_planned_day = linked by Garmin or done on the
+    planned day; moved = completed - on_planned_day. A workout dated after
+    today is not due yet (upcoming): it stays in scheduled but is never done
+    (a Garmin link would still count), and low_completion leaves it out.
     Without the activity list only Garmin's links are known, a lower bound, so
-    both stay null unless every workout is linked.
+    completed, on_planned_day and moved stay null unless every workout is linked.
     """
     if items is None:
-        return {"scheduled": None, "completed": None, "on_planned_day": None, "linked": None,
-                "completion_pct": None}
+        return {"scheduled": None, "completed": None, "on_planned_day": None, "moved": None, "upcoming": None,
+                "linked": None, "completion_pct": None}
+    last = min(end, today) if today is not None else end
     scheduled = len(items)
     linked = sum(1 for i in items if i["activity_id"] is not None)
     if acts is None:
         completed = on_planned_day = scheduled if linked == scheduled else None
     else:
-        week = sorted((a for a in acts if start <= a["date"] <= end),
+        week = sorted((a for a in acts if start <= a["date"] <= last),
                       key=lambda a: (a["date"], a.get("start_local") or ""))
+        # A workout still ahead gets no sport, so no activity can match it; its Garmin link still counts.
         shifts = sc.match_completion_shifts(
-            [{"date": i["date"].isoformat(), "sport": _match_sport(i), "activity_id": i["activity_id"]}
-             for i in items],
+            [{"date": i["date"].isoformat(), "sport": _match_sport(i) if i["date"] <= last else None,
+              "activity_id": i["activity_id"]} for i in items],
             [{"date": a["date"].isoformat(), "sport": _match_sport(a),
-              "id": str(a["id"]) if a["id"] is not None else None} for a in week],
-            max_shift_days=PLAN_MAX_SHIFT_DAYS,
+              "id": str(a["id"]) if a["id"] is not None else None} for a in week if _match_sport(a) is not None],
+            max_early_days=PLAN_EARLY_DAYS, max_late_days=PLAN_LATE_DAYS,
         )
         completed = sum(1 for s in shifts if s is not None)
         on_planned_day = sum(1 for s in shifts if s == 0)
@@ -583,6 +616,8 @@ def plan_section(items: Optional[List[Dict[str, Any]]], acts: Optional[List[Dict
         "scheduled": scheduled,
         "completed": completed,
         "on_planned_day": on_planned_day,
+        "moved": completed - on_planned_day if completed is not None else None,
+        "upcoming": sum(1 for i in items if i["date"] > last),
         "linked": linked,
         "completion_pct": sc.rnd(completed / scheduled * 100) if scheduled and completed is not None else None,
     }
@@ -672,7 +707,51 @@ def interpret_decoupling(pct: Optional[float], basis: str = "power",
     return "large_drift", f"Large drift: heart rate rose a lot relative to {output}"
 
 
-def decoupling_from_details(details: Any) -> Optional[Dict[str, Any]]:
+def _is_indoor(*keys: Any) -> bool:
+    return any(isinstance(k, str) and any(m in k.lower() for m in INDOOR_MARKERS) for k in keys)
+
+
+def effort_steady(sport: Any, type_key: Any = None, *, sub_sport: Any = None, avg_power: Any = None,
+                  normalized_power: Any = None, ascent_m: Any = None, seconds: Any = None) -> Optional[bool]:
+    """Was the effort even enough for a first-half / second-half decoupling? True / False / None (cannot tell).
+
+    Indoor (activity type or FIT sub-sport) is steady. Outdoors every check the
+    data allows must pass: a ride's variability index (normalized / average
+    power) <= STEADY_MAX_VI, and for rides and runs the climbing per hour below
+    STEADY_MAX_ASCENT_M_PER_H. Any failed check -> False; without the climbing
+    (the check every outdoor session needs) -> None.
+    """
+    if _is_indoor(type_key, sub_sport):
+        return True
+    limit = STEADY_MAX_ASCENT_M_PER_H.get(sport)
+    if limit is None:
+        return None
+    avg, norm, ascent, secs = sc.num(avg_power), sc.num(normalized_power), sc.num(ascent_m), sc.num(seconds)
+    if sport == "bike" and avg and norm and avg > 0 and norm / avg > STEADY_MAX_VI:
+        return False
+    if ascent is None or not secs or secs <= 0:
+        return None
+    return ascent / (secs / 3600) < limit
+
+
+def _details_ascent(rows: List[List[Any]], elev_i: Optional[int]) -> Optional[float]:
+    """Metres climbed in the details chart's elevation samples, steps under ELEVATION_NOISE_M ignored; None
+    without elevation."""
+    if elev_i is None:
+        return None
+    heights = [sc.num(r[elev_i]) for r in rows if len(r) > elev_i]
+    heights = [h for h in heights if h is not None]
+    if len(heights) < 2:
+        return None
+    climbed, anchor = 0.0, heights[0]
+    for h in heights[1:]:
+        if abs(h - anchor) >= ELEVATION_NOISE_M:
+            climbed += max(0.0, h - anchor)
+            anchor = h
+    return climbed
+
+
+def decoupling_from_details(details: Any, act: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Decoupling from /activity-service/activity/{id}/details (the chart samples).
 
     Same method as upstream's _compute_hr_drift: keep samples with output and a
@@ -680,6 +759,9 @@ def decoupling_from_details(details: Any) -> Optional[Dict[str, Any]]:
     output:HR ratios. Power when the samples carry it, else speed (stops
     excluded). Needs DETAILS_MIN_SAMPLES pairs covering at least half the
     samples, so a short sensor stretch is not taken for the whole session.
+    "steady" (effort_steady) uses the activity's type and duration (act) and the
+    climbing in the chart's elevation samples (directElevation) when present;
+    the chart has no normalized power, so a ride's variability is not checked.
     """
     if not isinstance(details, dict):
         return None
@@ -717,7 +799,10 @@ def decoupling_from_details(details: Any) -> Optional[Dict[str, Any]]:
         first, second = ratio(pairs[:mid]), ratio(pairs[mid:])
         if first <= 0:
             continue
-        return {"pct": (second - first) / first * 100, "basis": basis, "samples": len(pairs)}
+        act = act or {}
+        steady = effort_steady(act.get("sport"), act.get("type"), seconds=act.get("seconds"),
+                               ascent_m=_details_ascent(rows, index.get("directElevation")))
+        return {"pct": (second - first) / first * 100, "basis": basis, "samples": len(pairs), "steady": steady}
     return None
 
 
@@ -727,7 +812,12 @@ def long_session_section(act: Optional[Dict[str, Any]], drift: Optional[Dict[str
         return None
     pct = sc.rnd(drift.get("pct"), 1) if drift else None
     basis = drift.get("basis") if drift and pct is not None else None
-    code, text = interpret_decoupling(pct, basis or "power", thresholds)
+    steady = drift.get("steady") if drift and pct is not None else None
+    if steady is False:
+        # The number stays (it is what the halves gave) but says nothing about fatigue.
+        code, text = "not_applicable", "Uneven effort (hills or coasting): drift is not meaningful"
+    else:
+        code, text = interpret_decoupling(pct, basis or "power", thresholds)
     return {
         "date": act["date"].isoformat(),
         "date_en": sc.en_date(act["date"]),
@@ -742,6 +832,7 @@ def long_session_section(act: Optional[Dict[str, Any]], drift: Optional[Dict[str
         "interpretation_code": code,
         "basis": basis,
         "source": drift.get("source") if drift and pct is not None else None,
+        "steady": steady,
     }
 
 
@@ -781,12 +872,15 @@ def evaluate_flags(status: Dict[str, Any], thresholds: Optional[Dict[str, Any]] 
         flags.append(_flag("load_high", "red", "Load high: Garmin marks ACWR as high"))
 
     plan = status.get("plan") or {}
-    scheduled, pct = plan.get("scheduled"), plan.get("completion_pct")
-    if scheduled is not None and pct is not None and scheduled >= t["completion_min_scheduled"] \
-            and pct < t["completion_pct"]:
+    # Workouts still ahead (a week that ends today or later) are not due, so they neither count nor lower the pct.
+    scheduled, pct, upcoming = plan.get("scheduled"), plan.get("completion_pct"), plan.get("upcoming") or 0
+    due = scheduled - upcoming if scheduled is not None else None
+    if upcoming and due and plan.get("completed") is not None:
+        pct = sc.rnd(plan["completed"] / due * 100)
+    if due is not None and pct is not None and due >= t["completion_min_scheduled"] and pct < t["completion_pct"]:
         flags.append(_flag("low_completion", "yellow",
                            f"Low plan completion: under {t['completion_pct']}% of planned workouts"
-                           " done this week (on any day)"))
+                           " done (within a day or two)"))
 
     if any(g.get("pct_of_max") is not None and g["pct_of_max"] >= t["gear_pct"] for g in status.get("gear") or []):
         flags.append(_flag("gear_near_limit", "yellow",
@@ -885,11 +979,14 @@ def _store_drift(client: Any, parse_fit: Any, activity_id: Any, result: Dict[str
             _drift_cache.popitem(last=False)
 
 
-def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
-    """Download the original FIT and read upstream's power:HR drift (session.hr_drift).
+def _fit_drift(client: Any, activity_id: Any, act: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Download the original FIT and read upstream's power:HR drift (session.hr_drift)
+    -> {pct, basis, steady, variability_index, ascent_m_per_h}.
 
+    steady is effort_steady over the FIT session summary (sub-sport, average and
+    normalized power, total ascent, timer time) and the activity's type (act).
     A drift already found for this activity is answered from memory, without
-    calling Garmin.
+    calling Garmin; the whole result is kept, so steady comes back with it.
     """
     fmt, parse_fit, available = _load_fit_helpers()
     cached = _cached_drift(client, parse_fit, activity_id)
@@ -901,15 +998,27 @@ def _fit_drift(client: Any, activity_id: Any) -> Dict[str, Any]:
     if not raw:
         raise sc.NoData("Garmin returned an empty FIT download")  # source error "no data from Garmin"
     parsed = parse_fit(bytes(raw), include_records=False)
-    drift = sc.dig(parsed, "session", "hr_drift")
+    session = sc.dig(parsed, "session")
+    session = session if isinstance(session, dict) else {}
+    drift = session.get("hr_drift")
+    act = act or {}
+    seconds = sc.num(session.get("total_timer_time_s")) or sc.num(session.get("total_elapsed_time_s")) \
+        or act.get("seconds")
+    avg_w, np_w, ascent = (sc.num(session.get(k)) for k in ("avg_power_w", "normalized_power_w", "total_ascent_m"))
     # None when the file has under 60 min of power + heart rate (e.g. no power).
-    result = {"pct": sc.num(sc.dig(drift, "hr_drift_pct")), "basis": "power"}
+    result = {
+        "pct": sc.num(sc.dig(drift, "hr_drift_pct")), "basis": "power",
+        "steady": effort_steady(act.get("sport"), act.get("type"), sub_sport=session.get("sub_sport"),
+                                avg_power=avg_w, normalized_power=np_w, ascent_m=ascent, seconds=seconds),
+        "variability_index": sc.rnd(np_w / avg_w, 3) if avg_w and np_w and avg_w > 0 else None,
+        "ascent_m_per_h": sc.rnd(ascent / (seconds / 3600)) if ascent is not None and seconds else None,
+    }
     _store_drift(client, parse_fit, activity_id, result)
     return result
 
 
 async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float, key_mode: bool = False):
-    """-> (source results, debug slims, {"pct", "basis", "source"} or None).
+    """-> (source results, debug slims, {"pct", "basis", "steady", "source", ...} or None).
 
     FIT first (upstream's analysis); the details chart only when the FIT gave
     no drift and the failure was not systemic (rate limit, login, network).
@@ -918,9 +1027,12 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
     """
     results: Dict[str, Dict[str, Any]] = {}
     slims: Dict[str, Any] = {}
-    if act is None or act.get("id") is None:
+    # The id goes into the FIT download path, which upstream does not check: anything but a positive integer
+    # counts as no id, like an activity without one.
+    activity_id = sc.path_int_id(act.get("id")) if act is not None else None
+    if activity_id is None:
         return results, slims, None
-    res = await sc.fetch_all({"decoupling_fit": sc.call(_fit_drift, client, act["id"])},
+    res = await sc.fetch_all({"decoupling_fit": sc.call(_fit_drift, client, activity_id, act)},
                              timeout_s=FIT_TIMEOUT_S, deadline_s=_left(started))
     results.update(res)
     fit = sc.data_of(res["decoupling_fit"])
@@ -938,11 +1050,11 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
         results["decoupling_details"] = _skip(f"decoupling_fit failed: {error}"[:200])
         return results, slims, None
     res = await sc.fetch_all(
-        {"decoupling_details": sc.call(sc.client_method(client, "get_activity_details"), act["id"],
+        {"decoupling_details": sc.call(sc.client_method(client, "get_activity_details"), activity_id,
                                        maxchart=DETAILS_MAX_CHART, maxpoly=0)},
         timeout_s=CALL_TIMEOUT_S, deadline_s=_left(started))
     results.update(res)
-    drift = decoupling_from_details(sc.data_of(res["decoupling_details"]))
+    drift = decoupling_from_details(sc.data_of(res["decoupling_details"]), act)
     slims["decoupling_details"] = drift
     return results, slims, (dict(drift, source="details") if drift else None)
 
@@ -1016,7 +1128,7 @@ def _missing(status: Dict[str, Any], *, volume_ok: bool, plan_ok: bool, gear_ok:
     if not plan_ok:
         out.append("plan")
     elif status["plan"]["completed"] is None:
-        out += ["plan.completed", "plan.on_planned_day", "plan.completion_pct"]
+        out += ["plan.completed", "plan.on_planned_day", "plan.moved", "plan.completion_pct"]
     long_session = status["long_session"]
     if long_session is None:
         out.append("long_session")
@@ -1105,7 +1217,8 @@ async def build_weekly_status(
                         "linked": sum(1 for s in schedule or [] if s["activity_id"] is not None)}
     weighs = parse_weigh_ins(data.get("weigh_ins")) if results["weigh_ins"].get("ok") else None
     slim["weigh_ins"] = {"count": len(weighs) if weighs is not None else None}
-    profile_number = sc.dig(data.get("device_last_used"), "userProfileNumber")
+    # It goes into get_gear's URL (?userProfilePk=...): anything but a positive integer counts as no number.
+    profile_number = sc.path_int_id(sc.dig(data.get("device_last_used"), "userProfileNumber"))
     slim["device_last_used"] = {"profile_number": profile_number is not None}
 
     # Second round: gear and decoupling chains side by side. (A systemic
@@ -1133,7 +1246,7 @@ async def build_weekly_status(
         "sleep": sleep_section(nights),
         "volume": volume_section(acts, start, end),
         "load": load_section(ts_now, ts_week_ago),
-        "plan": plan_section(schedule, acts, start, end),
+        "plan": plan_section(schedule, acts, start, end, current.date()),
         "long_session": long_session_section(long_act, drift),
         "fitness": fitness_section(ts_now),
         "body": body_section(weighs, start, end),
@@ -1300,6 +1413,8 @@ def _lines(status: Dict[str, Any], compact: bool) -> List[Tuple[str, List[Segmen
         on_day = plan.get("on_planned_day")
         if on_day is not None and on_day != plan["completed"]:
             text += f", {n(on_day)} of them on the planned day"
+        if plan.get("upcoming"):
+            text += f", {n(plan['upcoming'])} still ahead"
         item(text)
     long_session = status.get("long_session")
     if not long_session:

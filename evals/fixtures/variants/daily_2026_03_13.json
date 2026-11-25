@@ -17,6 +17,7 @@
      "averageStressLevel": 24,
      "maxStressLevel": 61,
      "stressQualifier": "CALM",
+     "bodyBatteryAtWakeTime": 64,
      "bodyBatteryChargedValue": 52,
      "bodyBatteryDrainedValue": 9,
      "bodyBatteryHighestValue": 77,

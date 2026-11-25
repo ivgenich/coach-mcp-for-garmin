@@ -53,14 +53,12 @@ For this hostname:
 ## 1. Get the files
 
 ```
-git clone <repository URL>
+git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
 cd coach-mcp-for-garmin
-git checkout v1.0.3
+git checkout v1.0.4
 ```
 
-`<repository URL>` is the HTTPS address under the **Code** button on this repository's GitHub
-page. Use the newest release tag from the repository's **Releases** page in place of `v1.0.3`.
-If no release is listed yet, skip the `git checkout` line and stay on `main`.
+Use the newest release tag from the repository's **Releases** page in place of `v1.0.4`.
 
 Clone it into a folder that no cloud drive syncs (not the iCloud Desktop or Documents folders,
 Dropbox or OneDrive): the two settings files you create next hold your secrets in plain text.
@@ -172,8 +170,7 @@ git checkout <new tag>
 docker compose up -d --build
 ```
 
-If you stayed on `main` because no release was listed, update with `git pull` instead of the
-first two lines. To go back, do the same with the previous tag. A release of this project also updates the pinned
+To go back, do the same with the previous tag. A release of this project also updates the pinned
 cloudflared image.
 
 Remove everything: `docker compose down --volumes --rmi all` deletes the containers, the images

@@ -31,7 +31,7 @@ and a course climb profile.
 It is if you use a Garmin watch with Garmin Connect, want Claude to answer from your own data,
 and are fine running a few commands in a terminal and paying for your own small server (about
 $5 a month on Railway). You need a computer with bash, git and python3: macOS, Linux, or WSL on
-Windows. The Railway CLI installs with Homebrew (optional), npm or Scoop.
+Windows. The Railway CLI installs with Homebrew (optional) or npm; on Windows, inside WSL.
 
 It is not if you want an app to install from a store, a service someone else runs for you, one
 server for several people, or a tool that changes your Garmin data: every tool only reads.
@@ -56,9 +56,8 @@ time zone as an IANA name such as `Europe/London`, about an hour, a terminal and
    ```bash
    git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
    cd coach-mcp-for-garmin
-   git checkout v1.0.3    # or the newest release tag; if no release is listed yet, skip this line
-   export GARMIN_AUTH=full REPORT_TZ=Europe/London    # your mode and your own zone
-   ./scripts/deploy.sh
+   git checkout v1.0.4    # or the newest release tag
+   ./scripts/deploy.sh    # asks for your mode and your time zone
    ```
 
    It creates your **owner secret**: save it in your password manager ([details](docs/deploy-railway.md)).
@@ -201,7 +200,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and a
 PATCH releases don't. The public API (tool names, the fields of `get_daily_status` and
 `get_weekly_status`, `RULES_VERSION`, the settings), how to update and how to roll back:
 [Updates and versions](docs/updates.md). To hear about new releases, watch this repository on
-GitHub: **Watch → Custom → Releases**. Until the first release is listed, stay on `main`.
+GitHub: **Watch → Custom → Releases**.
 
 ## Uninstall and revoke
 

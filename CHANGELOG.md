@@ -8,6 +8,69 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-25
+
+### Security
+
+- Full mode: the upstream tool `get_workout_by_id` put any id containing `-` into a Garmin
+  address unchecked, so an id with `../` read other parts of the Garmin account (the profile
+  with email and birth date, for example) with the owner's Garmin login. It only read, and the
+  login never left Garmin's servers; a client the owner approved, or a model steered by
+  planted text, could use it. Now every Garmin request of the app is checked before it is sent:
+  an address with `..`, a `.` segment, `%`, `#`, `\`, `//`, a control character, a tab or line
+  break, or a non-ASCII character other than a letter is refused, and a `?` may only start
+  garminconnect's own query names (a plain space and letters such as `Í` stay allowed, because
+  the owner's Garmin display name is part of some addresses). `get_workout_by_id` accepts only a number or a UUID, and `get_vo2max_trend` only
+  `YYYY-MM-DD` dates (it accepted `20261101/x`). The workout and gear ids the status reports
+  read from Garmin's answers are checked too.
+
+### Fixed
+
+- Weekly status: plan completion no longer credits a workout with any same-sport activity of
+  the week. A workout counts done by an activity from 1 day before to 2 days after its date,
+  never by one after today, and a workout dated after today is never done; the most workouts
+  possible are paired. New `plan.moved` (done on another day) and `plan.upcoming` (still
+  ahead); `low_completion` counts only workouts already due. Weekly rules version 2 (the
+  history index is rebuilt once after the update; its numbers do not change).
+- Weekly status: the long session's decoupling is judged only for an even effort. Indoors is
+  always even; outdoors a ride needs a variability index (normalized / average power) of at
+  most 1.10 and under 300 m of climbing per hour, a run under 100 m per hour. Otherwise
+  `interpretation_code` is `not_applicable` (a hilly ride read as "Large drift"). New
+  `long_session.steady`.
+- Daily status: `missing` lists every value Garmin had none for, as the docs said, not only
+  the ones in the text (fields null by design are named in the docs and left out).
+- Daily status: a workout step with an intensity target but no values gives the reason
+  "intensity unknown: targets without values" instead of "no step at zone 4+".
+- History search: `index.stale` is also true when the newest finished week is not indexed in
+  time, and `index.weeks_to` names the newest indexed week.
+
+### Added
+
+- Daily status: `today_done`, today's finished activities (and a "Done today" text line);
+  `readiness_at`, `readiness_context` (`wake_up`, or the fallback `post_exercise` /
+  `realtime` when there was no wake-up reading) and `recovery_hours_at`, so the readiness
+  score (the morning reading) and the recovery clock (the newest reading) say where they come
+  from; `readiness_latest` when a later reading has another score; `body_battery_wake`. The
+  text line names the reading ("Readiness at wake-up: 94").
+- Upstream tools: `get_progress_summary_between_dates` adds `unit` and the values in meters,
+  seconds and whole kcal next to Garmin's raw cm, ms and unrounded calories;
+  `get_training_status` and `get_training_load_trend` add `optimal_acute_load_min/max`. Notes
+  in the tool descriptions say which times are GMT, that the VO2max trend gives one sport, and
+  that the "optimal chronic load" band is the target for acute load.
+
+### Changed
+
+- `deploy.sh` waits for `/readyz` (up to 90 s, in a terminal) before it says to add the
+  connector, in key mode and after the full-mode Garmin login. A failed Railway call also
+  names a Railway CLI too old for the script as a cause.
+- The web server's own INFO lines (uvicorn) go to stdout too, so Railway no longer marks them
+  as errors.
+- Docs: the Quickstart runs `./scripts/deploy.sh` alone, which asks for the mode and time zone
+  (the example `export` line chose both for whoever pasted it). The clone address is written
+  out, the "if no release is listed" notes are gone, and on Windows the Railway CLI is
+  installed inside WSL (Scoop installs it where WSL does not see it). `.env.example` no longer
+  lists `GARMINTOKENS`, `GARMIN_MCP_STATELESS_HTTP` and `PORT`, which the image sets.
+
 ## [1.0.3] - 2026-11-25
 
 ### Changed
