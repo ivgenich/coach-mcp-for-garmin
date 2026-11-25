@@ -47,6 +47,9 @@ updates:
       # user agent): they follow upstream's uv.lock, like the three above.
       - dependency-name: curl-cffi
       - dependency-name: ua-generator
+      # requests' own dependency, also kept at upstream's uv.lock pin
+      # (constraints.txt); certifi and urllib3 move only for a security fix.
+      - dependency-name: charset-normalizer
       # langchain-postgres caps pgvector below 0.4 (config/requirements-history.txt
       # installs with --no-deps, so CI would not catch it).
       - dependency-name: pgvector

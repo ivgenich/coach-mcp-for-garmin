@@ -23,6 +23,9 @@ and so what a MAJOR, MINOR or PATCH release may change:
 - The image compiles ext/ at build time, so a start no longer compiles it again.
 - ruff also checks bugbear (B, without B905) and ASYNC rules; the few hits are fixed.
 - CI: the container smoke test installs its mcp client by hash, like every other job.
+- Updated pins, each release at least 14 days old: jsonpatch 1.46, jsonpointer 3.11 and
+  langchain-core 1.7.7 (history search), ruff 0.17.4 (CI only).
+- Dependabot leaves charset-normalizer alone: like requests, it keeps upstream's pin.
 
 ## [1.0.2] - 2026-11-25
 
