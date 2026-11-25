@@ -197,6 +197,10 @@ def _row_state(row) -> State:
                  day_key=row[4], day_count=row[5] or 0)
 
 
+# The job that ends the background thread (PgSharedState.close()).
+_STOP = object()
+
+
 class PgSharedState:
     """SharedState in history.guard_state. `live=True` for the MCP server (never waits on Postgres)."""
 
@@ -221,6 +225,7 @@ class PgSharedState:
         self._jobs: Optional[queue_mod.Queue] = None
         self._thread: Optional[threading.Thread] = None
         self._start_lock = threading.Lock()
+        self._closed = False
 
     def __repr__(self):
         return "PgSharedState(<dsn hidden>)"
@@ -240,8 +245,11 @@ class PgSharedState:
         return out
 
     def _background(self, fn) -> None:
-        """Run fn(conn) in the background thread (live path); a full queue drops it."""
+        """Run fn(conn) in the background thread (live path); a full queue drops it, and after close() nothing
+        runs (the local copy stays in charge)."""
         with self._start_lock:
+            if self._closed:
+                return
             if self._thread is None or not self._thread.is_alive():
                 self._jobs = queue_mod.Queue(maxsize=64)
                 self._thread = threading.Thread(target=self._loop, name="garmin-guard-pg", daemon=True)
@@ -251,9 +259,26 @@ class PgSharedState:
         except queue_mod.Full:
             pass
 
+    def close(self, timeout: float = 5.0) -> None:
+        """Stop the background thread (live path): the writes already queued run first, then the thread ends,
+        waited for up to `timeout` seconds (it is a daemon thread, so one stuck on the database never holds the
+        process). Later writes are dropped and the local copy stays in charge. Idempotent; never raises."""
+        try:
+            with self._start_lock:
+                self._closed = True
+                thread, jobs = self._thread, self._jobs
+            if thread is None or jobs is None or not thread.is_alive():
+                return
+            jobs.put(_STOP, timeout=timeout)
+            thread.join(timeout=timeout)
+        except Exception:  # noqa: BLE001 - closing never fails the caller (a full queue, a join that timed out)
+            pass
+
     def _loop(self) -> None:
         while True:
             fn = self._jobs.get()
+            if fn is _STOP:
+                return
             try:
                 self._run(fn)
             except Exception as exc:  # noqa: BLE001 - any DB failure: the copy stays in charge

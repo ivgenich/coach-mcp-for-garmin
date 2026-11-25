@@ -1,0 +1,82 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The answer has the shape of Garmin's /activitylist-service/activities/search/activities answer (newest first). Pins: duration, elapsedDuration and movingDuration are in seconds (not ms, unlike fitnessstats), distance in meters (not cm), elevationGain/elevationLoss in meters, averageSpeed in m/s, avgPower/normPower in watts. The reports read duration (s) and distance (m).",
+ "answer": [
+  {
+   "activityId": 91000003,
+   "activityName": "Synthetic Long Ride",
+   "activityType": {
+    "typeId": 10,
+    "typeKey": "road_biking",
+    "parentTypeId": 2
+   },
+   "startTimeLocal": "2026-11-22 08:00:00",
+   "startTimeGMT": "2026-11-22 06:00:00",
+   "duration": 10980.0,
+   "elapsedDuration": 11400.0,
+   "movingDuration": 10620.0,
+   "distance": 88340.0,
+   "elevationGain": 742.0,
+   "elevationLoss": 739.0,
+   "averageSpeed": 8.046,
+   "averageHR": 131.0,
+   "maxHR": 162.0,
+   "avgPower": 182.0,
+   "normPower": 199.0,
+   "activityTrainingLoad": 201.4,
+   "aerobicTrainingEffect": 3.4,
+   "anaerobicTrainingEffect": 0.8,
+   "hasPolyline": false,
+   "manualActivity": false
+  },
+  {
+   "activityId": 91000002,
+   "activityName": "Synthetic Road Run",
+   "activityType": {
+    "typeId": 1,
+    "typeKey": "running",
+    "parentTypeId": 17
+   },
+   "startTimeLocal": "2026-11-20 06:40:00",
+   "startTimeGMT": "2026-11-20 04:40:00",
+   "duration": 3305.5,
+   "elapsedDuration": 3360.0,
+   "movingDuration": 3290.0,
+   "distance": 10120.4,
+   "elevationGain": 64.0,
+   "elevationLoss": 61.0,
+   "averageSpeed": 3.062,
+   "averageHR": 148.0,
+   "maxHR": 171.0,
+   "activityTrainingLoad": 92.1,
+   "aerobicTrainingEffect": 3.0,
+   "anaerobicTrainingEffect": 0.4,
+   "hasPolyline": false,
+   "manualActivity": false
+  },
+  {
+   "activityId": 91000001,
+   "activityName": "Synthetic Trail Run",
+   "activityType": {
+    "typeId": 6,
+    "typeKey": "trail_running",
+    "parentTypeId": 1
+   },
+   "startTimeLocal": "2026-11-18 07:05:00",
+   "startTimeGMT": "2026-11-18 05:05:00",
+   "duration": 5420.0,
+   "elapsedDuration": 5610.0,
+   "movingDuration": 5268.9,
+   "distance": 13010.0,
+   "elevationGain": 455.0,
+   "elevationLoss": 452.0,
+   "averageSpeed": 2.4,
+   "averageHR": 144.0,
+   "maxHR": 176.0,
+   "activityTrainingLoad": 140.7,
+   "aerobicTrainingEffect": 3.6,
+   "anaerobicTrainingEffect": 1.1,
+   "hasPolyline": false,
+   "manualActivity": false
+  }
+ ]
+}

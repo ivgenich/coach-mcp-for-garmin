@@ -28,7 +28,7 @@ with start_server("full", state, now="2026-03-18T06:30", tz="Europe/Athens") as 
 ## How the server is built
 
 `start_server(mode, state, now, tz)` runs `ext/launch.py`'s `main()` with `GARMIN_AUTH=<mode>`,
-`GARMIN_MCP_TRANSPORT=stdio` and `REPORT_TZ=<tz>`, as `RealServerCase.serve()` in `ext/test_launch.py` does:
+`GARMIN_MCP_TRANSPORT=stdio` and `REPORT_TZ=<tz>`, as `RealServerCase.serve()` in `ext/test_launch_support.py` does:
 upstream's `main()` builds the server, `MCPServer.run` is captured, and the official `mcp.client.Client` talks to it
 in memory (the 2026-07-28 era, `mode="auto"`). Everything between the model and Garmin is the product's own code:
 the read-only tool policy, `ReadOnlyFastMCP` (fixed error texts, `isError`, the no-sleep text, hygiene of upstream

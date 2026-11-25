@@ -1,0 +1,25 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The answer has the shape of Garmin's /fitnessstats-service/activity answer as garminconnect's get_progress_summary_between_dates(start, end, metric) returns it (a list with one item; stats -> activity type -> metric -> count/min/max/avg/sum). Pins: distance min/max/avg/sum are in centimeters. Running max 1,301,000 cm = 13.01 km.",
+ "request": {
+  "start_date": "2026-11-02",
+  "end_date": "2026-11-22",
+  "metric": "distance"
+ },
+ "answer": [
+  {
+   "date": "2026-11-25",
+   "countOfActivities": 14,
+   "stats": {
+    "running": {
+     "distance": {
+      "count": 6,
+      "min": 501230.0,
+      "max": 1301000.0,
+      "avg": 822015.0,
+      "sum": 4932090.0
+     }
+    }
+   }
+  }
+ ]
+}

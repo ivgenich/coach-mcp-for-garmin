@@ -1,0 +1,28 @@
+# coverage.py settings for the full test leg (CI's tests-full job and
+# scripts/ci-local.sh). The coverage version is pinned in
+# config/requirements-test.txt. Measured: our code in ext/, the test files left
+# out. scripts/ci-unittest.py runs each suite in a child process: `patch =
+# subprocess` measures those too, each into a data file of its own (parallel),
+# and `coverage combine` joins them before the report. Set COVERAGE_FILE to a
+# path outside the repository (CI and ci-local.sh do) so nothing is written here.
+[run]
+source = ext
+# Patterns, not paths: the suites run with ext/ as the working directory.
+omit =
+    */ext/test_*.py
+    */ext/fixtures/*
+parallel = true
+patch = subprocess
+
+[report]
+# The floor sits a little below the measured number (round down to a whole
+# percent), so it only ratchets up: raise it when coverage grows, never lower it
+# to make a change pass. Measured 25 Nov 2026 at 1.0.4 (full leg, Python 3.12,
+# no history packages or Postgres): 86.74%.
+fail_under = 86
+# Compare unrounded (85.5% must fail, not round up to 86) and show two decimals.
+precision = 2
+show_missing = true
+skip_covered = true
+skip_empty = true
+sort = Cover

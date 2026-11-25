@@ -1,0 +1,25 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The answer has the shape of Garmin's /fitnessstats-service/activity answer as garminconnect's get_progress_summary_between_dates(start, end, metric) returns it (a list with one item; stats -> activity type -> metric -> count/min/max/avg/sum). Pins: duration min/max/avg/sum are in milliseconds. Running max 5,420,000 ms = 1:30:20.",
+ "request": {
+  "start_date": "2026-11-02",
+  "end_date": "2026-11-22",
+  "metric": "duration"
+ },
+ "answer": [
+  {
+   "date": "2026-11-25",
+   "countOfActivities": 14,
+   "stats": {
+    "running": {
+     "duration": {
+      "count": 6,
+      "min": 1733900.0,
+      "max": 5420000.0,
+      "avg": 2981583.3,
+      "sum": 17889500.0
+     }
+    }
+   }
+  }
+ ]
+}

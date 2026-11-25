@@ -47,7 +47,7 @@ import datetime as dt
 import importlib
 import re
 import time
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple, cast
 from zoneinfo import ZoneInfo
 
 import mcp2_compat
@@ -97,9 +97,9 @@ MAX_WORDS = 150
 TEXT_FORMATS = ("markdown",)
 NO_VALUE = "no data"
 
-LEVEL_EN = {"green": "Green", "yellow": "Yellow", "red": "Red", "incomplete": "Incomplete data"}
+LEVEL_EN: Dict[Any, str] = {"green": "Green", "yellow": "Yellow", "red": "Red", "incomplete": "Incomplete data"}
 
-RECOMMENDATION_EN = {
+RECOMMENDATION_EN: Dict[Any, str] = {
     "as_planned": "Train as planned.",
     "as_planned_may_stop": "Train as planned; stop if it doesn't feel right.",
     "zone2_or_shorten": "Turn the session into Zone 2 or shorten it.",
@@ -494,7 +494,7 @@ POST_EXERCISE_CONTEXT = "AFTER_POST_EXERCISE_RESET"
 REALTIME_CONTEXT = "UPDATE_REALTIME_VARIABLES"
 # recovery.readiness_context: which kind of row the readiness score came from. Usually "wake_up"; without a
 # wake-up row (the watch not worn overnight) morning_snapshot falls back to a newer row, and the context says so.
-READINESS_CONTEXTS = {WAKEUP_CONTEXT: "wake_up", POST_EXERCISE_CONTEXT: "post_exercise", REALTIME_CONTEXT: "realtime"}
+READINESS_CONTEXTS: Dict[Any, str] = {WAKEUP_CONTEXT: "wake_up", POST_EXERCISE_CONTEXT: "post_exercise", REALTIME_CONTEXT: "realtime"}
 _READINESS_CONTEXT_EN = {"wake_up": "at wake-up", "post_exercise": "after a workout", "realtime": "during the day"}
 
 
@@ -793,7 +793,7 @@ def leaf_steps(curated: Optional[Dict[str, Any]]) -> Iterator[Tuple[Dict[str, An
 
 def _sum_steps(leaves: List[Tuple[Dict[str, Any], int]], condition: str) -> Optional[float]:
     values = [
-        sc.num(step.get("end_condition_value")) * times
+        cast(float, sc.num(step.get("end_condition_value"))) * times  # the filter below drops None
         for step, times in leaves
         if step.get("end_condition") == condition and sc.num(step.get("end_condition_value")) is not None
     ]
@@ -923,7 +923,7 @@ def hard_from_steps(
                 ref = range_reference(kind, sport, unit)
                 base = 100.0 if ref == "percent_ftp" else (sc.num(athlete.get(ref)) if ref else None)
                 if base:
-                    factor_key, words = _RANGE_RULES[ref]
+                    factor_key, words = _RANGE_RULES[cast(str, ref)]  # base is set only when ref is
                     # Rounded so that a range exactly at the threshold counts.
                     ratio = round(mid / base, 4)
                     text = f"{label}{kind} range at {round(ratio * 100)}% of {words}"
@@ -1151,7 +1151,8 @@ def evaluate_rules(
     inputs = [("recovery.hrv_7d", hrv_7d), (low_path, balanced_low)]
     inputs += [(f"hrv_trend.d-{i}", point) for i, point in enumerate(earlier, 1)]
     if need(*inputs):
-        points = [(hrv_7d, balanced_low)] + earlier
+        # need() passed: no value in points is None.
+        points = cast(List[Tuple[Any, Any]], [(hrv_7d, balanced_low)] + earlier)
         if all(weekly < low for weekly, low in points):
             flags.append(_flag("hrv_low_trend", t))
 
@@ -1461,7 +1462,7 @@ def _slim(obj: Any, spec: Any) -> Any:
     return {k: _slim(obj[k], sub) for k, sub in spec.items() if k in obj}
 
 
-def _drop_keys(obj: Any, drop: frozenset) -> Any:
+def _drop_keys(obj: Any, drop: FrozenSet[str]) -> Any:
     if isinstance(obj, dict):
         return {k: _drop_keys(v, drop) for k, v in obj.items() if k not in drop}
     if isinstance(obj, list):
@@ -1561,7 +1562,11 @@ KEY_MODE_SKIPS_PROBE = frozenset({"readiness"})
 KEY_MODE_SKIPS_FULL = frozenset({"readiness", "training_status", "schedule"})
 
 
-async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, key_mode: bool = False):
+# A report's (status, raws): raws maps each source that answered to (its payload, its curated workout or None).
+_Report = Tuple[Dict[str, Any], Dict[str, Tuple[Any, Optional[Dict[str, Any]]]]]
+
+
+async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, key_mode: bool = False) -> _Report:
     d0 = day.isoformat()
     calls = {
         "sleep": sc.call(sc.client_method(client, "get_sleep_data"), d0),
@@ -1573,7 +1578,7 @@ async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, ke
     if failed:
         raise sc.SystemicFailure(failed)
     dto = night(sc.data_of(results.get("sleep")), d0)
-    status = {
+    status: Dict[str, Any] = {
         "kind": "daily_probe",
         "date": d0,
         "generated_at": now.replace(microsecond=0).isoformat(),
@@ -1587,12 +1592,13 @@ async def _probe(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, ke
             morning_snapshot(readiness_snapshots(sc.data_of(results.get("readiness")), d0)) is not None),
         "sources": sc.source_meta(results, calls),
     }
-    raws = {name: (sc.data_of(res), None) for name, res in results.items() if res.get("ok")}
+    raws: Dict[str, Tuple[Any, Optional[Dict[str, Any]]]] = {
+        name: (sc.data_of(res), None) for name, res in results.items() if res.get("ok")}
     return status, raws
 
 
 async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, started: float,
-                key_mode: bool = False):
+                key_mode: bool = False) -> _Report:
     d0 = day.isoformat()
     d_prev = (day - dt.timedelta(days=1)).isoformat()
     d_next = (day + dt.timedelta(days=1)).isoformat()
@@ -1660,7 +1666,7 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
         curated = None
         if isinstance(raw, dict) and raw:
             try:
-                curated = curate(raw)
+                curated = cast(Callable[..., Any], curate)(raw)  # details are fetched only when curate is set
             except Exception:  # noqa: BLE001 - an unreadable workout is "details unavailable"
                 curated = None
         curated_by_source[name] = curated
@@ -1688,10 +1694,11 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
     athlete = athlete_thresholds(sc.data_of(fetched.get("lactate_threshold")), sc.data_of(fetched.get("cycling_ftp")))
 
     def classified(d: str) -> Optional[List[Dict[str, Any]]]:
-        if planned[d] is None:
+        entries = planned[d]
+        if entries is None:
             return None
         out = []
-        for entry in planned[d]:
+        for entry in entries:
             source = source_of.get(id(entry))
             if source is None:
                 reason = "workout details not fetched"
@@ -1702,7 +1709,7 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
             out.append(classify_workout(entry, curated_of(entry), athlete=athlete, unavailable=reason))
         # Tomorrow's activities are not fetched: only Garmin's own links count there.
         activities = completion_activities(payloads.get("activities_today")) if d == d0 else []
-        mark_completed(out, planned[d], activities)
+        mark_completed(out, entries, activities)
         return out
 
     status = daily_status_from(
@@ -1713,7 +1720,8 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
         **sc.source_meta(results, calls), **sc.source_meta(details, detail_calls),
         **sc.source_meta(fetched, threshold_calls),
     }
-    raws = {name: (sc.data_of(res), None) for name, res in results.items() if res.get("ok")}
+    raws: Dict[str, Tuple[Any, Optional[Dict[str, Any]]]] = {
+        name: (sc.data_of(res), None) for name, res in results.items() if res.get("ok")}
     raws.update({
         name: (sc.data_of(res), curated_by_source.get(name))
         for name, res in details.items() if res.get("ok")

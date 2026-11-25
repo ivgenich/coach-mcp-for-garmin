@@ -1,5 +1,6 @@
-# CI: unit tests (two legs), the sign-in end to end, the eval tests offline, lint,
-# secrets, known vulnerabilities and a container smoke test. Nothing here needs a secret or a
+# CI: unit tests (two legs; the full one with a coverage floor), the sign-in end
+# to end, the eval tests offline, lint and the type check, secrets, known
+# vulnerabilities and a container smoke test. Nothing here needs a secret or a
 # Garmin login. Every action is pinned to a full commit SHA; the tools are
 # pinned in scripts/ci-tools.sh and .github/ci-requirements.txt.
 # The same steps without Docker or GitHub: scripts/ci-local.sh
@@ -67,6 +68,7 @@ jobs:
             config/requirements-core.txt
             config/garmin-key-client.txt
             config/requirements-telemetry.txt
+            config/requirements-test.txt
       - name: Caddy at the image's version, and gitleaks for the release-check tests
         run: |
           scripts/ci-tools.sh "$RUNNER_TEMP/bin" caddy gitleaks
@@ -75,11 +77,22 @@ jobs:
         run: python -B scripts/ci-checks.py install-full
       - name: The environment is exactly constraints.txt
         run: python -B scripts/ci-checks.py verify-env
-      - name: Unit tests, no skip allowed for upstream, mcp 2.x or caddy
+      - name: The test-only packages (coverage, hypothesis; hashed), after verify-env, never in the image
+        run: python -m pip install --require-hashes --no-deps -r config/requirements-test.txt
+      - name: Unit tests under coverage, no skip allowed for upstream, mcp 2.x or caddy
         env:
           REQUIRE_UPSTREAM: "1"
           REQUIRE_TELEMETRY: "1"
-        run: python -B scripts/ci-unittest.py
+          COVERAGE_FILE: ${{ runner.temp }}/coverage/.coverage
+        run: |
+          mkdir -p "$RUNNER_TEMP/coverage"
+          python -B -m coverage run --rcfile=.coveragerc scripts/ci-unittest.py
+      - name: Coverage of ext/ (test files left out), the uncovered lines; fails under the floor in .coveragerc
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/coverage/.coverage
+        run: |
+          python -B -m coverage combine --rcfile=.coveragerc --quiet
+          python -B -m coverage report --rcfile=.coveragerc
       - name: Sign-in end to end on 127.0.0.1 (fake secrets, no Garmin login)
         run: python -B scripts/e2e-local.py --work "$RUNNER_TEMP/e2e" --caddy "$RUNNER_TEMP/bin/caddy"
 
@@ -120,13 +133,19 @@ jobs:
             config/requirements-core.txt
             config/requirements-telemetry.txt
             config/requirements-history.txt
-      - name: The image's pins plus the history pins (HISTORY=1), in a venv of its own
+            config/requirements-test.txt
+      - name: The image's pins plus the history pins (HISTORY=1) and the test-only pins, in a venv of its own
         run: |
           python -m venv "$RUNNER_TEMP/venv-history"
           "$RUNNER_TEMP/venv-history/bin/python" -B scripts/ci-checks.py install-full
           "$RUNNER_TEMP/venv-history/bin/python" -m pip install --require-hashes --no-deps \
             -r config/requirements-history.txt
-          "$RUNNER_TEMP/venv-history/bin/python" -c "import psycopg"
+          "$RUNNER_TEMP/venv-history/bin/python" -m pip install --require-hashes --no-deps \
+            -r config/requirements-test.txt
+          "$RUNNER_TEMP/venv-history/bin/python" -c "import psycopg, hypothesis"
+      - name: Licences of the feature and test-only packages, against their installed metadata
+        run: |
+          "$RUNNER_TEMP/venv-history/bin/python" -B scripts/ci-checks.py licenses
       - name: Caddy at the image's version, and gitleaks (the full leg's other tests need them)
         run: |
           scripts/ci-tools.sh "$RUNNER_TEMP/bin" caddy gitleaks
@@ -197,7 +216,7 @@ jobs:
           python-version: ${{ env.TOOLS_PYTHON }}
           cache: pip
           cache-dependency-path: .github/ci-requirements.txt
-      - name: Install ruff and pip-audit (hashed pins)
+      - name: Install ruff, mypy and pip-audit (hashed pins)
         run: python -m pip install --require-hashes -r .github/ci-requirements.txt
       - name: Install shellcheck, hadolint and actionlint (pinned, sha256 checked)
         run: |
@@ -205,6 +224,8 @@ jobs:
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - name: ruff
         run: ruff check --no-cache --output-format github .
+      - name: mypy, strict, on the modules mypy.ini lists
+        run: mypy
       - name: shellcheck
         run: git ls-files -z --cached --others --exclude-standard -- '*.sh' | xargs -0 shellcheck
       - name: hadolint

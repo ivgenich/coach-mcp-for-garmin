@@ -1,0 +1,30 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The 'session' object of upstream garmin_mcp's activity_analysis._parse_fit for the original FIT file Garmin's download_activity(id, ORIGINAL) returns (fitparse applies the FIT profile scale). Pins the weekly steadiness inputs: total_ascent_m in meters, total_timer_time_s and total_elapsed_time_s in seconds, avg_power_w and normalized_power_w in watts (variability index = normalized / average power, a ratio; climbing = meters per hour).",
+ "answer": {
+  "sport": "cycling",
+  "sub_sport": "road",
+  "start_time": "2026-11-22 06:00:00",
+  "total_elapsed_time_s": 11400.0,
+  "total_timer_time_s": 10980.0,
+  "total_distance_m": 88340.0,
+  "total_calories": 2210,
+  "avg_speed_mps": 8.046,
+  "max_speed_mps": 17.3,
+  "avg_power_w": 182,
+  "max_power_w": 611,
+  "normalized_power_w": 199,
+  "avg_cadence_rpm": 86,
+  "max_cadence_rpm": 118,
+  "avg_heart_rate_bpm": 131,
+  "max_heart_rate_bpm": 162,
+  "total_ascent_m": 742,
+  "total_descent_m": 739,
+  "total_training_effect": 3.4,
+  "hr_drift": {
+   "hr_drift_pct": -4.2,
+   "first_half_power_hr_ratio": 1.41,
+   "second_half_power_hr_ratio": 1.35,
+   "interpretation": "moderate_drift"
+  }
+ }
+}

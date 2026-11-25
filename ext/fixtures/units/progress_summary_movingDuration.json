@@ -1,0 +1,34 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The answer has the shape of Garmin's /fitnessstats-service/activity answer as garminconnect's get_progress_summary_between_dates(start, end, metric) returns it (a list with one item; stats -> activity type -> metric -> count/min/max/avg/sum). Pins: movingDuration min/max/avg/sum are in milliseconds. Checked against a real account on 25 Nov 2026: the sums matched the activity details to 0.1 after the conversion. Running sum 17,470,400 ms = 4:51:10 of moving time over 6 runs.",
+ "request": {
+  "start_date": "2026-11-02",
+  "end_date": "2026-11-22",
+  "metric": "movingDuration"
+ },
+ "answer": [
+  {
+   "date": "2026-11-25",
+   "countOfActivities": 14,
+   "stats": {
+    "running": {
+     "movingDuration": {
+      "count": 6,
+      "min": 1712400.0,
+      "max": 5268900.0,
+      "avg": 2911733.3,
+      "sum": 17470400.0
+     }
+    },
+    "cycling": {
+     "movingDuration": {
+      "count": 3,
+      "min": 3456100.0,
+      "max": 10620300.0,
+      "avg": 6342866.7,
+      "sum": 19028600.0
+     }
+    }
+   }
+  }
+ ]
+}

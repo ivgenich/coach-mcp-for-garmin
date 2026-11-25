@@ -2,3 +2,5 @@
 # Lock with hashes: .github/ci-requirements.txt (see its header to regenerate).
 ruff==0.17.4
 pip-audit==2.10.1
+# The type check (mypy.ini lists the modules it covers).
+mypy==2.4.1

@@ -19,9 +19,9 @@ upstream garmin_mcp. A skip passes only when its reason says what the test
 needs (STDLIB_REASON). Any other skip fails the run.
 
 full leg (REQUIRE_UPSTREAM=1): upstream garmin_mcp, the mcp version that
-constraints.txt pins and, once constraints.txt pins it, Garmin's Personal API
-client at its pin must be installed, and a caddy binary must be found
-(CADDY or PATH). A skip passes only when its suite, test id and reason are
+constraints.txt pins, hypothesis (config/requirements-test.txt) and, once
+constraints.txt pins it, Garmin's Personal API client at its pin must be
+installed, and a caddy binary must be found (CADDY or PATH). A skip passes only when its suite, test id and reason are
 all in FULL_ALLOWED, or when it is an optional feature's skip (OPTIONAL) and
 that feature is not required. Any other skip fails the run: nothing that
 needs upstream, mcp 2.x or caddy may skip silently.
@@ -35,7 +35,14 @@ Their skips pass in the full leg unless the feature is required:
     REQUIRE_HISTORY=1     psycopg and LangChain must be installed; their skips fail
     REQUIRE_DATABASE=1    COACH_TEST_DATABASE_URL must be set; its skips fail
 
-Exit status: 0 when every test passed and every skip is allowed; 1 otherwise.
+Every leg also checks test isolation (IsolationResult): a thread a test
+started that is still alive after its cleanups (after a short grace join), or
+a handler it left on the root logger, fails that test; such a thread used to
+log into the next test's capture and flake it. A thread a class or module
+fixture leaves behind fails the suite once all its tests have run.
+
+Exit status: 0 when every test passed, every skip is allowed and nothing
+leaked; 1 otherwise.
 """
 
 from __future__ import annotations
@@ -43,10 +50,13 @@ from __future__ import annotations
 import collections
 import importlib.metadata
 import importlib.util
+import logging
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,10 +96,116 @@ REQUIRED_MODULES = {
 }
 DATABASE_ENV = "COACH_TEST_DATABASE_URL"
 
-# The skips the stdlib leg allows: a reason that names what the test needs.
+# The skips the stdlib leg allows: a reason that names what the test needs ("needs hypothesis" among
+# them: the stdlib leg has no hypothesis). The full and history legs install hypothesis, so there that
+# skip matches neither FULL_ALLOWED nor OPTIONAL and fails the run.
 STDLIB_REASON = re.compile(
     r"^(needs .+|garmin_mcp not installed|no caddy binary found|root ignores file modes)$"
 )
+
+# Isolation: how long the threads a test left running get, in all, to finish before they count as leaked.
+GRACE_SECONDS = 2.0
+# What a test may leave behind. Keep both lists short and say why: a test stops and joins what it
+# started in its cleanups (addCleanup runs before the check). Threads and handlers that were there before
+# the test started are never counted (whoever started a pool owns it).
+#
+# Process-wide threads a module keeps for the life of the process, started by whichever test uses them
+# first: (module, the attribute path to the one Thread allowed now). Only the current one is allowed; a
+# replaced one still alive is a leak.
+SINGLETON_THREADS = (
+    # mcp2_compat's tool loop: one asyncio loop on a daemon thread for every async tool, by design.
+    ("mcp2_compat", ("_tool_loop", "thread")),
+)
+# Handlers a library puts on the root logger, by module and class name.
+IGNORED_HANDLERS = (
+    # mcp's MCPServer()/FastMCP() calls logging.basicConfig(handlers=[RichHandler(...)]) when the root
+    # logger has none: the server's own stderr handler, added again whenever a test cleared the root.
+    ("rich.logging", "RichHandler"),
+)
+
+
+def ignored_thread(thread) -> bool:
+    for module, path in SINGLETON_THREADS:
+        obj = sys.modules.get(module)
+        for name in path:
+            obj = getattr(obj, name, None)
+        if obj is thread:
+            return True
+    return False
+
+
+def ignored_handler(handler) -> bool:
+    return (type(handler).__module__, type(handler).__qualname__) in IGNORED_HANDLERS
+
+
+def leaked_threads(before, grace: float = GRACE_SECONDS) -> list:
+    """The threads alive now that were not in before (a set of Thread objects) and are not ignored,
+    after joining them for up to grace seconds in all."""
+    deadline = time.monotonic() + grace
+    leaked = []
+    for thread in threading.enumerate():
+        if thread in before or thread is threading.current_thread() or ignored_thread(thread):
+            continue
+        if isinstance(thread, threading._DummyThread):  # noqa: SLF001 - started outside threading
+            # A raw _thread thread that called current_thread(): threading can neither join it nor tell
+            # when it ends (the dummy entry outlives it), so it is skipped instead of crashing the run.
+            continue
+        thread.join(max(0.0, deadline - time.monotonic()))
+        if thread.is_alive():
+            leaked.append(thread)
+    return leaked
+
+
+def describe(thread) -> str:
+    return f"{thread.name!r} ({'daemon' if thread.daemon else 'non-daemon'}, target {_target(thread)})"
+
+
+def _target(thread) -> str:
+    target = getattr(thread, "_target", None)
+    if target is None:
+        return type(thread).__name__ + ".run"
+    return getattr(target, "__qualname__", None) or repr(target)
+
+
+class IsolationResult(unittest.TextTestResult):
+    """A TextTestResult that fails a test which leaves a thread running or a handler on the root logger.
+
+    The check runs in stopTest, after tearDown and every cleanup, so a test that stops what it started in
+    its cleanups passes. A leaked handler is also taken off the root logger so later tests do not
+    inherit it; a leaked thread cannot be stopped from here and is reported once."""
+
+    grace = GRACE_SECONDS
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reported_threads = set()  # every thread a test was failed for
+        self._threads_before = set()
+        self._handlers_before = []
+
+    def startTest(self, test):
+        self._threads_before = set(threading.enumerate())
+        self._handlers_before = list(logging.getLogger().handlers)
+        super().startTest(test)
+
+    def stopTest(self, test):
+        problems = []
+        threads = leaked_threads(self._threads_before, self.grace)
+        self.reported_threads.update(threads)
+        if threads:
+            problems.append(f"left {len(threads)} thread(s) running after its cleanups: "
+                            + ", ".join(describe(t) for t in threads)
+                            + "; stop and join them in the test's cleanups")
+        root = logging.getLogger()
+        handlers = [h for h in root.handlers if h not in self._handlers_before and not ignored_handler(h)]
+        if handlers:
+            for h in handlers:
+                root.removeHandler(h)
+            problems.append(f"left {len(handlers)} handler(s) on the root logger: "
+                            + ", ".join(repr(h) for h in handlers) + "; remove them in the test's cleanups")
+        if problems:
+            msg = f"isolation: {test.id()} " + "; it also ".join(problems)
+            self.addFailure(test, (AssertionError, AssertionError(msg), None))
+        super().stopTest(test)
 
 
 def pinned(dist: str) -> str | None:
@@ -157,6 +273,9 @@ def preflight(full: bool) -> list[str]:
         want = pinned("mcp")
         if not has_upstream:
             problems.append("REQUIRE_UPSTREAM=1 but upstream garmin_mcp is not installed")
+        if not _importable("hypothesis"):
+            # The property tests skip without it ("needs hypothesis"): only the stdlib leg allows that.
+            problems.append("REQUIRE_UPSTREAM=1 but hypothesis is not installed (config/requirements-test.txt)")
         if want is None:
             problems.append("cannot read the mcp pin from constraints.txt")
         elif mcp != want:
@@ -171,21 +290,31 @@ def preflight(full: bool) -> list[str]:
     return problems
 
 
+def skip_allowed(name: str, test_id: str, reason: str, full: bool, required: set[str]) -> bool:
+    """Whether this leg allows the skip of test_id in suite name (see the module docstring)."""
+    if full:
+        feature = optional_feature(reason)
+        return (name, test_id, reason) in FULL_ALLOWED or (feature is not None and feature not in required)
+    return bool(STDLIB_REASON.match(reason))
+
+
 def run_suite(name: str, full: bool, leg: str) -> int:
     """Run one suite in this process; the parent starts one process per suite."""
     start, cwd = SUITES[name]
     os.chdir(cwd)
     suite = unittest.TestLoader().discover(start_dir=start, top_level_dir=start)
-    result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
+    baseline = set(threading.enumerate())  # after discovery: a module-level pool belongs to its module
+    result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1, resultclass=IsolationResult).run(suite)
+    # What a class or module fixture left running (a test's own leaks were reported, and are not again).
+    fixture_leaks = leaked_threads(baseline | result.reported_threads)
+    for t in fixture_leaks:
+        print(f"ci-unittest: {name}: LEAKED THREAD after the last test (a class or module fixture's): "
+              f"{describe(t)}")
 
     allowed, unexpected = [], []
     required = required_features()
     for test, reason in result.skipped:
-        if full:
-            feature = optional_feature(reason)
-            ok = (name, test.id(), reason) in FULL_ALLOWED or (feature is not None and feature not in required)
-        else:
-            ok = bool(STDLIB_REASON.match(reason))
+        ok = skip_allowed(name, test.id(), reason, full, required)
         (allowed if ok else unexpected).append((test.id(), reason))
 
     by_reason = collections.Counter(reason for _, reason in allowed)
@@ -201,6 +330,8 @@ def run_suite(name: str, full: bool, leg: str) -> int:
         bad.append("tests failed")
     if unexpected:
         bad.append(f"{len(unexpected)} unexpected skips")
+    if fixture_leaks:
+        bad.append(f"{len(fixture_leaks)} threads leaked by fixtures")
     print(f"ci-unittest: {leg} leg, {name}, python {sys.version.split()[0]}: ran {result.testsRun}, "
           f"failures {len(result.failures)}, errors {len(result.errors)}, "
           f"skipped {len(result.skipped)} (allowed {len(allowed)}, unexpected {len(unexpected)}): "

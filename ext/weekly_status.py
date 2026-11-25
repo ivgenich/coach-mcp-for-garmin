@@ -76,7 +76,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple, cast
 
 import mcp2_compat
 import status_common as sc
@@ -198,7 +198,7 @@ def _phrase_key(phrase: Optional[str]) -> Optional[str]:
     return re.sub(r"_\d+$", "", phrase) if phrase else None
 
 
-def _label_map(table: Dict[str, str], code: Optional[str]) -> Optional[str]:
+def _label_map(table: Mapping[Any, str], code: Optional[str]) -> Optional[str]:
     """English for a Garmin code; the raw code when the table does not know it."""
     if code is None:
         return None
@@ -237,7 +237,8 @@ def parse_hrv(raw: Any) -> Dict[str, Any]:
     """hrvSummary of /hrv-service/hrv/{date} (upstream training.py:798-812)."""
     summary = sc.dig(raw, "hrvSummary")
     summary = summary if isinstance(summary, dict) else {}
-    base = summary.get("baseline") if isinstance(summary.get("baseline"), dict) else {}
+    baseline = summary.get("baseline")
+    base = baseline if isinstance(baseline, dict) else {}
     return {
         "weekly_avg": sc.num(summary.get("weeklyAvg")),
         "status": _str(summary.get("status")),
@@ -435,7 +436,7 @@ def parse_gear(raw: Any) -> List[Dict[str, Any]]:
     Each item keeps its uuid for the stats call; the uuid never reaches the result.
     """
     items = raw if isinstance(raw, list) else []
-    out = []
+    out: List[Dict[str, Any]] = []
     for gear in items:
         if not isinstance(gear, dict):
             continue
@@ -616,7 +617,8 @@ def plan_section(items: Optional[List[Dict[str, Any]]], acts: Optional[List[Dict
         "scheduled": scheduled,
         "completed": completed,
         "on_planned_day": on_planned_day,
-        "moved": completed - on_planned_day if completed is not None else None,
+        # completed and on_planned_day are None together.
+        "moved": completed - cast(int, on_planned_day) if completed is not None else None,
         "upcoming": sum(1 for i in items if i["date"] > last),
         "linked": linked,
         "completion_pct": sc.rnd(completed / scheduled * 100) if scheduled and completed is not None else None,
@@ -739,8 +741,8 @@ def _details_ascent(rows: List[List[Any]], elev_i: Optional[int]) -> Optional[fl
     without elevation."""
     if elev_i is None:
         return None
-    heights = [sc.num(r[elev_i]) for r in rows if len(r) > elev_i]
-    heights = [h for h in heights if h is not None]
+    samples = [sc.num(r[elev_i]) for r in rows if len(r) > elev_i]
+    heights = [h for h in samples if h is not None]
     if len(heights) < 2:
         return None
     climbed, anchor = 0.0, heights[0]
@@ -771,7 +773,7 @@ def decoupling_from_details(details: Any, act: Optional[Dict[str, Any]] = None) 
         if isinstance(d, dict) and isinstance(d.get("metricsIndex"), int)
     }
     rows = [
-        r.get("metrics") for r in details.get("activityDetailMetrics") or []
+        r["metrics"] for r in details.get("activityDetailMetrics") or []
         if isinstance(r, dict) and isinstance(r.get("metrics"), list)
     ]
     hr_i = index.get("directHeartRate")
@@ -813,6 +815,8 @@ def long_session_section(act: Optional[Dict[str, Any]], drift: Optional[Dict[str
     pct = sc.rnd(drift.get("pct"), 1) if drift else None
     basis = drift.get("basis") if drift and pct is not None else None
     steady = drift.get("steady") if drift and pct is not None else None
+    code: Optional[str]
+    text: Optional[str]
     if steady is False:
         # The number stays (it is what the halves gave) but says nothing about fatigue.
         code, text = "not_applicable", "Uneven effort (hills or coasting): drift is not meaningful"
@@ -904,7 +908,7 @@ def compute_level(flags: List[Dict[str, str]], *, hrv_missing: bool, sleep_missi
 
 # --- fetching -----------------------------------------------------------------
 
-def key_mode_round1_skips(end: dt.date) -> frozenset:
+def key_mode_round1_skips(end: dt.date) -> FrozenSet[str]:
     """Key mode (GARMIN_AUTH=key): the round-1 sources Garmin's Personal API does not serve. They are never
     called; each reads "skipped: not available with a Garmin Personal API key", and activities runs first."""
     return frozenset({"device_last_used", "devices", "schedule"} | {
@@ -1017,7 +1021,8 @@ def _fit_drift(client: Any, activity_id: Any, act: Optional[Dict[str, Any]] = No
     return result
 
 
-async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float, key_mode: bool = False):
+async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started: float, key_mode: bool = False
+                            ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any], Optional[Dict[str, Any]]]:
     """-> (source results, debug slims, {"pct", "basis", "steady", "source", ...} or None).
 
     FIT first (upstream's analysis); the details chart only when the FIT gave
@@ -1059,7 +1064,8 @@ async def _decoupling_chain(client: Any, act: Optional[Dict[str, Any]], started:
     return results, slims, (dict(drift, source="details") if drift else None)
 
 
-async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode: bool = False):
+async def _gear_chain(client: Any, profile_number: Any, started: float, key_mode: bool = False
+                      ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any], Optional[List[Dict[str, Any]]]]:
     """-> (source results, debug slims, parse_gear() items with "stats" or None if the list failed)."""
     results: Dict[str, Dict[str, Any]] = {}
     slims: Dict[str, Any] = {}
@@ -1305,7 +1311,7 @@ def _hm(value: Any) -> str:
 def _short(text: Any, limit: int = 30) -> str:
     """At most `limit` characters, ending with "…" when cut; never cut inside an emoji sequence or a mark."""
     text = str(text or "")
-    return th.cap(text, limit) if len(text) > limit else text
+    return cast(str, th.cap(text, limit)) if len(text) > limit else text
 
 
 def _count(count: Any, noun: str) -> str:

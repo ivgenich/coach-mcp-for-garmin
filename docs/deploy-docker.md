@@ -55,10 +55,10 @@ For this hostname:
 ```
 git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
 cd coach-mcp-for-garmin
-git checkout v1.0.4
+git checkout v1.0.5
 ```
 
-Use the newest release tag from the repository's **Releases** page in place of `v1.0.4`.
+Use the newest release tag from the repository's **Releases** page in place of `v1.0.5`.
 
 Clone it into a folder that no cloud drive syncs (not the iCloud Desktop or Documents folders,
 Dropbox or OneDrive): the two settings files you create next hold your secrets in plain text.

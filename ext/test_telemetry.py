@@ -750,9 +750,19 @@ class DeadBackend(unittest.TestCase):
     def setUp(self):
         t._reset_for_tests()
         t.register_tools(["get_daily_status"])
+        # shutdown() returns at its cap and leaves its stop thread and the SDK's export threads to give up
+        # on the dead backend by themselves (EXPORT_TIMEOUT_S, retries); they must not outlive the test.
+        self.addCleanup(self.join_export_threads, set(threading.enumerate()))
 
     def tearDown(self):
         t._reset_for_tests()
+
+    @staticmethod
+    def join_export_threads(before, wait_s=30.0):
+        deadline = time.monotonic() + wait_s
+        for thread in threading.enumerate():
+            if thread not in before and (thread.name == "telemetry-shutdown" or thread.name.startswith("Otel")):
+                thread.join(max(0.0, deadline - time.monotonic()))
 
     def work(self):
         times = []
@@ -777,7 +787,9 @@ class DeadBackend(unittest.TestCase):
                 [OTLPMetricExporter(endpoint=url + "/v1/metrics", timeout=t.EXPORT_TIMEOUT_S, meter_provider=noop)],
                 schedule_delay_ms=10, metric_interval_ms=200)
 
-    def check(self, url):
+    def check(self, url, wait_for_failure=False):
+        """wait_for_failure: wait (up to EXPORT_TIMEOUT_S more) for the first export-failure line, for a
+        backend that fails fast but whose first failure may be logged only after the exporter's retries."""
         base = self.work()
         lines = []
         handler = logging.Handler()
@@ -789,6 +801,9 @@ class DeadBackend(unittest.TestCase):
             t._COLLAPSE.last.clear()
             on = self.work()
             time.sleep(1.0)  # let the export thread fail a few times
+            deadline = time.monotonic() + t.EXPORT_TIMEOUT_S
+            while wait_for_failure and not lines and time.monotonic() < deadline:
+                time.sleep(0.05)
             t0 = time.monotonic()
             t.shutdown(cap_s=2.0)
             took = time.monotonic() - t0
@@ -805,7 +820,7 @@ class DeadBackend(unittest.TestCase):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()
-        failed = self.check(f"http://127.0.0.1:{port}")
+        failed = self.check(f"http://127.0.0.1:{port}", wait_for_failure=True)
         self.assertTrue(failed)
 
     def test_black_hole(self):

@@ -9,6 +9,8 @@ recipes/
 evals/
 dashboards/
 .ruff_cache/
+# Hypothesis's example cache from local test runs.
+**/.hypothesis/
 README.md
 .git
 .gitignore

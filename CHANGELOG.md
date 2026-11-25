@@ -8,6 +8,26 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-25
+
+### Security
+
+- The history worker's Garmin client now uses the same path guard as the app, and the image
+  build fails if the garminconnect method the guard wraps is missing.
+
+### Changed
+
+- `ext/launch.py` is split into `garmin_paths.py`, `tool_answers.py`, `feature_startup.py` and
+  `launch_logging.py`; `launch.py` keeps every name it had. Its tests are split the same way.
+- The call guard's Postgres state has a `close()` that stops its background thread.
+- CI measures coverage (the full leg fails under 86%) and runs mypy strict on the status modules.
+  Test-only packages (coverage, hypothesis) are pinned in `config/requirements-test.txt` and
+  never go into the image.
+- The test runner fails a test that leaves a thread running or a handler on the root logger.
+  Several leaking tests and one flaky telemetry test are fixed.
+- Property-based tests (Hypothesis) for the path guard, the plan-completion matcher, `missing`
+  and the id checks, and tests that pin the units the code assumes for Garmin's answers.
+
 ## [1.0.4] - 2026-11-25
 
 ### Security

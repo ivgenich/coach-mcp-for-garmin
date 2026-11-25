@@ -28,7 +28,7 @@ import os
 import re
 import time
 import weakref
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import tool_errors
@@ -510,7 +510,7 @@ def match_completion_shifts(
                     shifts[n] = shift
                     break
 
-    def augment(n: int, seen: set) -> bool:
+    def augment(n: int, seen: Set[int]) -> bool:
         candidates = [(abs(g), i) for i in range(len(activities)) if i not in used and (g := gap_of(n, i)) is not None]
         for _, i in sorted(candidates):
             if i in seen:
@@ -525,13 +525,13 @@ def match_completion_shifts(
         if shifts[n] is None and scheduled[n].get("activity_id") is None:
             augment(n, set())
     for i, n in owner.items():
-        shifts[n] = abs(gap_of(n, i))
+        shifts[n] = abs(cast(int, gap_of(n, i)))  # owner holds only pairs whose gap is not None
     return shifts
 
 
 # --- fetching -----------------------------------------------------------------
 
-Call = Tuple[Callable[..., Any], tuple, dict]
+Call = Tuple[Callable[..., Any], Tuple[Any, ...], Dict[str, Any]]
 
 
 def call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Call:
@@ -722,17 +722,17 @@ def unusable_answer(result: Dict[str, Any], source: str, why: str) -> Dict[str, 
 # launch.py opens a capture around each tool call (capture_outcomes); fetch_all adds the group of every such
 # failed source to it; launch.py hands guard_group() of the captured groups to the guard.
 _COOLDOWN_GROUPS = (tool_errors.RATE_LIMITED, tool_errors.LOGIN)   # in order of precedence
-_OUTCOMES: "contextvars.ContextVar[Optional[set]]" = contextvars.ContextVar("coach_status_outcomes", default=None)
+_OUTCOMES: "contextvars.ContextVar[Optional[Set[str]]]" = contextvars.ContextVar("coach_status_outcomes", default=None)
 
 
-def capture_outcomes() -> Tuple[contextvars.Token, set]:
+def capture_outcomes() -> Tuple[contextvars.Token[Optional[Set[str]]], Set[str]]:
     """Start collecting the cooldown groups fetch_all meets in this context: (token for end_capture, the set
     it fills). The set is shared, so a fetch_all in a copied context (a task, a worker thread) still adds to it."""
-    groups: set = set()
+    groups: Set[str] = set()
     return _OUTCOMES.set(groups), groups
 
 
-def end_capture(token: contextvars.Token) -> None:
+def end_capture(token: contextvars.Token[Optional[Set[str]]]) -> None:
     _OUTCOMES.reset(token)
 
 

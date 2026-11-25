@@ -12,6 +12,7 @@ import importlib.util
 import io
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -19,10 +20,13 @@ import unittest
 import unittest.mock
 from zoneinfo import ZoneInfo
 
+import garmin_paths
 import jobqueue
+import tool_errors
 import worker_garmin as wg
 
 HAVE_CRYPTO = importlib.util.find_spec("cryptography") is not None
+HAVE_GARMINCONNECT = importlib.util.find_spec("garminconnect") is not None
 # A fixed key that passes the weak-key rule (bytes(range(32)) is a counting sequence and is refused).
 KEY = bytes.fromhex("9f3c51e2a87d06b4c2e95f1a3d7b08c6e41f92a5b37c0d68f1e2a9c4573b6d80")
 KEY_TEXT = base64.b64encode(KEY).decode()
@@ -224,7 +228,7 @@ class SelfCheck(unittest.TestCase):
         import sys
         import types
 
-        for missing in ("_token_expires_soon", "_refresh_session"):
+        for missing in ("_token_expires_soon", "_refresh_session", "_run_request"):
             names = {n: (lambda self: None) for n in wg.CLIENT_NAMES if n != missing}
             pkg = types.ModuleType("garminconnect")
             mod = types.ModuleType("garminconnect.client")
@@ -254,6 +258,100 @@ class SelfCheck(unittest.TestCase):
                     client.ready()
         self.assertEqual(len(logs.records), 1)
         self.assertIn("_token_expires_soon", logs.output[0])
+
+
+# A worker job's value that bent a Garmin path (the same traversal the app's path guard tests use).
+TRAVERSAL = "x-/../../../userprofile-service/userprofile/personal-information"
+
+
+@unittest.skipUnless(HAVE_GARMINCONNECT, "needs garminconnect")
+class PathGuard(unittest.TestCase):
+    """The app's Garmin request path guard (garmin_paths) on the worker's full-mode client: installed before
+    the first client, a bent path refused as bad input before any request leaves, and the build check."""
+
+    def setUp(self):
+        import socket
+
+        from garminconnect.client import Client
+
+        self.Client = Client
+        # garminconnect logs the refused call (log_privacy would turn it into one ERROR line): not in test output.
+        library = logging.getLogger("garminconnect")
+        self.addCleanup(setattr, library, "disabled", library.disabled)
+        library.disabled = True
+        saved = Client.__dict__["_run_request"]
+        self.addCleanup(setattr, Client, "_run_request", saved)
+        original = saved
+        while getattr(original, "__wrapped__", None) is not None:  # an earlier test's guard or tracing wrapper
+            original = original.__wrapped__
+        Client._run_request = original
+        self.sent = []
+        sent = self.sent
+
+        class Response:
+            status_code = 200
+            text = "{}"
+            content = b"{}"
+
+            def json(self):
+                return {}
+
+        class Session:
+            def request(self, method, url, headers=None, **kwargs):
+                sent.append((method, url))
+                return Response()
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("a test tried to reach the network")
+
+        for patcher in (unittest.mock.patch.object(Client, "_fresh_api_session", lambda client: Session()),
+                        unittest.mock.patch.object(Client, "_refresh_session", lambda client: None),
+                        unittest.mock.patch.object(socket.socket, "connect", refuse),
+                        unittest.mock.patch.object(socket, "getaddrinfo", refuse)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def garmin(self):
+        garmin = wg._garminconnect_factory()
+        garmin.client.di_token = "TEST-ONLY-" + "x" * 24
+        garmin.display_name = "someone"
+        return garmin
+
+    def test_the_factory_installs_the_guard_before_the_first_client(self):
+        self.assertFalse(garmin_paths.path_guard_installed(self.Client._run_request))
+        garmin = self.garmin()
+        self.assertTrue(garmin_paths.path_guard_installed(self.Client._run_request))
+        guarded = self.Client._run_request
+        self.garmin()
+        self.assertIs(self.Client._run_request, guarded)  # installed once
+        with self.assertRaises(garmin_paths.GarminPathRefused):
+            garmin.client.connectapi(TRAVERSAL)
+        self.assertEqual(self.sent, [])
+        garmin.client.connectapi(wg.StoredTokenGarmin.PROFILE_PATH)
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(self.sent[0][1].endswith(wg.StoredTokenGarmin.PROFILE_PATH))
+
+    def test_a_bent_path_through_the_guarded_client_is_bad_input_and_never_sent(self):
+        guard = Guard()
+        client = wg.GuardedGarmin(self.garmin(), guard)
+        # garminconnect.Garmin.connectapi re-raises the refusal as its connection error; still bad input.
+        with self.assertRaisesRegex(Exception, re.escape(garmin_paths.PATH_REFUSED_TEXT)) as cm:
+            client.connectapi(TRAVERSAL, params={"start": "0"})
+        self.assertEqual(tool_errors.classify_exception(cm.exception)[0], tool_errors.BAD_INPUT)
+        # Bad input: never a Garmin failure, so the shared guard starts no cooldown for it.
+        self.assertEqual(guard.events, [("before", "worker"), ("after", "worker", tool_errors.BAD_INPUT)])
+        self.assertEqual(self.sent, [])
+
+    def test_selfcheck_fails_when_garminconnect_moves_the_hook(self):
+        def _run_request(self, method, url, **kwargs):  # a bump that renamed the parameter
+            return None
+
+        wg.selfcheck()
+        with unittest.mock.patch.object(self.Client, "_run_request", _run_request):
+            with self.assertRaisesRegex(RuntimeError, "path guard needs a new hook"):
+                wg.selfcheck()
+            with self.assertRaisesRegex(RuntimeError, "path guard needs a new hook"):
+                wg._garminconnect_factory()   # no unguarded client either
 
 
 class StoredToken(unittest.TestCase):

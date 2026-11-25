@@ -36,10 +36,10 @@ Get the files, in a terminal:
 ```
 git clone https://github.com/ivgenich/coach-mcp-for-garmin.git
 cd coach-mcp-for-garmin
-git checkout v1.0.4
+git checkout v1.0.5
 ```
 
-Use the newest release tag from the repository's **Releases** page in place of `v1.0.4`.
+Use the newest release tag from the repository's **Releases** page in place of `v1.0.5`.
 
 ```bash
 GARMIN_AUTH=full REPORT_TZ=Area/City ./scripts/deploy.sh    # your IANA zone, e.g. REPORT_TZ=Europe/London

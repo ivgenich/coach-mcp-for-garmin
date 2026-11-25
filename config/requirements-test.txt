@@ -1,0 +1,35 @@
+# Test-only packages: coverage (the full leg's coverage floor, .coveragerc) and
+# hypothesis (property tests; they skip with "needs hypothesis" without it).
+# NEVER installed in the image. The CI test legs that run the full and history
+# suites install them AFTER `ci-checks.py verify-env`, into their own venv:
+#   pip install --require-hashes --no-deps -r config/requirements-test.txt
+# verify-env accepts these packages at exactly these versions in a live venv
+# (scripts/ci-checks.py TEST_REQUIREMENTS); the stdlib leg never installs them.
+# Every package of the closure is listed (so --no-deps is safe) and none of
+# them is in constraints.txt (pin-drift checks that).
+#
+# Generated 25 Nov 2026 on Python 3.12 by a real resolve against the image's
+# pins, limited to releases uploaded at least two weeks earlier:
+#   pip install --dry-run --ignore-installed --report r.json \
+#     --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
+#     --python-version 3.12 --implementation cp --only-binary=:all: \
+#     --target /tmp/t --uploaded-prior-to 2026-11-11T00:00:00Z \
+#     -c constraints.txt coverage hypothesis
+# then, for each pin, the sha256 of every cp312/abi3/py3 wheel PyPI lists for
+# manylinux and macOS (PyPI JSON API). Regenerate the same way when bumping.
+coverage==7.17.2 \
+    --hash=sha256:1682d98ded28524bc6853cc4e7c65175b3e917f38b2e2ddebb28cafd8ab4de74 \
+    --hash=sha256:289a24443352713745f79c1b6aae4e99ced2f5ff3e86bb630c33c631d50f217c \
+    --hash=sha256:36314997533266bde3d07765289674304d61bfe49165bb1b4fa9be12cb4ba0d1 \
+    --hash=sha256:635337a96895f2ffcfe2aa7554468a988f468fb67a8007c1a65e95148c1855a9 \
+    --hash=sha256:8eab0a5cff8dbc563d1416a6e079ba3c146712e47167c022a5df5ea01bd76df9 \
+    --hash=sha256:90c6c5f93606b8803bd7f8a0b2ae05df7e35da4504a1c53cfe9294a1731e1f49 \
+    --hash=sha256:da4b0aef427eb96e422b444e5c2c3d38768fedb9141346294c38717a8b15b416 \
+    --hash=sha256:e674027ceb6bfd959f1bb035000fd20fa8b717dc6765adaaf8bca347822c8c7d
+hypothesis==6.170.15 \
+    --hash=sha256:29223a2d180e463f1205b7e5eb397db0c4827de06f2ae571b00c392d355c410e \
+    --hash=sha256:7953ad8f123b4289801b833666aaab757ba52e91ed687d954eb26f4af7328e5b \
+    --hash=sha256:b1f37920547eafa77814bc9b638e47299562123023bdf3c9cb002795bb90fc92 \
+    --hash=sha256:e9e20ec17d2095e9314ea232b4e34b5510def0d9e7a7e764cc70cae88fe4b0c4
+sortedcontainers==2.4.0 \
+    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0

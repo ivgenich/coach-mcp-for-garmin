@@ -330,7 +330,11 @@ class SharedAcrossProcesses(unittest.TestCase):
             logging.getLogger("garmin_ext.guard").disabled = False
             self.app.before_call("tool")
             self.app.live_call_started()
+            beat = self.app._beat_thread
             self.app.after_outcome("tool", "rate_limited")
+            self.app.live_call_finished()  # ends the heartbeat thread: none outlives the test
+        if beat is not None:
+            beat.join(timeout=2)
         self.assertTrue(any("ConnectionError" in line for line in logs.output))
         self.assertFalse(any("db down" in line for line in logs.output))
         # The in-memory copy still holds the cooldown.

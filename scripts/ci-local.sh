@@ -11,7 +11,11 @@
 # The container smoke test needs Docker: scripts/ci-smoke.sh.
 # The optional features: venv-full holds the image's packages, the tracing
 # ones included (tests-full requires them); venv-history adds the history
-# packages of an image built with HISTORY=1 (tests-history). The Postgres tests
+# packages of an image built with HISTORY=1 (tests-history). Both also get the
+# test-only pins (config/requirements-test.txt: coverage, hypothesis); tests-full
+# runs under coverage and fails under the floor in .coveragerc (coverage data in
+# CI_CACHE). The type check (mypy, strict, the modules in mypy.ini) runs from
+# venv-tools. The Postgres tests
 # need a database: they run only when COACH_TEST_DATABASE_URL is set (CI's
 # Postgres job sets it) and are reported as allowed skips otherwise.
 set -euo pipefail
@@ -50,10 +54,14 @@ if [ "$SETUP" = yes ]; then
 	rm -rf "$FULL" "$TOOLS" "$EVALS" "$HISTORYV"
 	"$PY312" -m venv "$FULL"
 	"$FULL/bin/python" -B scripts/ci-checks.py install-full
+	"$FULL/bin/python" -m pip install --disable-pip-version-check --require-hashes --no-deps \
+		-r config/requirements-test.txt
 	"$PY312" -m venv "$HISTORYV"
 	"$HISTORYV/bin/python" -B scripts/ci-checks.py install-full
 	"$HISTORYV/bin/python" -m pip install --disable-pip-version-check --require-hashes --no-deps \
 		-r config/requirements-history.txt
+	"$HISTORYV/bin/python" -m pip install --disable-pip-version-check --require-hashes --no-deps \
+		-r config/requirements-test.txt
 	"$PY312" -m venv "$EVALS"
 	"$EVALS/bin/python" -B scripts/ci-checks.py install-full
 	"$EVALS/bin/python" -m pip install --disable-pip-version-check --require-hashes -r evals/requirements.txt
@@ -97,6 +105,10 @@ evals_offline() { # the eval tests, then each committed baseline graded into a t
 	rm -rf "$tmp"
 	return "$rc"
 }
+coverage_report() { # coverage_report PYTHON DATAFILE: combine the per-process files, report, check the floor
+	COVERAGE_FILE="$2" "$1" -B -m coverage combine --rcfile=.coveragerc --quiet &&
+		COVERAGE_FILE="$2" "$1" -B -m coverage report --rcfile=.coveragerc
+}
 shellcheck_all() { files -- '*.sh' | xargs -0 "$1"; }
 gitleaks_files() { # the files git would commit: tracked and new, ignored ones left out
 	local tmp f rc=0
@@ -122,8 +134,18 @@ if [ -x "$FULL/bin/python" ]; then
 	caddy=$(tool caddy)
 	step verify-env "$FULL/bin/python" -B scripts/ci-checks.py verify-env
 	# The pinned tools go first on PATH: the release-check tests run gitleaks.
-	step tests-full env PATH="$BIN:$PATH" REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 CADDY="${caddy:-}" \
-		"$FULL/bin/python" -B scripts/ci-unittest.py
+	if "$FULL/bin/python" -c "import coverage" 2>/dev/null; then
+		rm -rf "$CACHE/coverage"
+		mkdir -p "$CACHE/coverage"
+		step tests-full env PATH="$BIN:$PATH" REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 CADDY="${caddy:-}" \
+			COVERAGE_FILE="$CACHE/coverage/.coverage" \
+			"$FULL/bin/python" -B -m coverage run --rcfile=.coveragerc scripts/ci-unittest.py
+		step coverage coverage_report "$FULL/bin/python" "$CACHE/coverage/.coverage"
+	else
+		step tests-full env PATH="$BIN:$PATH" REQUIRE_UPSTREAM=1 REQUIRE_TELEMETRY=1 CADDY="${caddy:-}" \
+			"$FULL/bin/python" -B scripts/ci-unittest.py
+		skip coverage "no coverage in the full venv (run --setup)"
+	fi
 	if [ -n "$caddy" ]; then
 		step e2e "$FULL/bin/python" -B scripts/e2e-local.py --work "$CACHE/e2e" --caddy "$caddy" \
 			--server-port "${CI_E2E_SERVER_PORT:-8340}" --edge-port "${CI_E2E_EDGE_PORT:-8341}"
@@ -158,6 +180,11 @@ elif have ruff; then
 	step ruff ruff check --no-cache .
 else
 	skip ruff "no ruff (run --setup)"
+fi
+if [ -x "$TOOLS/bin/mypy" ]; then
+	step mypy "$TOOLS/bin/mypy"
+else
+	skip mypy "no mypy in the tools venv (run --setup)"
 fi
 
 for t in shellcheck hadolint actionlint gitleaks; do

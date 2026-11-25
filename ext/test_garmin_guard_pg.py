@@ -13,6 +13,7 @@ import random
 import threading
 import time
 import unittest
+import unittest.mock
 from zoneinfo import ZoneInfo
 
 import garmin_guard_pg as g
@@ -203,11 +204,23 @@ class FakeConn:
         return _Cursor(None)
 
 
+def stop_background(state, db):
+    """End a live-mode PgSharedState's background thread (close()), so no thread outlives the test; a database
+    the test left failing or blocked is let go first."""
+    db.fail = False
+    if db.gate is not None:
+        db.gate.set()
+    state.close()
+
+
 class PgOnFake(unittest.TestCase):
     def make(self, live=False):
         self.db = FakeDB()
         self.clock = Clock(NOON)
-        return g.PgSharedState("postgresql://fake", TZ, live=live, clock=self.clock, connect=self.db.connect)
+        s = g.PgSharedState("postgresql://fake", TZ, live=live, clock=self.clock, connect=self.db.connect)
+        if live:
+            self.addCleanup(stop_background, s, self.db)
+        return s
 
     def test_take_token_uses_the_shared_row(self):
         a, db = self.make(), None
@@ -347,6 +360,31 @@ class PgOnFake(unittest.TestCase):
         self.clock.advance(g.LIVE_WRITE_S)
         s.heartbeat_live()
         self.assertEqual(self.db.calls.count("UPDATE"), 2)
+
+    def test_close_ends_the_background_thread_after_the_queued_writes(self):
+        s = self.make(live=True)
+        s.close()                             # no thread yet: nothing to stop
+        s = self.make(live=True)
+        self.db.gate = threading.Event()      # the first write blocks until set
+        s.set_cooldown(NOON + 100, "rate_limited")
+        thread = s._thread
+        self.assertTrue(thread.is_alive())
+        self.db.gate.set()
+        s.close()
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(self.db.row[0], NOON + 100, "the queued write ran before the thread ended")
+        s.close()                             # idempotent
+        s.clear_cooldown("rate_limited")      # after close: the local copy only, no new thread
+        self.assertFalse(s._thread.is_alive())
+        self.assertEqual(s.get_cooldown(), (None, None))
+        self.assertEqual(self.db.row[0], NOON + 100, "nothing is written after close()")
+
+    def test_close_never_raises(self):
+        s = self.make(live=True)
+        s.heartbeat_live(force=True)
+        with unittest.mock.patch.object(s._thread, "join", side_effect=RuntimeError("boom")):
+            s.close()
+        s.close()
 
     def test_repr_hides_the_dsn(self):
         self.assertNotIn("fake", repr(self.make()))

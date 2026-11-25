@@ -78,6 +78,18 @@ below runs):
   docs/history-worker.md).
 The modules of the features are imported only when a feature is on, so the
 server starts without their packages.
+
+Parts of this file live in modules of their own, and launch.py keeps their
+names (tests, docs and the Dockerfile's build check use them):
+- garmin_paths.py: the argument checks before Garmin and the Garmin request
+  path guard (the history worker installs the same guard);
+- tool_answers.py: the description notes and the answer additions for
+  upstream's tools;
+- feature_startup.py: the optional features' startup pieces (the call guard,
+  the history forget, the catch-up and token threads, ROLE dispatch);
+- launch_logging.py: the one-line log handler and uvicorn's log split.
+The module state (_GUARD, _TELEMETRY, _KEY_MODE, _FEATURES, _AUTH) stays
+here, and so does every function that reads it.
 """
 
 from __future__ import annotations
@@ -85,17 +97,13 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import datetime
-import importlib
-import importlib.util
 import inspect
-import json
 import logging
 import os
 import re
 import sys
 import threading
 import time
-import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -105,14 +113,17 @@ import auth_http  # noqa: E402
 import auth_store  # noqa: E402
 import course_profile  # noqa: E402
 import feature_config  # noqa: E402
+import feature_startup  # noqa: E402
 import garmin_guard  # noqa: E402
+import garmin_paths  # noqa: E402
 import mcp2_compat  # noqa: E402
 import daily_status  # noqa: E402
 import key_mode  # noqa: E402
+import launch_logging  # noqa: E402
 import log_privacy  # noqa: E402
 import server_instructions  # noqa: E402
 import status_common  # noqa: E402
-import text_hygiene  # noqa: E402
+import tool_answers  # noqa: E402
 import tool_errors  # noqa: E402
 import version  # noqa: E402
 import weekly_status  # noqa: E402
@@ -326,187 +337,31 @@ def allowed_tools(environ):
     return allowed
 
 
-# --- Argument checks before Garmin ----------------------------------------------------------------------------
-# Upstream tools that put a caller value into a Garmin path with too little checking: get_workout_by_id takes
-# any id holding "-" for a UUID and builds "workout-service/fbt-adaptive/<id>"; get_vo2max_trend checks its
-# dates with date.fromisoformat() only, which on Python 3.12 also accepts "20261101/x", "20261101?x" or
-# "20261101#x", and puts the raw strings in its "<metrics url>/<start>/<end>" path. call_tool() runs these
-# checks first, before the call guard and before Garmin; a failing one is a plain bad-input answer. The
-# path guard (check_garmin_path) stays the backstop for every other path. One row per tool:
-# {argument: (check, bad-input detail)}; a missing argument is left to the SDK's own validation.
-_WORKOUT_ID_RE = re.compile(r"[1-9][0-9]{0,18}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                            re.ASCII | re.IGNORECASE)
-_ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
-_ID_MAX = 10 ** 19 - 1  # the most digits a string id may have (19), so both forms take the same ids
+# --- Argument checks and the Garmin request path guard (garmin_paths.py) --------------------------------------
+# Upstream tools that put a caller value into a Garmin path: call_tool() runs ARGUMENT_CHECKS
+# (refused_argument()) before the call guard and before Garmin. In full mode patch() installs the path guard
+# on garminconnect's Client._run_request (_install_path_guard()), the backstop for every other path; the
+# history worker installs the same guard (worker_garmin). The names below are garmin_paths' under the names
+# this module always had (tests, docs and the Dockerfile's build check use them).
+ARGUMENT_CHECKS = garmin_paths.ARGUMENT_CHECKS
+refused_argument = garmin_paths.refused_argument
+PATH_REFUSED_TEXT = garmin_paths.PATH_REFUSED_TEXT
+GarminPathRefused = garmin_paths.GarminPathRefused
+garmin_path_ok = garmin_paths.garmin_path_ok
+check_garmin_path = garmin_paths.check_garmin_path
+_path_guarded_run_request = garmin_paths.path_guarded_run_request
+_path_guard_installed = garmin_paths.path_guard_installed
+_check_path_guard_hook = garmin_paths.check_path_guard_hook
+_install_path_guard = garmin_paths.install_path_guard
 
-
-def _workout_id_ok(value):
-    """A positive int (not bool, at most 19 digits), or a str: such a number without a sign or leading zero,
-    or a canonical UUID (8-4-4-4-12 hex)."""
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return 0 < value <= _ID_MAX
-    return isinstance(value, str) and _WORKOUT_ID_RE.fullmatch(value) is not None
-
-
-def _iso_date_ok(value):
-    """A str written YYYY-MM-DD in ASCII digits that is a real calendar date."""
-    if not isinstance(value, str) or _ISO_DATE_RE.fullmatch(value) is None:
-        return False
-    try:
-        datetime.date.fromisoformat(value)
-    except ValueError:
-        return False
-    return True
-
-
-ARGUMENT_CHECKS = {
-    "get_workout_by_id": {"workout_id": (_workout_id_ok, tool_errors.GENERIC_DETAIL)},
-    "get_vo2max_trend": {"start_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
-                         "end_date": (_iso_date_ok, tool_errors.DATE_DETAIL)},
-}
-
-
-# --- Description notes for upstream tools ---------------------------------------------------------------------
-# What upstream's answers leave unclear, said where the model reads it (claude.ai drops server instructions).
-# add_tool() ends the description with "\n\n" + the note, before the free-text note. Short: a noted description
-# stays under the 2,048 characters Claude Code kept before v2.1.296.
-_ACUTE_BAND_NOTE = ("optimal_chronic_load_min/max is the band for acute load (also given as "
-                    "optimal_acute_load_min/max), not a target for chronic load.")
-_LOCAL_START_NOTE = "Note: start_time is local time, not GMT."
-TOOL_NOTES = {
-    "get_training_status": ("Note: " + _ACUTE_BAND_NOTE + " Garmin's load_ratio (the ACWR) may be cut to one "
-                            "decimal; get_daily_status computes it from the loads to two."),
-    "get_training_load_trend": ("Note: " + _ACUTE_BAND_NOTE + " Garmin's acwr may be cut to one decimal; "
-                                "get_daily_status computes it from the loads to two."),
-    "get_progress_summary_between_dates": (
-        "Note: sum/avg/min/max are in Garmin's raw unit, named in unit: cm for distance and elevationGain, ms "
-        "for duration and movingDuration. The *_m and *_s fields are the same values in meters and seconds; "
-        "for calories, *_rounded are whole kcal."),
-    "get_body_battery": "Note: event start_time is GMT, not local time.",
-    "get_activity_splits": "Note: lap and length start_time is GMT, not local time.",
-    "get_activities": _LOCAL_START_NOTE,
-    "get_activities_by_date": _LOCAL_START_NOTE,
-    "get_training_readiness": "Note: timestamp is local time, not GMT.",
-    "get_vo2max_trend": ("Note: returns one sport only (the one with more readings). The running VO2max is vo2_max "
-                         "in get_training_status."),
-}
-
-
-# --- Answer additions for upstream tools ----------------------------------------------------------------------
-# Upstream's answers are not this repo's public API (docs/updates.md), so fields are added where an answer is
-# easy to misread: never removed or renamed, and only when absent (an upstream fix is not doubled). One function
-# per tool: it gets the parsed answer and returns the object to dump, or None for "unchanged". It runs after
-# text_hygiene's clean, on successful answers only; an unexpected shape, or any exception, keeps the answer.
-
-# get_progress_summary_between_dates: Garmin's fitnessstats sums are centimeters and milliseconds (live:
-# a running sum 3,504,354 for 35,043.5 m, 11,748,244 for 11,748.2 s); upstream converts calories only, unrounded.
-_PROGRESS_UNITS = {"distance": ("cm", "_m", 100), "elevationGain": ("cm", "_m", 100),
-                   "duration": ("ms", "_s", 1000), "movingDuration": ("ms", "_s", 1000),
-                   "calories": ("kcal", "_rounded", None)}
-_PROGRESS_STATS = ("sum", "avg", "min", "max")
-
-
-def _number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _with_after(mapping, after, extra):
-    """A copy of dict `mapping` with the absent keys of `extra` placed right after key `after` (at the end
-    when `after` is missing); None when nothing is added."""
-    extra = {k: v for k, v in extra.items() if k not in mapping}
-    if not extra:
-        return None
-    if after not in mapping:
-        return {**mapping, **extra}
-    out = {}
-    for key, value in mapping.items():
-        out[key] = value
-        if key == after:
-            out.update(extra)
-    return out
-
-
-def _add_progress_units(obj):
-    """unit after metric, and converted copies of sum/avg/min/max in each activity type."""
-    if not isinstance(obj, dict) or "unit" in obj or obj.get("metric") not in _PROGRESS_UNITS:
-        return None
-    by_type = obj.get("stats_by_activity_type")
-    if not isinstance(by_type, dict):
-        return None
-    unit, suffix, factor = _PROGRESS_UNITS[obj["metric"]]
-    types = {}
-    for sport, stats in by_type.items():
-        if not isinstance(stats, dict):
-            return None
-        copies = {}
-        for key in _PROGRESS_STATS:
-            value = stats.get(key)
-            if value is None:
-                continue
-            if not _number(value):
-                return None
-            copies[key + suffix] = round(value) if factor is None else round(value / factor, 1)
-        types[sport] = _with_after(stats, "max", copies) or stats
-    return _with_after({**obj, "stats_by_activity_type": types}, "metric", {"unit": unit})
-
-
-def _acute_band(entry):
-    """optimal_acute_load_min/max (the same values) after optimal_chronic_load_max; None when not there."""
-    if not isinstance(entry, dict):
-        return None
-    extra = {f"optimal_acute_load_{end}": entry[f"optimal_chronic_load_{end}"]
-             for end in ("min", "max") if f"optimal_chronic_load_{end}" in entry}
-    if not extra:
-        return None
-    after = "optimal_chronic_load_max" if "optimal_chronic_load_max" in entry else "optimal_chronic_load_min"
-    return _with_after(entry, after, extra)
-
-
-def _add_acute_band_trend(obj):
-    if not isinstance(obj, dict) or not isinstance(obj.get("trend"), list):
-        return None
-    trend = [_acute_band(e) or e for e in obj["trend"]]
-    if all(new is old for new, old in zip(trend, obj["trend"])):
-        return None
-    return {**obj, "trend": trend}
-
-
-ANSWER_ADDITIONS = {
-    "get_progress_summary_between_dates": _add_progress_units,
-    "get_training_status": _acute_band,
-    "get_training_load_trend": _add_acute_band_trend,
-}
-
-
-def add_to_answer(name, text):
-    """`text` (a cleaned upstream answer of tool `name`) with ANSWER_ADDITIONS' fields, dumped as
-    text_hygiene.clean_tool_answer dumps (ensure_ascii; indent=2 when the text has a newline, else compact).
-    Unchanged for a tool without a row, a text that is not a JSON object, an unexpected shape, or any failure."""
-    add = ANSWER_ADDITIONS.get(name)
-    if add is None or not isinstance(text, str) or not text.lstrip(" \t\n\r").startswith("{"):
-        return text
-    try:
-        new = add(json.loads(text))
-        if new is None:
-            return text
-        style = {"indent": 2} if "\n" in text else {"separators": (",", ":")}
-        return json.dumps(new, ensure_ascii=True, **style)
-    except Exception:  # noqa: BLE001 - an addition never costs the answer
-        return text
-
-
-def refused_argument(name, arguments):
-    """(argument name, bad-input detail) for the first argument of tool `name` that fails its check in
-    ARGUMENT_CHECKS, or None. Arguments that are absent, and tools without a row, are not checked here."""
-    checks = ARGUMENT_CHECKS.get(name)
-    if not checks or not isinstance(arguments, dict):
-        return None
-    for argument, (check, detail) in checks.items():
-        if argument in arguments and not check(arguments[argument]):
-            return argument, detail
-    return None
+# --- Description notes and answer additions for upstream tools (tool_answers.py) ------------------------------
+# add_tool() ends the descriptions of the tools in TOOL_NOTES with their note; call_tool() cleans a successful
+# upstream answer and adds the fields of ANSWER_ADDITIONS (_clean_texts()). The same objects as tool_answers',
+# so mock.patch.dict() on either changes both.
+TOOL_NOTES = tool_answers.TOOL_NOTES
+ANSWER_ADDITIONS = tool_answers.ANSWER_ADDITIONS
+add_to_answer = tool_answers.add_to_answer
+_clean_texts = tool_answers.clean_texts
 
 
 def read_only_server_class(base, allowed):
@@ -675,15 +530,6 @@ def _guard_outcome(group, source_groups):
     if group in garmin_guard.WORKER_PAUSE:
         return group
     return status_common.guard_group(source_groups) or group
-
-
-def _clean_texts(texts, name=None):
-    """text_hygiene.clean_tool_answer() of each str in `texts`; None entries (blocks that are no text) stay None.
-    The first block, the answer itself, then gets tool `name`'s ANSWER_ADDITIONS (add_to_answer)."""
-    cleaned = [None if t is None else text_hygiene.clean_tool_answer(t) for t in texts]
-    if cleaned and cleaned[0] is not None and name in ANSWER_ADDITIONS:
-        cleaned[0] = add_to_answer(name, cleaned[0])
-    return cleaned
 
 
 # Log levels of _failure()'s line: these groups need the owner;
@@ -947,144 +793,6 @@ def _trace_garmin_requests():
     return True
 
 
-# --- Garmin request path guard (full mode) ------------------------------------------------------------
-# garminconnect's Client._run_request builds f"{connectapi}/{path.lstrip('/')}" and requests (urllib3) then
-# removes dot segments, so a caller value that reaches a path ("x-/../../../userprofile-service/...", from
-# upstream's get_workout_by_id) reads ANOTHER Garmin API with the owner's token. Every Garmin API call of
-# garminconnect (connectapi, download, request, post, put, delete, and Garmin's wrappers around them) goes
-# through Client._run_request, so patch() wraps it at class level: upstream re-creates clients on login, and
-# each new instance gets the guard. The rules mirror key_mode.KeyModeClient.connectapi (_PATH_BAD):
-# no control characters or whitespace but a plain space, no "..", "%", "#", "\", "//", no "." segment.
-# Unlike key mode, a space and non-ASCII LETTERS pass: garminconnect puts the owner's display name in some
-# paths (usersummary/daily/<name>, prs/<name>), and a name such as "My Name" or "Ívar" must keep working;
-# requests percent-encodes them, and neither can change the path's structure. Any other non-ASCII character
-# (a full-width dot or slash, a lookalike) is refused. Query parameters passed as params= are not part of
-# the path and stay untouched.
-_PATH_REFUSED_PARTS = ("..", "%", "#", "\\", "//")
-# garminconnect itself writes a few query strings into its paths (get_lactate_threshold, the daily events,
-# the gear calls: garminconnect/__init__.py at 0.3.2). Only these names, with plain values, may follow a "?";
-# a caller's "?" anywhere else (a date "20261101?x") is refused like any other bad path.
-_PATH_QUERY_NAMES = frozenset({"sport", "aggregation", "aggregationStrategy", "calendarDate", "userProfilePk",
-                               "start", "limit"})
-_PATH_QUERY_VALUE_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}", re.ASCII)
-PATH_REFUSED_TEXT = "Invalid input: a Garmin request path was refused (it is not a plain API path)"
-
-
-class GarminPathRefused(tool_errors.KnownFailure, ValueError):
-    """A Garmin API path the guard refused before any request left. Its fixed text starts "Invalid input:"
-    (never the path, which is caller data), so tool_errors puts it in the bad-input group whether it arrives
-    raised, wrapped by garminconnect ("Connection error: Invalid input: ...") or as an upstream tool's
-    "Error ...: ..." answer: never a Garmin failure, never a guard cooldown."""
-
-    def __init__(self):
-        super().__init__(PATH_REFUSED_TEXT)
-
-
-def _without_dot_segments(route):
-    """`route` with "." and ".." segments resolved (RFC 3986 5.2.4, as urllib3 does before sending)."""
-    out = []
-    for segment in route.split("/"):
-        if segment == ".":
-            continue
-        if segment == "..":
-            if out:
-                out.pop()
-            continue
-        out.append(segment)
-    return "/".join(out)
-
-
-def garmin_path_ok(path):
-    """True when `path` is a plain Garmin API path the guard lets through (see the rules above)."""
-    if not isinstance(path, str) or not path or not path.isprintable():
-        return False
-    # Non-ASCII: letters and combining accents only ("E" + U+0301 is how some systems write "É").
-    if any((ch.isspace() and ch != " ") or (not ch.isascii() and not (ch.isalpha() or unicodedata.combining(ch)))
-           for ch in path):
-        return False
-    if any(bad in path for bad in _PATH_REFUSED_PARTS):
-        return False
-    route, has_query, query = path.partition("?")
-    if has_query:
-        for pair in query.split("&"):
-            name, has_value, value = pair.partition("=")
-            if name not in _PATH_QUERY_NAMES or not has_value or not _PATH_QUERY_VALUE_RE.fullmatch(value):
-                return False
-    return _without_dot_segments(route) == route
-
-
-def check_garmin_path(path):
-    """Raise GarminPathRefused unless garmin_path_ok(path)."""
-    if not garmin_path_ok(path):
-        raise GarminPathRefused()
-
-
-def _path_guarded_run_request(original):
-    """garminconnect Client._run_request with check_garmin_path() first; params= and the rest pass as given."""
-
-    def _run_request(self, method, path, *args, **kwargs):
-        check_garmin_path(path)
-        return original(self, method, path, *args, **kwargs)
-
-    _run_request._coach_path_guard = True
-    _run_request.__wrapped__ = original
-    return _run_request
-
-
-def _path_guard_installed(fn):
-    """True when `fn` or any function it wraps (__wrapped__, as the tracing hook wraps) is the path guard."""
-    for _ in range(8):
-        if fn is None:
-            return False
-        if getattr(fn, "_coach_path_guard", False):
-            return True
-        fn = getattr(fn, "__wrapped__", None)
-    return False
-
-
-_PATH_HOOK_ERROR = ("launch: garminconnect no longer sends every API call through Client._run_request(method, "
-                    "path, ...) building the URL from the path; the Garmin path guard needs a new hook")
-
-
-def _check_path_guard_hook():
-    """RuntimeError unless the installed garminconnect still builds every API URL in
-    Client._run_request(self, method, path, ...) from `path`, and its API methods (Client.connectapi,
-    download, request, post, put, delete; Garmin.connectapi and download through them) still call it. A
-    garminconnect bump that moved this would leave the guard installed on a method nothing calls; patch()
-    runs this at build time (Dockerfile), so the build fails instead."""
-    try:
-        import garminconnect
-        from garminconnect import client as gc_client
-
-        cls = gc_client.Client
-        hook = cls.__dict__["_run_request"]
-        while getattr(hook, "__wrapped__", None) is not None:  # this module's own wrappers
-            hook = hook.__wrapped__
-        params = list(inspect.signature(hook).parameters)[:3]
-        source = inspect.getsource(hook)
-        callers = [inspect.getsource(cls.__dict__[name])
-                   for name in ("connectapi", "download", "request", "post", "put", "delete")]
-        wrappers = {name: inspect.getsource(garminconnect.Garmin.__dict__[name]) for name in ("connectapi", "download")}
-    except (ImportError, KeyError, AttributeError, OSError, TypeError, ValueError) as exc:
-        raise RuntimeError(_PATH_HOOK_ERROR) from exc
-    if (params != ["self", "method", "path"] or "{path.lstrip('/')}" not in source
-            or not all("self._run_request(" in text for text in callers)
-            or not all(f"self.client.{name}(" in text for name, text in wrappers.items())):
-        raise RuntimeError(_PATH_HOOK_ERROR)
-
-
-def _install_path_guard():
-    """Wrap garminconnect's Client._run_request with the path guard (idempotent, also under the tracing
-    wrapper). Raises RuntimeError when the hook moved (_check_path_guard_hook())."""
-    _check_path_guard_hook()
-    from garminconnect import client as gc_client
-
-    cls = gc_client.Client
-    current = cls.__dict__["_run_request"]
-    if not _path_guard_installed(current):
-        cls._run_request = _path_guarded_run_request(current)
-
-
 def _source_outcome(result):
     """coach.status.sources' outcome for one fetch_all result: ok, skipped, timeout or missing."""
     if not isinstance(result, dict):
@@ -1254,11 +962,7 @@ def check_config(environ):
     return allowed, errors
 
 
-def _has_module(name):
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError):  # a missing parent package
-        return False
+_has_module = feature_startup.has_module
 
 
 def _package_errors(features):
@@ -1359,160 +1063,28 @@ def patch(garmin_auth="full"):
         _install_path_guard()
 
 
-def _optional(name):
-    """Import one of the features' modules (a sibling in ext/), or None with one log line naming it."""
-    try:
-        return importlib.import_module(name)
-    except Exception as exc:  # noqa: BLE001 - a feature's module never stops the server
-        log.error("feature: cannot import %s (%s); the feature stays off", name, type(exc).__name__)
-        return None
-
-
-def _history_tools_wanted(features):
-    """True when the history tools are registered: HISTORY_SEARCH=on, ROLE=app, not while forgetting."""
-    return features.history and features.role == "app" and not features.history_forget
-
-
-def _register_history_tools(app, features):
-    """history_tools.register(adder, features); adder(fn, name=None, description=None, **kwargs) registers
-    one tool through upstream's filter and the read-only gate, like this repo's other tools. A failure
-    leaves the tools out and the server up."""
-    module = _optional("history_tools")
-    if module is None:
-        return
-
-    def adder(fn, name=None, description=None, **kwargs):
-        if name is not None:
-            kwargs["name"] = name
-        if description is not None:
-            kwargs["description"] = description
-        return app.tool(**kwargs)(fn)
-
-    try:
-        module.register(adder, features)
-    except Exception as exc:  # noqa: BLE001
-        log.error("history search: the tools could not be registered (%s)", type(exc).__name__)
-
-
-def _build_guard(features, environ):
-    """The process's GarminGuard: on the Postgres shared state (garmin_guard_pg.PgSharedState, live=True: the
-    live path answers from memory and writes in the background) with HISTORY_SEARCH=on, else in memory. A
-    shared state that cannot be built falls back to memory with one log line."""
-    zone = (environ.get("REPORT_TZ") or "").strip() or None
-    state = None
-    if features.history and features.database_url_set:
-        module = _optional("garmin_guard_pg")
-        if module is not None:
-            try:
-                state = module.PgSharedState(features.database_url, status_common.zone(zone), live=True)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("call guard: the shared state could not be opened (%s); this process's copy is used",
-                            type(exc).__name__)
-                state = None
-    # Its table is created by the history startup thread (_start_catch_up), after history_store's migrations.
-    return garmin_guard.GarminGuard(state, zone=zone)
-
-
-def _forget_history(features):
-    """HISTORY_FORGET=yes: delete the stored history before anything uses the database: history_store's
-    forget_all() (the schema with the days, weeks, jobs and vectors), then history_retrieval.forget() and
-    history_embed.forget_caches() where those modules are in the image. Logs what each step removed (fixed
-    texts), then how to finish. Never raises: a failed step is one ERROR line, and True only when every step
-    worked."""
-    removed, ok = [], True
-    steps = (("history_store", lambda m: m.PgHistoryStore(features.database_url).forget_all()),
-             ("history_retrieval", lambda m: m.forget(features)),
-             ("history_embed", lambda m: m.forget_caches()))
-    for module_name, step in steps:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            if module_name == "history_store":
-                log.error("history forget: FAILED (the history modules are not in this image); build it with "
-                          "HISTORY=1")
-                return False
-            continue
-        try:
-            removed.append(_removed_text(step(module), module_name))
-        except Exception as exc:  # noqa: BLE001
-            ok = False
-            log.error("history forget: FAILED in %s (%s); check DATABASE_URL and the Postgres service, then "
-                      "redeploy with HISTORY_FORGET=yes still set", module_name, type(exc).__name__)
-            if module_name == "history_store":
-                return False
-    log.warning("history forget: removed %s", "; ".join(r for r in removed if r) or "nothing (already empty)")
-    if ok:
-        log.warning("history forget: done. Now delete HISTORY_FORGET from the app and the worker; with "
-                    "HISTORY_SEARCH=on the history is built again from Garmin. Postgres backups may still hold "
-                    "copies: check your Railway backup settings (docs/history-search.md#forgetting)")
-    return ok
-
-
-def _removed_text(result, default):
-    """A log text for what a forget step returned: names (str, list of str, dict keys) or `default`."""
-    if isinstance(result, str):
-        return result[:200]
-    if isinstance(result, dict):
-        return ", ".join(f"{k}: {v}" for k, v in sorted(result.items()) if isinstance(v, (int, str)))[:400]
-    if isinstance(result, (list, tuple)):
-        return ", ".join(str(x) for x in result if isinstance(x, (str, int)))[:400]
-    return default
+# --- The optional features' startup (feature_startup.py) -----------------------------------------------------
+# The pieces that read no state of this module are feature_startup's own functions under their old names here.
+# The three that need this module's state (the call guard and telemetry, the refresh hook, _has_module) are
+# small functions here that look that state up at call time, and _setup_features() calls them by name, so a
+# test that sets launch._GUARD or patches launch._start_catch_up sees the same behaviour as before the split.
+_optional = feature_startup.optional
+_history_tools_wanted = feature_startup.history_tools_wanted
+_register_history_tools = feature_startup.register_history_tools
+_build_guard = feature_startup.build_guard
+_forget_history = feature_startup.forget_history
+_removed_text = feature_startup.removed_text
+_run_role = feature_startup.run_role
+_app_garmin_client = feature_startup.app_garmin_client
+TOKEN_CLEANUP_HISTORY_OFF = feature_startup.TOKEN_CLEANUP_HISTORY_OFF
+TOKEN_CLEANUP_KEY_MODE = feature_startup.TOKEN_CLEANUP_KEY_MODE
+TOKEN_CLEANUP_NO_DRIVER = feature_startup.TOKEN_CLEANUP_NO_DRIVER
 
 
 def _start_catch_up(features):
-    """With history search on, the app's history startup, in a background thread so the server starts at
-    once: the migrations in a fixed order (history_store's, then the shared guard state's, then the job
-    queue's), then the catch-up jobs (the days missing from the index, enqueue.catch_up()) and
-    history_jobs.scheduled_jobs() (the sweep, a rebuild after a version change). A failure is one WARNING
-    line (its type only); the daily cron run enqueues the jobs later anyway."""
-    guard_state = getattr(_GUARD, "_state", None)
-
-    def run():
-        try:
-            import enqueue
-            import history_store
-            import jobqueue
-
-            store = history_store.PgHistoryStore(features.database_url)
-            store.migrate()
-            migrate_guard = getattr(guard_state, "migrate", None)
-            if migrate_guard is not None:
-                migrate_guard()
-            queue = jobqueue.PgJobQueue(features.database_url, application_name="coach-mcp-app")
-            queue.migrate()
-            today = datetime.datetime.now(status_common.zone()).date()
-            out = enqueue.catch_up(queue, today, store=store, telemetry=_TELEMETRY)
-            added = out.get("added") if isinstance(out, dict) else None
-            log.info("history search: startup catch-up enqueued %s jobs", added if isinstance(added, int) else "the")
-            try:
-                import history_jobs
-
-                for kind, key, payload in history_jobs.scheduled_jobs(store, today):
-                    queue.enqueue(kind, key, payload)
-            except ImportError:
-                pass
-        except Exception as exc:  # noqa: BLE001
-            log.warning("history search: the startup catch-up could not be enqueued (%s)", type(exc).__name__)
-
-    thread = threading.Thread(target=run, name="history-catch-up", daemon=True)
-    thread.start()
-    return thread
-
-
-def _run_role(features):
-    """ROLE=worker or enqueue: run worker.main() or enqueue.main() instead of the server; its exit code."""
-    name = "worker" if features.role == "worker" else "enqueue"
-    try:
-        module = importlib.import_module(name)
-    except Exception as exc:  # noqa: BLE001
-        print(f"launch: ROLE={features.role} cannot start: {name}.py could not be imported "
-              f"({type(exc).__name__}); build the image with HISTORY=1", file=sys.stderr)
-        return 1
-    setup_logging = getattr(module, "configure_logging", None)
-    if callable(setup_logging):
-        setup_logging()      # as when worker.py / enqueue.py run as a script: the library records hidden
-    code = module.main()
-    return code if isinstance(code, int) else 0
+    """feature_startup.start_catch_up() with this process's call guard and telemetry module (the history
+    startup thread: the migrations, then the catch-up jobs)."""
+    return feature_startup.start_catch_up(features, _GUARD, _TELEMETRY)
 
 
 def _setup_features(features, environ, allowed=frozenset()):
@@ -1565,26 +1137,6 @@ def _setup_features(features, environ, allowed=frozenset()):
         _start_token_cleanup(features)
 
 
-def _app_garmin_client():
-    """The app's logged-in garminconnect Client behind courses.garmin_client (upstream's _GarminProxy around
-    the pending-login holder around garminconnect.Garmin), or None while login is pending or failed. Walks
-    the wrappers through their instance dicts, so it never blocks on the login wait in __getattr__."""
-    try:
-        from garmin_mcp import courses
-    except Exception:  # noqa: BLE001
-        return None
-    obj = getattr(courses, "garmin_client", None)
-    for _ in range(5):
-        if obj is None:
-            return None
-        if callable(getattr(type(obj), "_token_expires_soon", None)) and \
-                callable(getattr(type(obj), "_refresh_session", None)):
-            return obj
-        inner = vars(obj) if hasattr(obj, "__dict__") else {}
-        obj = inner.get("_client", inner.get("client"))
-    return None
-
-
 def _refresh_app_token():
     """TokenPublisher's refresh hook: under the guard's refresh lock, refresh the app's Garmin login when its
     token expires within garminconnect's margin, so garminconnect rewrites garmin_tokens.json even while no
@@ -1605,141 +1157,23 @@ def _refresh_app_token():
 
 
 def _start_token_publisher(features, environ):
-    """Full mode with history search on: the worker cannot read this service's /data volume, so the app
-    copies its Garmin token file to Postgres, sealed with HISTORY_TOKEN_KEY, whenever it changes
-    (worker_garmin.TokenPublisher, every few minutes in a daemon thread). The app stays the only one that
-    refreshes the login. A failure is one WARNING line; the worker then waits ("token_stale")."""
-    try:
-        import worker_garmin
-
-        store = worker_garmin.PgTokenStore(features.database_url, features.history_token_key)
-        publisher = worker_garmin.TokenPublisher(store, (environ.get("GARMINTOKENS") or "/data/tokens").strip(),
-                                                 refresh=_refresh_app_token)
-
-        def run():
-            try:
-                store.migrate()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("history token publish: the table could not be created (%s)", type(exc).__name__)
-            publisher.start()
-
-        threading.Thread(target=run, name="history-token-setup", daemon=True).start()
-        return publisher
-    except Exception as exc:  # noqa: BLE001
-        log.warning("history token publish: could not start (%s)", type(exc).__name__)
-        return None
-
-
-TOKEN_CLEANUP_HISTORY_OFF = "history search is off"
-TOKEN_CLEANUP_KEY_MODE = "history search runs in key mode"
-TOKEN_CLEANUP_NO_DRIVER = ("history search is off: a Garmin token stored by an earlier full-mode history setup "
-                           "could not be checked or deleted, because this image has no database driver (psycopg); "
-                           "build it with HISTORY=1 once, or delete the history.garmin_token table by hand")
+    """feature_startup.start_token_publisher() with _refresh_app_token as the publisher's refresh hook (full
+    mode with history search on: the app's Garmin token file, sealed, to Postgres for the worker)."""
+    return feature_startup.start_token_publisher(features, environ, _refresh_app_token)
 
 
 def _start_token_cleanup(features, reason=TOKEN_CLEANUP_HISTORY_OFF):
-    """The app started with HISTORY_SEARCH off (or on in key mode) and DATABASE_URL set: delete the sealed
-    Garmin token a full-mode history setup left in Postgres (worker_garmin.delete_stored_token, which never
-    raises), in a daemon thread so the server starts at once. One fixed WARNING line when a row was deleted
-    ("<reason>: the stored Garmin token was deleted from the database"). An image without the database driver
-    logs one fixed WARNING line (TOKEN_CLEANUP_NO_DRIVER); a build whose worker_garmin has no
-    delete_stored_token skips it without a word."""
-    if not _has_module("psycopg"):
-        log.warning("%s", TOKEN_CLEANUP_NO_DRIVER)
-        return None
-    try:
-        import worker_garmin
-    except Exception:  # noqa: BLE001 - not in this image
-        return None
-    delete = getattr(worker_garmin, "delete_stored_token", None)
-    if not callable(delete):
-        return None
-    dsn = features.database_url
-
-    def run():
-        try:
-            if delete(dsn):
-                log.warning("%s: the stored Garmin token was deleted from the database", reason)
-        except Exception:  # noqa: BLE001 - it never raises; nothing may stop the server
-            pass
-
-    thread = threading.Thread(target=run, name="history-token-cleanup", daemon=True)
-    thread.start()
-    return thread
+    """feature_startup.start_token_cleanup() with this module's _has_module (the sealed Garmin token a
+    full-mode history setup left in Postgres, deleted in a daemon thread)."""
+    return feature_startup.start_token_cleanup(features, reason, has_module=_has_module)
 
 
-LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
-
-
-class _LineHandler(log_privacy.LevelStreamHandler):
-    """One plain line per record, INFO on stdout and warnings and errors on
-    stderr (Railway marks every stderr line as an error), all on stderr with
-    the stdio transport, whose stdout carries the protocol. The streams are
-    whatever sys.stdout and sys.stderr are at the time, so a test's redirect
-    sees the lines."""
-
-    coach_line_handler = True
-
-    def __init__(self, split: bool = False):
-        super().__init__(LOG_FORMAT, split=split)
-
-
-def _configure_logging():
-    """INFO on the root logger, one plain line per record (_LineHandler), set
-    up now so the sign-in's startup lines are not dropped.
-
-    Not the SDK's rich handler: with no terminal (Railway, Docker) it wraps
-    each record at 80 columns, and Railway's log viewer and
-    scripts/live-check.py then see one record as several entries (live test
-    R1, 17 Nov 2026). The SDK's configure_logging(), called here and again
-    when upstream's main() builds the server, finds a handler on the root
-    logger and changes nothing (logging.basicConfig)."""
-    root = logging.getLogger()
-    for handler in list(root.handlers):
-        if type(handler).__name__ == "RichHandler":
-            root.removeHandler(handler)
-    if not any(getattr(h, "coach_line_handler", False) for h in root.handlers):
-        transport = (os.environ.get("GARMIN_MCP_TRANSPORT") or "stdio").strip().lower()
-        root.addHandler(_LineHandler(split=transport != "stdio"))
-    root.setLevel(logging.INFO)
-    # garminconnect logs a failed call with the display name in the path and Garmin's answer: hidden; and
-    # every registered secret redacted on the root handlers.
-    log_privacy.install()
-    try:
-        from mcp.server.mcpserver.utilities.logging import configure_logging
-    except ImportError:  # the standard-library test leg; the image has the SDK
-        return
-    configure_logging("INFO")
-
-
-def _uvicorn_line_handler(split=True):
-    """The handler uvicorn's dictConfig builds for its "default" handler: INFO on stdout, warnings and errors
-    on stderr (log_privacy.LevelStreamHandler; uvicorn's own formatter replaces the format given here)."""
-    return log_privacy.LevelStreamHandler(LOG_FORMAT, split=split)
-
-
-def _split_uvicorn_logs(transport):
-    """With a network transport, uvicorn's own lines ("INFO:     Started server process ...") go to stdout and
-    only its warnings and errors to stderr, as _LineHandler splits ours: uvicorn's LOGGING_CONFIG sends its
-    "default" handler to stderr, and Railway marks every stderr line as an error. Never on the stdio
-    transport, whose stdout carries the protocol.
-
-    The SDK builds uvicorn.Config(app, host, port, log_level) without log_config (mcp 2.3.0,
-    MCPServer.run_streamable_http_async and run_sse_async), so Config uses its default argument, which is the
-    LOGGING_CONFIG dict object itself: it is changed in place, before the server starts. True when changed."""
-    if (transport or "stdio").strip().lower() == "stdio":
-        return False
-    try:
-        from uvicorn import config as uvicorn_config
-    except ImportError:  # the standard-library test leg; the image has uvicorn
-        return False
-    handlers = uvicorn_config.LOGGING_CONFIG.get("handlers", {})
-    default = handlers.get("default")
-    if not isinstance(default, dict):
-        return False
-    formatter = default.get("formatter", "default")
-    handlers["default"] = {"()": _uvicorn_line_handler, "split": True, "formatter": formatter}
-    return True
+# --- Logging (launch_logging.py) ------------------------------------------------------------------------------
+LOG_FORMAT = launch_logging.LOG_FORMAT
+_LineHandler = launch_logging._LineHandler
+_configure_logging = launch_logging.configure_logging
+_uvicorn_line_handler = launch_logging.uvicorn_line_handler
+_split_uvicorn_logs = launch_logging.split_uvicorn_logs
 
 
 # The sign-in's secret variables (auth_config reads them): their values are hidden in every log line.

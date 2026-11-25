@@ -18,7 +18,10 @@
         the Dockerfile's GARMIN_MCP_REF, and pip itself), and `pip check`
         reports only the deliberate conflicts in EXPECTED_CONFLICTS. Without
         options it checks this Python; with them, the output of
-        `pip freeze --all` and `pip check` saved from the image.
+        `pip freeze --all` and `pip check` saved from the image. A live check
+        (no options) also accepts the test-only packages of
+        config/requirements-test.txt at exactly their pins (the test legs
+        install them after this check); a saved image freeze does not.
     python -B scripts/ci-checks.py text-scan
         No hidden characters (bidirectional controls, zero-width characters,
         other control characters except tab and newline) in any file git
@@ -34,8 +37,11 @@
         has a reviewed licence in LICENSES. The build backends' file
         (config/requirements-build.txt) pins every package with a hash and
         shares none with constraints.txt (the Dockerfile uninstalls them).
+        The test-only file (config/requirements-test.txt) pins every package
+        with a hash, shares none with constraints.txt or the feature files,
+        and every package of it has a reviewed licence in TEST_LICENSES.
     python -B scripts/ci-checks.py licenses
-        The reviewed licences in LICENSES are allowed (ALLOWED_LICENSES, or
+        The reviewed licences in LICENSES and TEST_LICENSES are allowed (ALLOWED_LICENSES, or
         an exception with a reason in LICENSE_EXCEPTIONS), and each feature
         package installed in this Python declares no other licence in its
         metadata. Packages not installed here are checked from the table.
@@ -50,8 +56,8 @@
         says, tunnel.env only for the tunnel, .env only for the app, a volume
         at /data. Without compose.yaml there is nothing to check.
     python -B scripts/ci-checks.py audit
-        pip-audit (installed in this Python) on constraints.txt and the
-        hashed feature files, with the
+        pip-audit (installed in this Python) on constraints.txt, the hashed
+        feature files and the test-only file, with the
         reviewed exceptions in AUDIT_IGNORES (each has a review-by date; one
         that matches no finding any more fails, so it gets removed).
 
@@ -112,6 +118,9 @@ FEATURE_REQUIREMENTS = (
     (os.path.join(ROOT, "config", "requirements-telemetry.txt"), True),
     (os.path.join(ROOT, "config", "requirements-history.txt"), False),
 )
+# Test-only packages (coverage, hypothesis): hash-pinned, never in the image. The CI test legs install them
+# after verify-env; a live verify-env accepts them at exactly these pins.
+TEST_REQUIREMENTS = os.path.join(ROOT, "config", "requirements-test.txt")
 # Licence families allowed for the feature packages (SPDX ids, compared case-insensitively).
 ALLOWED_LICENSES = {"mit", "bsd-2-clause", "bsd-3-clause", "0bsd", "apache-2.0", "psf-2.0", "isc", "mpl-2.0",
                     "zlib", "cc0-1.0"}
@@ -166,6 +175,12 @@ LICENSES = {
     "websockets": "BSD-3-Clause",
     "xxhash": "BSD-2-Clause",
     "zstandard": "BSD-3-Clause",
+}
+# The reviewed licence of every package in TEST_REQUIREMENTS (same rules as LICENSES; never shipped).
+TEST_LICENSES = {
+    "coverage": "Apache-2.0",
+    "hypothesis": "MPL-2.0",
+    "sortedcontainers": "Apache-2.0",
 }
 # Grafana dashboards: exported JSON must not carry the stack's address or data source uids.
 DASHBOARDS_GLOB = ("dashboards/grafana/", ".json")
@@ -354,6 +369,31 @@ def build_pin_problems(pins: dict[str, str]) -> list[str]:
     return problems
 
 
+def test_pin_problems(pins: dict[str, str]) -> list[str]:
+    """pin-drift for TEST_REQUIREMENTS: hash-pinned, no package that constraints.txt (`pins`) or a feature file
+    pins (installed with --no-deps on top of them, it would change an image package), TEST_LICENSES in step."""
+    rel = os.path.relpath(TEST_REQUIREMENTS, ROOT)
+    try:
+        file_pins, problems = hashed_pins(TEST_REQUIREMENTS)
+    except OSError as e:
+        return [f"{rel}: cannot read it ({e.strerror})"]
+    image = dict(pins)
+    for path, _ in FEATURE_REQUIREMENTS:
+        try:
+            image.update(hashed_pins(path)[0])
+        except OSError:
+            pass  # feature_pin_problems reports it
+    for name in sorted(set(file_pins) & set(image)):
+        problems.append(f"{rel} pins {name}, which constraints.txt or a feature file pins too: test-only packages "
+                        "must not touch an image package")
+    for name in sorted(set(file_pins) - set(TEST_LICENSES)):
+        problems.append(f"{rel}: {name} has no reviewed licence in TEST_LICENSES (scripts/ci-checks.py)")
+    for name in sorted(set(TEST_LICENSES) - set(file_pins)):
+        problems.append(f"TEST_LICENSES lists {name}, which {rel} does not pin: remove the row")
+    say(f"pin-drift: {rel}: {len(file_pins)} hash-pinned packages")
+    return problems
+
+
 def license_ids(expression: str) -> set[str]:
     """The SPDX ids of an expression ("MPL-2.0 AND (Apache-2.0 OR MIT)"), lowercased."""
     return {w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
@@ -430,8 +470,16 @@ def cmd_verify_env(args) -> int:
     else:
         freeze = pip_output("freeze", "--all")
         check = pip_output("check")
+    # A live venv may hold the test-only packages at exactly their pins (installed after this check in CI).
+    test_pins: dict[str, str] = {}
+    if not args.freeze:
+        try:
+            test_pins, bad = hashed_pins(TEST_REQUIREMENTS)
+        except OSError as e:
+            return finish("verify-env", [f"{os.path.relpath(TEST_REQUIREMENTS, ROOT)}: cannot read it ({e.strerror})"])
+        problems += bad
 
-    seen, upstream_url = {}, None
+    seen, upstream_url, test_seen = {}, None, 0
     for line in (x.strip() for x in freeze):
         if not line or line.startswith("#"):
             continue
@@ -452,6 +500,9 @@ def cmd_verify_env(args) -> int:
     for name, version in sorted(seen.items()):
         if name in BOOTSTRAP:
             continue
+        if name not in pins and test_pins.get(name) == version:
+            test_seen += 1
+            continue
         if name not in pins:
             problems.append(f"{name}=={version} is installed but not pinned by constraints.txt")
         elif pins[name] != version:
@@ -467,7 +518,7 @@ def cmd_verify_env(args) -> int:
         if not any(p.match(line) for line in lines):
             say(f"verify-env: NOTE: the deliberate conflict {p.pattern!r} is gone; update constraints.txt's comment "
                 "and EXPECTED_CONFLICTS")
-    say(f"verify-env: {len(seen)} packages, {len(pins)} pins, upstream at {ref[:12]}, "
+    say(f"verify-env: {len(seen)} packages ({test_seen} test-only), {len(pins)} pins, upstream at {ref[:12]}, "
         f"{len(lines)} pip check lines")
     return finish("verify-env", problems)
 
@@ -563,6 +614,7 @@ def cmd_pin_drift(args) -> int:
         return finish("pin-drift", problems + [str(e)])
     problems += feature_pin_problems(pins)
     problems += build_pin_problems(pins)
+    problems += test_pin_problems(pins)
     return finish("pin-drift", problems)
 
 
@@ -570,7 +622,7 @@ def cmd_licenses(args) -> int:
     import importlib.metadata as md
 
     problems, checked = [], 0
-    for name, expression in sorted(LICENSES.items()):
+    for name, expression in sorted({**LICENSES, **TEST_LICENSES}.items()):
         for spdx in sorted(license_ids(expression)):
             if spdx not in ALLOWED_LICENSES and spdx not in LICENSE_EXCEPTIONS:
                 problems.append(f"{name}: licence {spdx} is neither allowed nor a reviewed exception")
@@ -586,7 +638,7 @@ def cmd_licenses(args) -> int:
                             f"not in the reviewed {expression!r}; review it and update LICENSES")
     for spdx, reason in sorted(LICENSE_EXCEPTIONS.items()):
         say(f"licenses: reviewed exception {spdx}: {reason}")
-    say(f"licenses: {len(LICENSES)} reviewed packages, {checked} installed here and checked against their metadata")
+    say(f"licenses: {len(LICENSES) + len(TEST_LICENSES)} reviewed packages, {checked} installed here and checked against their metadata")
     return finish("licenses", problems)
 
 
@@ -663,7 +715,7 @@ def cmd_compose(args) -> int:
 
 
 def cmd_audit(args) -> int:
-    """pip-audit on constraints.txt and FEATURE_REQUIREMENTS, one run per file: pip-audit refuses to mix a file
+    """pip-audit on constraints.txt, FEATURE_REQUIREMENTS and TEST_REQUIREMENTS, one run per file: pip-audit refuses to mix a file
     without hashes (constraints.txt) with hash-pinned ones in one run. Any run that fails or writes no report
     fails the step. A finding fails unless AUDIT_IGNORES names it (by id or alias) and its review date has not
     passed; an exception that matches nothing any more fails too, so none lingers."""
@@ -672,7 +724,7 @@ def cmd_audit(args) -> int:
         reasons[vuln] = reason
         if dt.date.fromisoformat(review_by) < dt.date.today():
             problems.append(f"the exception for {vuln} passed its review date {review_by}: review it ({reason})")
-    files = [CONSTRAINTS] + [path for path, _ in FEATURE_REQUIREMENTS]
+    files = [CONSTRAINTS] + [path for path, _ in FEATURE_REQUIREMENTS] + [TEST_REQUIREMENTS]
     dependencies, failed_runs = [], []
     with tempfile.TemporaryDirectory(prefix="ci-audit-") as tmp:
         for i, path in enumerate(files):

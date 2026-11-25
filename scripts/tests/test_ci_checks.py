@@ -98,6 +98,83 @@ class FeatureFiles(unittest.TestCase):
         self.assertIn("LICENSES lists beta, which no feature requirements file pins", problems[1])
 
 
+class TestPins(unittest.TestCase):
+    """pin-drift's rules for config/requirements-test.txt and verify-env's allowance for its packages."""
+
+    def setUp(self):
+        self.cc = load()
+        self.tmp = tempfile.mkdtemp(prefix="ci-checks-test-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp))
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def pin_problems(self, test_text, pins, feature_text=None, licenses=None):
+        test = self.write("test.txt", test_text)
+        features = [(self.write("feature.txt", feature_text), False)] if feature_text else []
+        with mock.patch.object(self.cc, "TEST_REQUIREMENTS", test), \
+                mock.patch.object(self.cc, "FEATURE_REQUIREMENTS", features), \
+                mock.patch.object(self.cc, "TEST_LICENSES", licenses if licenses is not None else
+                                  {"cov": "Apache-2.0", "hyp": "MPL-2.0"}), \
+                redirect_stdout(io.StringIO()):
+            return self.cc.test_pin_problems(pins)
+
+    def test_the_repo_file_passes(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(self.cc.test_pin_problems(self.cc.constraints()), [])
+
+    def test_clean_test_pins_pass(self):
+        self.assertEqual(self.pin_problems(f"cov==1.0 {HASH}\nhyp==2.0 {HASH}\n", {"alpha": "1.0"}), [])
+
+    def test_a_package_constraints_pins_fails(self):
+        problems = self.pin_problems(f"cov==1.0 {HASH}\nhyp==2.0 {HASH}\n", {"cov": "1.0"})
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("pins cov, which constraints.txt or a feature file pins too", problems[0])
+
+    def test_a_package_a_feature_file_pins_fails(self):
+        problems = self.pin_problems(f"cov==1.0 {HASH}\nhyp==2.0 {HASH}\n", {}, feature_text=f"hyp==2.0 {HASH}\n")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("pins hyp, which constraints.txt or a feature file pins too", problems[0])
+
+    def test_an_unhashed_pin_fails(self):
+        problems = self.pin_problems(f"cov==1.0\nhyp==2.0 {HASH}\n", {})
+        self.assertTrue(problems)
+
+    def test_licence_table_must_match_the_test_pins(self):
+        problems = self.pin_problems(f"cov==1.0 {HASH}\ngamma==3 {HASH}\n", {})
+        self.assertEqual(len(problems), 2, problems)
+        self.assertIn("gamma has no reviewed licence in TEST_LICENSES", problems[0])
+        self.assertIn("TEST_LICENSES lists hyp", problems[1])
+
+    def verify_env(self, freeze_lines):
+        test = self.write("test.txt", f"cov==1.0 {HASH}\n")
+        ref = "r" * 40
+        freeze = [f"garmin-mcp @ {self.cc.UPSTREAM_URL.format(ref=ref)}", "alpha==1.0"] + freeze_lines
+        out = io.StringIO()
+        with mock.patch.object(self.cc, "TEST_REQUIREMENTS", test), \
+                mock.patch.object(self.cc, "constraints", lambda: {"alpha": "1.0"}), \
+                mock.patch.object(self.cc, "read", lambda path, real=self.cc.read: real(path) if path == test else ""), \
+                mock.patch.object(self.cc, "dockerfile_ref", lambda text: ref), \
+                mock.patch.object(self.cc, "EXPECTED_CONFLICTS", []), \
+                mock.patch.object(self.cc, "pip_output", lambda *a: freeze if a[0] == "freeze" else []), \
+                redirect_stdout(out):
+            code = self.cc.cmd_verify_env(mock.Mock(freeze=None, pip_check=None))
+        return code, out.getvalue()
+
+    def test_verify_env_accepts_a_test_package_at_its_pin(self):
+        code, out = self.verify_env(["cov==1.0"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("(1 test-only)", out)
+
+    def test_verify_env_refuses_a_test_package_at_another_version(self):
+        code, out = self.verify_env(["cov==1.1"])
+        self.assertEqual(code, 1, out)
+        self.assertIn("cov==1.1 is installed but not pinned by constraints.txt", out)
+
+
 class Licenses(unittest.TestCase):
     def setUp(self):
         self.cc = load()
@@ -162,9 +239,9 @@ class Audit(unittest.TestCase):
             code = cc.cmd_audit(None)
         return code, out.getvalue()
 
-    def test_pip_audit_reads_constraints_and_both_feature_files_one_run_each(self):
-        """pip-audit refuses to mix the unhashed constraints.txt with the hash-pinned feature files
-        in one run ("does not contain a hash"), so each file is a run of its own."""
+    def test_pip_audit_reads_constraints_the_feature_and_test_files_one_run_each(self):
+        """pip-audit refuses to mix the unhashed constraints.txt with the hash-pinned feature and test
+        files in one run ("does not contain a hash"), so each file is a run of its own."""
         cc = load()
         seen = []
         code, _ = self.audit(cc, self.stub(seen))
@@ -172,7 +249,7 @@ class Audit(unittest.TestCase):
         files = [[c[i + 1] for i, a in enumerate(c) if a == "--requirement"] for c in seen]
         self.assertEqual([[os.path.relpath(f, ROOT) for f in run] for run in files],
                          [["constraints.txt"], ["config/requirements-telemetry.txt"],
-                          ["config/requirements-history.txt"]])
+                          ["config/requirements-history.txt"], ["config/requirements-test.txt"]])
 
     def test_any_failed_run_or_finding_fails_the_step(self):
         cc = load()

@@ -18,7 +18,10 @@ tool_errors group of a failure (None on success), so a worker's 429 pauses the l
 bucket or a live call that ends within INLINE_WAIT_MAX_S is waited out inside the job (a job makes several calls;
 deferring it at call 2 would roll it back and restart it from call 1 for ever); any other GuardBlocked passes
 through to the worker loop. Only reads pass: get_*, download_* (no data/json/files/headers/method keyword) and
-connectapi(path, params=...) (READ_PREFIXES, _get_only); names starting with "_" are not reachable.
+connectapi(path, params=...) (READ_PREFIXES, _get_only); names starting with "_" are not reachable. In full mode
+the app's Garmin request path guard (garmin_paths) is on garminconnect's Client before the first client is built
+(_garminconnect_factory), so a path that a job's value bent is refused as bad input before any request leaves;
+selfcheck() fails the image build when garminconnect moves the hook it wraps.
 
 A new client (a fresh stored token) loads its profile again before a data call; a client without a display name
 makes no data call (ProfileMissing, a Defer: nothing stored, no day marked final).
@@ -302,8 +305,15 @@ def _no_refresh():
 
 
 def _garminconnect_factory():
+    """A new garminconnect.Garmin, after the app's Garmin request path guard is on garminconnect's Client
+    (garmin_paths.install_path_guard(), idempotent; RuntimeError when garminconnect moved the hook): a path
+    a job's value bent never leaves this process either. The worker never runs launch.patch(), which installs
+    it in the app."""
     import garminconnect
 
+    import garmin_paths
+
+    garmin_paths.install_path_guard()
     return garminconnect.Garmin()
 
 
@@ -394,14 +404,17 @@ class StoredTokenGarmin:
 
 _SELFCHECK = "worker_garmin: garminconnect changed: Client has no {name}()"
 # The private garminconnect.Client names full mode relies on: the expiry check (this worker, and the app's
-# token refresh in launch.py) and the refresh itself (blocked here; serialised by garmin_guard in the app).
-CLIENT_NAMES = ("_token_expires_soon", "_refresh_session", "loads", "dumps", "connectapi")
+# token refresh in launch.py), the refresh itself (blocked here; serialised by garmin_guard in the app) and
+# _run_request, which the Garmin request path guard wraps (garmin_paths, here and in the app).
+CLIENT_NAMES = ("_token_expires_soon", "_refresh_session", "_run_request", "loads", "dumps", "connectapi")
 
 
 def selfcheck() -> None:
     """Raise RuntimeError unless garminconnect's Client still has the private and public names full mode uses
-    (CLIENT_NAMES), so a garminconnect upgrade that renames them fails the image build instead of every
-    worker job waiting for a token for ever. No network."""
+    (CLIENT_NAMES) and still sends every API call through the hook the path guard wraps
+    (garmin_paths.check_path_guard_hook()), so a garminconnect upgrade that renames or moves them fails the
+    image build instead of every worker job waiting for a token for ever, or calling Garmin unguarded. No
+    network."""
     try:
         from garminconnect import client as gc_client
     except ImportError:
@@ -410,6 +423,9 @@ def selfcheck() -> None:
     for name in CLIENT_NAMES:
         if not callable(getattr(cls, name, None)):
             raise RuntimeError(_SELFCHECK.format(name=name))
+    import garmin_paths
+
+    garmin_paths.check_path_guard_hook()
 
 
 # --- the guard around every call ------------------------------------------------------------------------------------

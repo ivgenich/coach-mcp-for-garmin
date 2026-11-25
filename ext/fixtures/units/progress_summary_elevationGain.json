@@ -1,0 +1,34 @@
+{
+ "_note": "Fully synthetic values (no names, GPS, device serials or personal ids). The answer has the shape of Garmin's /fitnessstats-service/activity answer as garminconnect's get_progress_summary_between_dates(start, end, metric) returns it (a list with one item; stats -> activity type -> metric -> count/min/max/avg/sum). Pins: elevationGain min/max/avg/sum are in centimeters. Checked against a real account on 25 Nov 2026: the sums matched the activity details to 0.1 after the conversion. Cycling max 74,230 cm = 742.3 m on one ride.",
+ "request": {
+  "start_date": "2026-11-02",
+  "end_date": "2026-11-22",
+  "metric": "elevationGain"
+ },
+ "answer": [
+  {
+   "date": "2026-11-25",
+   "countOfActivities": 14,
+   "stats": {
+    "running": {
+     "elevationGain": {
+      "count": 6,
+      "min": 1200.0,
+      "max": 45500.0,
+      "avg": 12816.7,
+      "sum": 76900.0
+     }
+    },
+    "cycling": {
+     "elevationGain": {
+      "count": 3,
+      "min": 8150.0,
+      "max": 74230.0,
+      "avg": 33626.7,
+      "sum": 100880.0
+     }
+    }
+   }
+  }
+ ]
+}

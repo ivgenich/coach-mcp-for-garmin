@@ -49,6 +49,10 @@ a climb ends after 300 m below the threshold.
 | File | Role |
 |---|---|
 | `launch.py` | Hooks the tools into upstream; `patch()`; the tool policy and `--check-config`; turns the sign-in on and sets the server instructions in `main()`; the tool-error wrapper and the description note (`ReadOnlyFastMCP`, below) |
+| `garmin_paths.py` | The argument checks (`refused_argument`) and the Garmin path guard (`garmin_path_ok`, the `Client._run_request` wrapper and its hook check), installed by `launch.py` and by the worker's Garmin client. Standard library only |
+| `tool_answers.py` | The description notes (`TOOL_NOTES`) and the fields added to upstream answers (`ANSWER_ADDITIONS`, `add_to_answer`), applied after the answer cleanup. Standard library only |
+| `feature_startup.py` | Startup of the optional features for `launch.py`: the call guard, the history forget, the startup catch-up and the Garmin token publisher and cleanup threads |
+| `launch_logging.py` | The log format and line handler (INFO on stdout, warnings and errors on stderr) and the uvicorn log split, used by `launch.py`. Standard library only |
 | `key_mode.py` | Key mode (`GARMIN_AUTH=key`): checks the key settings, gets and caches the 24-hour access token, and stands in for the Garmin client the tools call, backed by Garmin's official Personal API client. |
 | `version.py` | This project's version (`VERSION`): the one source for serverInfo.version, the CHANGELOG heading and the release tag. |
 | `mcp2_compat.py` | Runs upstream, written for mcp 1.x, on mcp 2.x (below) |

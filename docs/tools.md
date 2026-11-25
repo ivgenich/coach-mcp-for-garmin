@@ -76,7 +76,7 @@ never call Garmin. They are not in `config/enabled-tools.txt`: the switch adds t
 Upstream's answers are Garmin's data as JSON and are not this project's public API
 ([updates](updates.md)). Where they are easy to misread, the server adds fields (never removes or
 renames one, and skips a field upstream already sends) and ends the tool's description with a short
-note (`TOOL_NOTES` and `ANSWER_ADDITIONS` in `ext/launch.py`):
+note (`TOOL_NOTES` and `ANSWER_ADDITIONS` in `ext/tool_answers.py`):
 
 - `get_progress_summary_between_dates`: `unit`, Garmin's raw unit of `sum`, `avg`, `min` and `max`
   (`cm` for `distance` and `elevationGain`, `ms` for `duration` and `movingDuration`, `kcal` for
