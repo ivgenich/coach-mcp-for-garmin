@@ -163,7 +163,20 @@ class OverridesApplied(OverrideBase):
         w = self.a_normal_week()
         a, _ = self.edit(pe.Override("cap_week_km", week_start=_day(w["start"]), km=w["planned_km"]))
         self.assertEqual(a["weeks"], self.base["weeks"])
-        a, _ = self.edit(pe.Override("cap_week_km", week_start=_day(w["start"]), km=0.0))
+        # a week cut to 0 km is a gap (rule 3): the next normal week's long run may not grow, so the edit alone
+        # is refused (long_cap, the step being part of that cap, before long_step) and applies once that long
+        # run is capped at the one before the gap
+        zero = pe.Override("cap_week_km", week_start=_day(w["start"]), km=0.0)
+        a, _ = self.edit(zero)
+        self.assertEqual([r["rule"] for r in a["overrides"]["refused"]], ["long_cap"])
+        self.assertIn("first normal week after a gap", a["overrides"]["refused"][0]["value"] or "")
+        real = [x for x in self.base["weeks"] if x["kind"] != "week0"]
+        before = [x["long_km"] for x in real if x["kind"] == "normal" and x["start"] < w["start"] and x["long_km"]]
+        ref = before[-1] if before else self.base["start"]["longest_run_8w_km"]
+        nxt = next(x for x in real if x["kind"] == "normal" and x["start"] > w["start"] and x["long_km"])
+        long_day = next(s["date"] for s in nxt["sessions"] if s["role"] == "long")
+        a, _ = self.edit(pe.Override("cap_long", date=_day(long_day), km=min(ref, nxt["long_km"])), zero)
+        self.assertEqual(a["overrides"]["refused"], [])
         self.assertEqual(next(x for x in a["weeks"] if x["start"] == w["start"])["planned_km"], 0.0)
 
     def test_long_run_day_to_saturday_swaps_with_the_easy_run(self):

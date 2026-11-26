@@ -60,11 +60,12 @@ and so what a MAJOR, MINOR or PATCH release may change:
   km only if legs and HRV are back, otherwise 0.65-0.75 of it in whole km; the first run after
   the race: skip it if still sore).
 - Plan rules v2, the long-run step: the +2 km counts from the last normal week's long run as
-  placed, not the longest so far (a week cut to 23 km let the next jump to 32 km), and after a week
-  with no long run that has a blocked run day (or no run) from the last long run planned, whatever
-  its week; the `long_step` invariant checks that sequence (a travel week then a deload had let the
-  long run jump 18.5 to 25.8 km). A week with every run day blocked warns `no_runs_blocked` instead of `long_dropped`
-  and `q1_to_strides`.
+  placed, not the longest so far (a week cut to 23 km let the next jump to 32 km). After a week
+  with no long run that has a blocked run day (or no run), the first normal week's long run returns
+  to the last one before the gap with no +2 km, and the step resumes the week after (deload and
+  B-race long runs in between change nothing); the `long_step` invariant checks that sequence (a
+  travel week then a deload had let the long run jump 18.5 to 25.8 km with no check). A week with
+  every run day blocked warns `no_runs_blocked` instead of `long_dropped` and `q1_to_strides`.
 - Plan overrides: `cap_long {date or key, km}` lowers one long run without cutting the rest of its
   week (refused above the planned km, under 4 km or on a day without a long run). `plan_preview`
   never stores a refused edit (the version keeps only the edits that applied), stores no new

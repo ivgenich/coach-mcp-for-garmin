@@ -16,7 +16,7 @@ What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
     deload due just before it is skipped); no make-up after a reduced week; taper x0.70 and race week x0.45 of
     the peak week (as planned), the race itself not counted;
  3. long run in normal weeks <= min(max(0.50 x week km, longest run of the last 8 weeks), 3 h at the slow edge
-    of its pace band, the last normal week's long run + 2 km (after a gap the last one planned), 32 km);
+    of its pace band, the last normal week's long run + 2 km (the first normal week after a gap: + 0), 32 km);
     reduced weeks scale it; no long run within 21 days of the A race is longer than 0.80 x the peak long run,
     so the peak long run is >= 21 days out;
  4. quality by phase with dose caps (threshold <= 10%, intervals <= 8%, marathon pace <= 20% of week km) and
@@ -707,9 +707,11 @@ def long_time_cap(paces: Paces, rules: Mapping[str, Any]) -> Optional[Meters]:
     return Meters(float(rules["long_max_s"]) * paces.lt * float(rules["bands_of_lt"]["long"][0]))
 
 
-def long_cap(ctx: Context, target: Meters, last_long: Meters) -> Meters:
+def long_cap(ctx: Context, target: Meters, last_long: Meters, step: Optional[float] = None) -> Meters:
+    """Rule 3's cap of a normal week's long run; `step` 0: the first normal week after a gap (no growth)."""
     r = ctx.rules
-    caps = [max(ctx.inputs.long_share * target, ctx.longest), last_long + float(r["long_step_m"]),
+    step_m = float(r["long_step_m"]) if step is None else step
+    caps = [max(ctx.inputs.long_share * target, ctx.longest), last_long + step_m,
             ctx.inputs.max_long_km * 1000.0]
     t = long_time_cap(ctx.paces, r)
     if t is not None:
@@ -835,8 +837,9 @@ def step_counts(ctx: Context, s: Session, weeks: Sequence[Week]) -> bool:
 
 def long_gap(w: Week, ctx: Context) -> bool:
     """Rule 3's gap: a normal or deload week with no long run in the plan that has a blocked run day or no run
-    at all (travel, a week off). The long-run step after it counts from the last long run planned, whatever
-    its week, until a normal week's long run: the longest so far is not what the legs last ran."""
+    at all (travel, a week off). The first normal week's long run after it returns to the last normal week's
+    long run before the gap, with no +2 km step (deloads and B-race holds between them change nothing); the
+    step resumes the week after."""
     if w.kind not in ("normal", "deload") or any(s.role == "long" for s in w.sessions):
         return False
     i = ctx.inputs
@@ -866,12 +869,11 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
     capped_warned = False
     last_normal = ctx.km0
     last_long = ctx.longest
-    last_planned = ctx.longest   # the last long run placed, whatever its week (the step after a gap)
-    gap = False
+    gap = False   # a gap week (long_gap) since the last normal week's long run: the next one gets no step
     peak = Meters(0.0)
     peak_long = Meters(0.0)
     for w in weeks:
-        step_ref = last_planned if gap else last_long
+        step_ref = last_long
         w.long_ref = step_ref
         # Reduced weeks scale the longest long run placed so far (before one is placed: what a normal week
         # would allow now), never the longest run of the history, which the caps may have cut.
@@ -893,7 +895,7 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
                         "detail": f"weekly km held at {km(ceiling)} km, the larger of {pc['of_max_week']} x the "
                                   f"biggest week of the last {r['history_weeks']} ({km(biggest)} km) and the start "
                                   f"{km(ctx.km0)} km + {pc['over_km0_km']} km; deloads still apply"})
-            long_m = long_cap(ctx, w.target, step_ref)
+            long_m = long_cap(ctx, w.target, step_ref, 0.0 if gap else None)
             if late_cap is not None:
                 long_m = Meters(min(long_m, late_cap))
             w.long_target = _floor_m(long_m)
@@ -937,12 +939,9 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
             w.base = week_base(w.target, got, n_got, cap_km)
             last_normal = w.base
             peak = Meters(max(peak, w.base))
-        if longs:
-            last_planned = Meters(placed)
-            if gap:   # after a gap the step continues from this long run, until a normal week's
-                last_long = Meters(placed)
-                gap = w.kind != "normal"
-        elif long_gap(w, ctx):
+        if longs and w.kind == "normal":
+            gap = False   # the return week is placed: the +2 km step resumes from it
+        elif not longs and long_gap(w, ctx):
             gap = True
         if w.kind == "normal" and not late and longs:
             # the step counts from the last normal week's long run as placed (a cut one included), not the
@@ -2102,8 +2101,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
     last_normal = float(ctx.km0)
     peak = 0.0
     run_long = float(ctx.longest)
-    run_last = float(ctx.longest)   # the last long run planned (rule 3's step after a gap, long_gap)
-    gap = False
+    gap = False   # rule 3: a gap week since the last normal week's long run (long_gap): the next one, no step
     peak_long = 0.0
     probs: Dict[str, List[str]] = {k: [] for k in ("growth_cap", "deload_depth", "no_makeup", "b_windows",
                                                     "a_taper", "long_cap", "long_step", "easy_share",
@@ -2115,20 +2113,22 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
         p = planned(w)
         long_s = [s for s in w.sessions if s.role == "long"]
         lmax = max((s.distance for s in long_s), default=0.0)
-        step_ref = run_last if gap else run_long
+        step_ref = run_long
+        w_step = 0.0 if gap else step
         if max(p, float(w.target)) > ceiling + EPS_M:
             probs["peak_ceiling"].append(f"week {w.number}: {km(max(p, float(w.target)))} km > {km(ceiling)} km")
         if w.kind == "normal":
             if p > last_normal * growth + EPS_M:
                 probs["no_makeup" if prev_reduced else "growth_cap"].append(
                     f"week {w.number}: {km(p)} km > {km(last_normal * growth)} km")
-            limit = min([max(ctx.inputs.long_share * w.target, ctx.longest), step_ref + step,
+            limit = min([max(ctx.inputs.long_share * w.target, ctx.longest), step_ref + w_step,
                          ctx.inputs.max_long_km * 1000] + ([float(t_cap)] if t_cap is not None else [])) + EPS_M
             if lmax > limit:
-                probs["long_cap"].append(f"week {w.number}: long {km(lmax)} km > {km(limit)} km")
-            if lmax > step_ref + step + EPS_M:
-                probs["long_step"].append(f"week {w.number}: long {km(lmax)} km > {km(step_ref)} + 2 km"
-                                          + (" (after a week without a long run)" if gap else ""))
+                probs["long_cap"].append(f"week {w.number}: long {km(lmax)} km > {km(limit)} km"
+                                         + (" (the first normal week after a gap: no step)" if gap else ""))
+            if lmax > step_ref + w_step + EPS_M:
+                probs["long_step"].append(f"week {w.number}: long {km(lmax)} km > {km(step_ref)} km"
+                                          + (" (the first normal week after a gap: no step)" if gap else " + 2 km"))
             # the engine's base may only be lower than the target it could have had; before any override it
             # is at most what was placed plus the blocked days' share
             target = min(last_normal * growth, float(ceiling))
@@ -2159,14 +2159,11 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
             ref = peak_long if peak_long > 0 else float(long_cap(ctx, Meters(last_normal), Meters(step_ref)))
             if lmax > ref + EPS_M:
                 probs["long_step"].append(f"week {w.number}: long {km(lmax)} km in a reduced week")
-        # rule 3's gap, from the plan as it is: after a week without a long run (long_gap), the step counts
-        # from the last long run planned until a normal week's long run
-        if long_s:
-            run_last = lmax
-            if gap:
-                run_long = lmax
-                gap = w.kind != "normal"
-        elif long_gap(w, ctx):
+        # rule 3's gap, from the plan as it is: after a week without a long run (long_gap), the first normal
+        # week's long run gets no step; deload and B-race long runs between them change nothing
+        if long_s and w.kind == "normal":
+            gap = False
+        elif not long_s and long_gap(w, ctx):
             gap = True
         hard = sum(hard_seconds(s, paces)[0] for s in w.sessions if s.counts)
         total = sum(hard_seconds(s, paces)[1] for s in w.sessions if s.counts)

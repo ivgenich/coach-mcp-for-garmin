@@ -134,9 +134,11 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    the longest of the last 8 weeks or a long run placed before it). The cap applies on the day the long run
    lands, also when it moved a day, before the 80%-easy check and the easy runs fill the week. After a gap,
    a normal or deload week with no long run that has a blocked run day or no run at all (travel, a week
-   off), the +2 km step counts from the last long run actually planned, whatever its week, until a normal
-   week's long run: a travel week then a deload with an 18.5 km long run gives at most 20.5 km the week
-   after, not the longest so far + 2 km. `long_step` checks the same sequence on the finished plan.
+   off), the first normal week's long run returns to the last normal week's long run before the gap, with
+   no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
+   nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km. `long_step` checks the
+   same sequence on the finished plan, so an override that empties a week (`cap_week_km` 0) is refused until
+   the next normal week's long run is capped at the one before the gap (`cap_long`, listed first).
 4. Quality by phase: threshold, intervals, marathon pace, with dose caps (threshold 10%, intervals 8%,
    marathon pace 20% of the week's km) and at least 80% of the week's time easy. Strides stay at 6 x 100 m,
    which `get_daily_status` classifies as easy.
