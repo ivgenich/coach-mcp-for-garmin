@@ -428,10 +428,12 @@ CASES = {
                       ("Knee", "knee ", " knee", "lower back", "lower-back", "kne", "elbow", "\u043a", 1, None)),
     "sharp": ((True, False), (0, 1, "true", "false", None, "")),
     "week_start": (("", "2026-11-02"), ("2026-02-30", "2026-11-02T00:00", "x", 0)),
+    "version": ((0, 1, 7, 1_000_000), (-1, 1_000_001, True, False, 1.0, "1", None, 10 ** 30)),
+    "action": (("", "start", "stop"), ("Start", "STOP", " start", "start ", "go", "cancel", 1, None, True)),
 }
 COLUMN = {"race_date": "date", "start_date": "date", "end_date": "date"}
 PLAN_TOOL_NAMES = frozenset({"plan_assess", "plan_preview", "plan_get", "log_feedback", "plan_commit", "plan_cancel",
-                             "plan_review_week", "plan_apply_changes"})
+                             "plan_review_week", "plan_apply_changes", "plan_activate"})
 
 
 def cases_for(argument):

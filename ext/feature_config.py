@@ -25,7 +25,8 @@ server does.
                                  plan's own workouts to Garmin (docs/training-plan.md)
     PLAN_TRACKING                off (default) | on: needs PLAN_TOOLS=on; links finished activities to the plan's
                                  sessions, adds the plan to get_daily_status / get_weekly_status and serves
-                                 log_feedback (writes only the app's own database, never Garmin)
+                                 log_feedback and plan_activate (write only the app's own database, never
+                                 Garmin)
 
 LANGFUSE_* variables are read by the eval runner only, never by the server.
 

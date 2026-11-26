@@ -16,7 +16,7 @@ Every listed tool must be annotated readOnlyHint=true. With --write-tools
 NAMES (a server with PLAN_WRITES=on or PLAN_TRACKING=on) those names must be
 listed as well (add them to --expect-names) with readOnlyHint=false,
 idempotentHint=true, the destructiveHint of their kind and the openWorldHint
-of their reach (log_feedback false: it writes only the app's database; the
+of their reach (log_feedback, plan_activate false: only the app's database; the
 Garmin writers true); every other tool stays readOnlyHint=true. A write tool
 is never called, except the one --refused-call names (below). Without these
 flags the run is unchanged.
@@ -57,11 +57,11 @@ INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
 ACCEPT = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 failed = []
 # The own write tools (launch.OWN_WRITE_TOOLS) and the destructiveHint each carries; all are idempotent.
-WRITE_TOOL_DESTRUCTIVE = {"plan_commit": False, "log_feedback": False, "plan_cancel": True,
+WRITE_TOOL_DESTRUCTIVE = {"plan_commit": False, "log_feedback": False, "plan_activate": False, "plan_cancel": True,
                           "plan_apply_changes": True}
-# The openWorldHint each carries: log_feedback is in upstream's LOCAL_ONLY_TOOLS (launch.patch()); the others
-# write Garmin.
-WRITE_TOOL_OPEN_WORLD = {"plan_commit": True, "log_feedback": False, "plan_cancel": True,
+# The openWorldHint each carries: log_feedback and plan_activate are in upstream's LOCAL_ONLY_TOOLS
+# (launch.patch()); the others write Garmin.
+WRITE_TOOL_OPEN_WORLD = {"plan_commit": True, "log_feedback": False, "plan_activate": False, "plan_cancel": True,
                          "plan_apply_changes": True}
 # The consent page's calendar box (owner_auth._form_page), offered only with PLAN_WRITES=on.
 WRITE_BOX_TEXT = "Also allow this app to change my Garmin calendar"

@@ -17,8 +17,8 @@ workouts, only after the user approved the preview their token came from, never 
 a training plan to plan_assess and plan_preview, and says what to do after a failed write. The default config
 keeps INSTRUCTIONS word for word. Same structure, phrases and limits.
 
-With PLAN_TRACKING=on log_feedback writes the app's own database (never Garmin), so "No tool changes any data."
-is false too: INSTRUCTIONS_TRACKING (plan writes off) and INSTRUCTIONS_PLAN_TRACKING (plan writes on, which also
+With PLAN_TRACKING=on log_feedback and plan_activate write the app's own database (never Garmin), so "No tool
+changes any data." is false too: INSTRUCTIONS_TRACKING (plan writes off) and INSTRUCTIONS_PLAN_TRACKING (plan writes on, which also
 serve plan_apply_changes) say which tools change what. launch.main() picks the text; the default config still
 sends INSTRUCTIONS.
 
@@ -120,7 +120,7 @@ INSTRUCTIONS_TRACKING = (
     "Access to one person's Garmin Connect data: activities, planned workouts, courses, sleep, HRV, stress, Body "
     "Battery, heart-rate zones, training readiness, training status and load, VO2max, race predictions and "
     "personal records. No tool changes Garmin data; log_feedback stores only the user's own feedback in this "
-    "server's database."
+    "server's database, and plan_activate the plan it follows."
     "\n\n"
     "Which tool: \"How am I today?\" or \"Should I train hard today?\" -> get_daily_status. A week in review -> "
     "get_weekly_status. Pacing a saved course or race route -> get_course_profile. Find ids with get_activities, "
@@ -147,11 +147,11 @@ INSTRUCTIONS_TRACKING = (
 )
 
 INSTRUCTIONS_PLAN_TRACKING = (
-    "One person's Garmin data: activities, workouts, courses, sleep, HRV, stress, Body Battery, zones, "
-    "readiness, training load, VO2max, race predictions, records. Only plan_commit, plan_cancel and "
+    "A person's Garmin data: activities, workouts, courses, sleep, HRV, stress, Body Battery, zones, "
+    "readiness, load, VO2max, race predictions, records. Only plan_commit, plan_cancel and "
     "plan_apply_changes change Garmin data: the plan's own workouts, after the user approved in this "
-    "conversation their token's changes; after \"declined\", never call again. log_feedback writes only the "
-    "app's database."
+    "conversation their token's changes; after \"declined\", never call again. log_feedback and plan_activate "
+    "write only the app's database."
     "\n\n"
     "Which tool: \"How am I today?\" or \"Should I train hard today?\" -> get_daily_status. A week in review -> "
     "get_weekly_status. Pacing a saved course or race route -> get_course_profile. A training plan -> "
