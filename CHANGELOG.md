@@ -140,6 +140,20 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ### Fixed
 
+- Plan rebuilds (`plan_preview` with a `plan_id`): the engine now plans around the stored version
+  (`build_plan(history=...)`) instead of pasting the stored days up to today over a plan built
+  without them. Today's week keeps its stored days as fixed sessions and plans only the days after
+  today around them (hard days apart, the week's target less what those days had, no second long
+  run or quality kind, unique keys: after a swap a new session no longer takes a kept session's
+  key), and the invariants run on the whole merged plan (a problem only the kept days have is the
+  warning `history_rule` and `invariants.history`; an override of a kept day is refused,
+  `past_day`). The volume chain, the long-run step and rule 7 go on from the stored weeks: the first
+  long run after a half-distance triathlon keeps its cap of 0.75 x the last long run before it (also
+  once the B race has left the inputs), and km0, the longest run and the peak ceiling are the ones
+  the plan was first built with (stored with each version as `basis`), so a rebuild no longer drops
+  the targets or lifts the peak above the original ceiling. The stored `basis` also records the day
+  the plan counts as built, so a plan built on a Sunday whose Monday has no session keeps its grid.
+
 - Weekly status: plan completion counts only the workouts already due. `completion_pct` is
   completed of due (it was completed of scheduled, so a week in progress read low in the text),
   and a workout still ahead that Garmin already linked counts in the new `plan.done_early`

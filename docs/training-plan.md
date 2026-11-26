@@ -147,9 +147,21 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    quality stay, checked by the invariants again, with the usual fallbacks and warnings when a rule now fails),
    never as a week 0, and the weeks before it are not planned again. Nothing is planned for today or an earlier
    day: the new version keeps the stored version's sessions up to today and every past week whole, so it
-   holds the plan's whole history and tracking, `log_feedback` and `plan_review_week` still find them; those
-   days are history, not checked again by the invariants. With the same inputs and history, a rebuild later in
-   the week changes none of its remaining days. The last week is the race week. Phases from the end: taper (the race week, and the week before it in
+   holds the plan's whole history and tracking, `log_feedback` and `plan_review_week` still find them. The
+   engine plans the rest around them (`build_plan(history=...)`): the stored days of this week are fixed
+   sessions of it, so the days after today keep hard days apart from them, get the week's target less the
+   larger of the kept km and the km the week as planned had on those days (nothing is made up), plan no long
+   run or quality kind the kept days already hold, and never reuse a kept session's key (a session moved by
+   an override keeps the key of the day it was planned on; a new session on a day whose key it holds takes
+   the stored version's key of that day). The volume chain (rule 2), the long-run step (rule 3) and rule 7's
+   references go on from the stored weeks, and the peak ceiling, km0 and longest run are the ones the plan was
+   first built with (stored with each version as `basis`, never in the answer; a plan stored before has its
+   `start` block's numbers and the ceiling of this snapshot's weeks before the plan began), so the weeks the
+   plan itself planned and the athlete then ran never move them. The invariants run on the whole merged plan:
+   a problem the kept days have on their own is history (`invariants.history` and the warning
+   `history_rule`), any other one fails, so the newly planned days keep every rule against the kept ones. An
+   override of a kept day is refused (`past_day`). With the same inputs, a rebuild on any later day plans no
+   day differently from the stored version. The last week is the race week. Phases from the end: taper (the race week, and the week before it in
    plans of 10 weeks or more), peak (1 week from 8 weeks, 2 from 11), then base (4/9 of the rest) and build.
 2. Weekly km: the start (km0) is the mean of the last 4 full weeks. A normal week grows by at most 8% on
    the last normal week, counted as planned: when the easy-run cap (or the run days) holds a week below its
@@ -231,6 +243,10 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    - the first long run after a B race is at most 0.70 x that reference (0.60 after a full-distance
      triathlon), and after a full-distance triathlon it is 10 or more days later: a long run sooner becomes an
      easy run (at most the easy cap) and the next long run is the first.
+
+   A rebuilt plan (rule 1) keeps its B races up to today from the stored version (`plan_preview` takes only
+   B races after today), and its references (the peak long run so far, the last long run before the race)
+   come from the stored weeks, never from the 8 weeks' longest run of the new snapshot.
 
    After a half-distance triathlon (`tri_half`) the first long run is also at most 0.75 x the last long run
    before the race (`long_after_of_last`; the longest run of the last 8 weeks before any), a ceiling in 100 m
