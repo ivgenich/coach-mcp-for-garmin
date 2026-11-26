@@ -563,13 +563,15 @@ class Acwr(unittest.TestCase):
         # Israman's load: 330 minutes x the all-sport load per minute, on the race day
         self.assertEqual(acwr["b_races"], [{"date": "2027-01-29", "kind": "tri_half", "minutes": 330,
                                             "load": int(round(330 * acwr["load_per_min"]["all"]))}])
-        # the race day itself (lower than before rule 7's long-run limits: the two long runs before it are shorter)
-        self.assertEqual(acwr["planned_max"], {"ratio": 1.39, "date": "2027-01-29"})
-        # the mini-taper and recovery week is cut to its floor; the day after the race stays above 1.3 (held);
-        # the recovery week after it is cut too
+        # the race day itself: the cap acts on it too (its mini-taper runs are cut to their floor)
+        self.assertEqual(acwr["planned_max"], {"ratio": 1.37, "date": "2027-01-29"})
+        self.assertEqual(acwr["cap_max"], {"ratio": 1.37, "date": "2027-01-29"})
+        # the mini-taper and recovery week is cut to its floor; the race day and the day after it stay above 1.3
+        # (held, and said so); the recovery week after it is cut too
         self.assertEqual([c["week"] for c in acwr["cuts"]], [9, 10])
+        self.assertEqual([h["date"] for h in acwr["held"]], ["2027-01-29", "2027-01-30"])
         held = next(w for w in plan["warnings"] if w["id"] == "acwr_floor")
-        self.assertEqual(held["dates"], ["2027-01-30"])
+        self.assertEqual(held["dates"], ["2027-01-29", "2027-01-30"])
         w9 = next(w for w in plan["weeks"] if w["week"] == 9)
         self.assertGreaterEqual(w9["planned_km"], round(0.6 * w9["target_km"], 1))
         loads = pe.day_loads(plan["_check"]["weeks"], plan["_check"]["ctx"])
@@ -697,18 +699,148 @@ class Acwr(unittest.TestCase):
         self.assertEqual(pe.b_race_minutes(pe.BRace(D(2027, 1, 29), "run"), model), 120.0)
         self.assertIsNotNone(plan_ctx)
 
-    def test_a_cut_never_ends_under_the_floor_and_a_useless_step_is_undone(self):
+    def test_a_held_week_is_at_its_floors_and_enforcing_again_changes_nothing(self):
         plan = build("G5")
         weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
         w3 = next(w for w in weeks if w.number == 3)
         self.assertTrue(w3.acwr_held)
         self.assertGreaterEqual(pe._planned(w3), pe._acwr_floor(w3, ctx) - pe.EPS_M)
-        before = list(w3.sessions)
-        self.assertFalse(pe._acwr_step(w3, ctx, w3.end, pe._planned(w3), 5000.0))   # no room above the floor
-        self.assertFalse(pe._acwr_step(w3, ctx, w3.start, 0.0, 5000.0))   # no easy run on or before Monday
-        self.assertEqual(w3.sessions, before)
+        for h in plan["acwr"]["held"]:   # a held day: no cut is left for it
+            day = D.fromisoformat(h["date"])
+            owner = next(o for d, _r, o in pe.acwr_cap_days(weeks, ctx) if d == day)
+            self.assertEqual(pe._cut_options(weeks, ctx, day, owner), [])
+        before = copy.deepcopy(w3.sessions)
         self.assertFalse(pe.enforce_acwr(w3, ctx))   # nothing more to cut: held again
         self.assertTrue(w3.acwr_held)
+        self.assertEqual(w3.sessions, before)
+
+    def test_the_invariant_says_not_enforced_instead_of_ok(self):
+        plan = build("G4")
+        self.assertNotIn("acwr_cap", plan["invariants"]["checked"])
+        self.assertEqual([i["id"] for i in plan["invariants"]["not_enforced"]], ["acwr_cap"])
+        self.assertIn("not enforced", plan["invariants"]["not_enforced"][0]["detail"])
+        entry = next(i for i in pe.check_invariants(plan) if i["id"] == "acwr_cap")
+        self.assertTrue(entry["not_enforced"])
+        self.assertEqual(build("G1")["invariants"]["not_enforced"], [])
+
+
+# --- the owner's real-data test (2026-11-26): a travel gap, Israman as a B race, easy overrides ----------------
+
+OWNER_TODAY = D(2026, 11, 26)
+OWNER_WEEKS_KM = (38, 42, 37, 41, 39, 41, 40, 40.4)   # 4-week mean 40.1 km
+
+
+def owner_case(overrides=(), loads=None):
+    """Owner-like numbers: LT 4:08/km, longest run 23.8 km, marathon prediction 3:32:42, runs on Mon/Tue/Wed/Fri
+    (long run Friday), Tel Aviv Marathon 2027-02-26 (A) with Israman (half) on 2027-01-29, no goal, travel on
+    14-20 Dec 2026 and the load model tracking Garmin."""
+    acts, garmin = pe.sample_loads(OWNER_TODAY, [k * 1000.0 for k in OWNER_WEEKS_KM], **(loads or {}))
+    snap = pe.Snapshot(today=OWNER_TODAY, week_m=tuple(pe.Meters(k * 1000.0) for k in OWNER_WEEKS_KM),
+                       week_runs=(4,) * 8, longest_run_8w_m=pe.Meters(23800.0),
+                       lt_speed_mps=pe.MetersPerSecond(1000.0 / 248.0), prediction_s=(("marathon", 12762),),
+                       activity_load=acts, garmin_load=garmin)
+    inputs = pe.PlanInputs(race_date=D(2027, 2, 26), b_races=(pe.BRace(D(2027, 1, 29), "tri_half"),),
+                           run_days=(0, 1, 2, 4), rest_days=(3, 5, 6), long_run_day=4,
+                           blocked_dates=tuple(D(2026, 12, 14) + dt.timedelta(days=i) for i in range(7)),
+                           overrides=tuple(overrides))
+    return inputs, snap
+
+
+def _easy_runs(week):
+    return [s for s in week["sessions"] if s["role"] in ("easy", "strides")]
+
+
+def _key_of(plan, week, role, nth=0):
+    """The key of week `week`'s nth session of `role` ("quality": any quality role), by date (session keys are
+    their days)."""
+    w = next(w for w in plan["weeks"] if w["week"] == week)
+    roles = pe.QUALITY_ROLES if role == "quality" else (role,)
+    return [s["key"] for s in w["sessions"] if s["role"] in roles][nth]
+
+
+class OwnerAcwr(unittest.TestCase):
+    """The three findings of the owner's test, on owner-like inputs."""
+
+    def setUp(self):
+        self.inputs, self.snap = owner_case()
+        self.plan = pe.build_plan(self.inputs, self.snap, what_if_runs=False)
+
+    def test_the_invariant_measures_the_series_the_cuts_constrain(self):
+        # finding 1: the planned ratio peaked at 1.42 on 12 days while acwr_cap said ok
+        plan = self.plan
+        self.assertTrue(plan["acwr"]["enforced"])
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
+        loads = pe.day_loads(weeks, ctx)
+        held = {h["date"] for h in plan["acwr"]["held"]}
+        runs = {s.date for w in weeks for s in w.sessions if s.counts and s.date > OWNER_TODAY}
+        day = OWNER_TODAY + dt.timedelta(days=1)
+        while day < self.inputs.race_date:   # every day with a planned run in its 7 days: <= 1.3 unless held
+            if any(day - dt.timedelta(days=i) in runs for i in range(7)) and day.isoformat() not in held:
+                self.assertLessEqual(pe.acwr_on(day, loads), 1.3 + 1e-9, day)
+            day += dt.timedelta(days=1)
+        floor_days = {d for w in plan["warnings"] if w["id"] == "acwr_floor" for d in w["dates"]}
+        self.assertTrue(held and held <= floor_days | {h["date"] for h in plan["acwr"]["held"][5:]}, held)
+        for h in plan["acwr"]["held"]:   # held: nothing of the owner week is left to cut for it
+            day = D.fromisoformat(h["date"])
+            owner = next(o for d, _r, o in pe.acwr_cap_days(weeks, ctx) if d == day)
+            self.assertEqual(pe._cut_options(weeks, ctx, day, owner), [], day)
+        # a run lengthened in a cut week is caught
+        w6 = next(w for w in weeks if w.number == 6)
+        easy = next(s for s in w6.sessions if s.role == "easy")
+        w6.sessions[w6.sessions.index(easy)] = pe.make_session(easy.key, easy.date, "easy", pe.Meters(12000.0),
+                                                               ctx.paces, ctx.rules)
+        failed = {i["id"]: i for i in pe.check_invariants(plan) if not i["ok"]}
+        self.assertIn("acwr_cap", failed)
+
+    def test_cuts_keep_an_easy_run_and_eighty_percent_easy(self):
+        # finding 2: weeks 5-7 ended with threshold + MP/intervals + long run and no easy run
+        free = pe.build_plan(self.inputs, dataclasses.replace(self.snap, garmin_load=()), what_if_runs=False)
+        for week, loose in zip(self.plan["weeks"], free["weeks"]):
+            if _easy_runs(loose):
+                self.assertTrue(_easy_runs(week), week["start"])
+        for n in (5, 6, 7):
+            week = next(w for w in self.plan["weeks"] if w["week"] == n)
+            roles = [s["role"] for s in week["sessions"]]
+            self.assertIn("easy", roles, n)
+            self.assertIn("long", roles, n)
+            self.assertTrue(any(r in pe.QUALITY_ROLES for r in roles), n)
+        cut = next(c for c in self.plan["acwr"]["cuts"] if c["week"] == 6)
+        detail = next(w["detail"] for w in self.plan["warnings"] if w["id"] == "acwr_cut"
+                      and w["dates"] == ["2027-01-04"])
+        self.assertIn(f"from {cut['from_km']} to {cut['to_km']} km", detail)
+        self.assertIn("threshold", detail)   # quality is cut before an easy run goes
+        self.assertTrue(self.plan["invariants"]["ok"], self.plan["invariants"]["failed"])
+
+    def test_easing_a_session_changes_nothing_else(self):
+        # finding 3: easing one session in weeks 5 and 6 cut ~25 km elsewhere and dropped week 6's easy run
+        base = {s["key"]: s for w in self.plan["weeks"] for s in w["sessions"]}
+        eased = (_key_of(self.plan, 5, "quality"), _key_of(self.plan, 6, "quality", 1))
+        inputs, snap = owner_case([pe.Override("easy", key=k) for k in eased])
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertEqual([o["key"] for o in plan["overrides"]["applied"]], list(eased))
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        now = {s["key"]: s for w in plan["weeks"] for s in w["sessions"]}
+        self.assertEqual(set(now), set(base))
+        for key, s in base.items():
+            if key not in eased:
+                self.assertEqual(now[key], s, key)
+        self.assertEqual(plan["acwr"]["cuts"], self.plan["acwr"]["cuts"])
+        # every warning describes the plan as it is, once
+        quality = {s["date"] for s in now.values() if s["role"] in pe.QUALITY_ROLES}
+        for w in plan["warnings"]:
+            if w["id"] == "quality_dropped_easy_share":
+                self.assertFalse(set(w["dates"]) & quality, w)
+        ids = [(w["id"], tuple(w["dates"])) for w in plan["warnings"]]
+        self.assertEqual(len(ids), len(set(ids)), ids)
+
+    def test_a_refused_override_leaves_no_trace(self):
+        inputs, snap = owner_case([pe.Override("easy", key=_key_of(self.plan, 5, "long"))])   # under 80% easy: refused
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertEqual(plan["overrides"]["refused"][0]["rule"], "easy_share")
+        self.assertEqual(plan["weeks"], self.plan["weeks"])
+        self.assertEqual(plan["warnings"], self.plan["warnings"])
+        self.assertEqual(plan["acwr"], self.plan["acwr"])
 
 
 # --- rules v2: race pacing (item 13) --------------------------------------------------------------------------

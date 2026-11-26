@@ -4,10 +4,12 @@
  "plan": {
   "acwr": {
    "b_races": [],
+   "cap_max": null,
    "checks": [],
    "cuts": [],
    "days_over": 0,
    "enforced": false,
+   "held": [],
    "load_per_min": {},
    "planned_max": null,
    "reason": "no recorded run with a Garmin training load, so planned runs have no load",
@@ -130,10 +132,15 @@
     "a_taper",
     "last_quality",
     "rest_days",
-    "one_run_per_day",
-    "acwr_cap"
+    "one_run_per_day"
    ],
    "failed": [],
+   "not_enforced": [
+    {
+     "detail": "not enforced: no recorded run with a Garmin training load, so planned runs have no load",
+     "id": "acwr_cap"
+    }
+   ],
    "ok": true
   },
   "kind": "training_plan",

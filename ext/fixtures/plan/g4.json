@@ -4,6 +4,7 @@
  "plan": {
   "acwr": {
    "b_races": [],
+   "cap_max": null,
    "checks": [
     {
      "date": "2026-11-25",
@@ -27,6 +28,7 @@
    "cuts": [],
    "days_over": 0,
    "enforced": false,
+   "held": [],
    "load_per_min": {
     "all": 1.406,
     "bike": 1.1,
@@ -136,10 +138,15 @@
     "a_taper",
     "last_quality",
     "rest_days",
-    "one_run_per_day",
-    "acwr_cap"
+    "one_run_per_day"
    ],
    "failed": [],
+   "not_enforced": [
+    {
+     "detail": "not enforced: the model is within 0.15 of Garmin's ratio on 0 of 3 check days (at least 2 needed), so the planned ratio is only reported",
+     "id": "acwr_cap"
+    }
+   ],
    "ok": true
   },
   "kind": "training_plan",

@@ -35,8 +35,9 @@ What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
 12. planned all-sport ACWR (v2): each day's load = minutes x the sport's load per minute from the recent
     activity list (fixed calendar sessions count with their own sport); acute = the last 7 days, chronic =
     the last 28 days / 4, as Garmin's. While the model tracks Garmin's reported ratio within 0.15 on the
-    history, a week whose planned ratio passes 1.3 has its run km cut (never raised, never below 0.6 x its
-    target); otherwise the ratio is only reported, with a warning;
+    history, a day whose planned ratio passes 1.3 has its week's runs cut (quality and the long run shorter
+    first, one easy run kept, 80% easy kept; never raised, never below 0.6 x its target; reduce-only overrides
+    never cause a cut); otherwise the ratio is only reported, with a warning;
 13. race pacing (v2): with a course, per-segment paces for the A race at the goal pace, slower on climbs
     (course_profile's climbs) and the flats faster, so the course takes the goal time.
 
@@ -68,6 +69,7 @@ ROLES = ("easy", "strides", "long", "threshold", "intervals", "mp", "race", "b_r
 QUALITY_ROLES = ("threshold", "intervals", "mp")
 HARD_ROLES = frozenset({"long", "threshold", "intervals", "mp", "race", "b_race"})
 OVERRIDE_KINDS = ("move", "swap", "rest", "easy", "cap_week_km", "long_run_day", "cap_km")
+REDUCE_ONLY_OVERRIDES = ("rest", "easy", "cap_week_km", "cap_km")   # the others move sessions
 # The weekly review (plan_review, Stage 4) may slow the easy and long bands by at most this share.
 MAX_EASY_BAND_SLOWDOWN = 0.10
 
@@ -544,7 +546,11 @@ class Week:
     long_ref: Meters = Meters(0.0)   # normal week: the longest long run before it (the 2 km step); reduced week: the long run it scales
     base: Meters = Meters(0.0)       # normal week: the km the next weeks grow from (assign_targets)
     acwr_from: Tuple[float, int] = (0.0, 0)   # (metres, sessions) before an ACWR cut (item 12), 0 without one
-    acwr_held: bool = False          # item 12: a ratio stays above the cap and no further cut lowers it
+    acwr_held: bool = False          # item 12: a ratio stays above the cap and nothing is left to cut
+    # item 12: what the cuts changed, key -> [role, metres before, metres now (0: dropped), date], and the first
+    # (day, ratio) above the cap that made the week cut
+    acwr_ops: Dict[str, List[Any]] = dataclasses.field(default_factory=dict)
+    acwr_first: Optional[Tuple[dt.date, float]] = None
     b_cut: float = 0.0               # rule 7: metres a B-race long-run limit took off (not made up, no shortfall)
     quality: Tuple[str, ...] = ()
     sessions: List[Session] = dataclasses.field(default_factory=list)
@@ -675,6 +681,10 @@ class Context:
     # an existing plan rebuilt (build_plan(born=...)): this week is planned from the day after this one, as it
     # was first planned; the days up to today are then the stored version's (the caller keeps them). None: today.
     opens_after: Optional[dt.date] = None
+    # item 12: the plan as the ratio cap counts it after reduce-only overrides (_cap_sessions): key -> the
+    # session before such an override changed it, and key -> (week, session) of the runs such an override removed
+    cap_as: Dict[str, "Session"] = dataclasses.field(default_factory=dict)
+    cap_ghosts: Dict[str, Tuple["Week", "Session"]] = dataclasses.field(default_factory=dict)
 
     def window_factor(self, day: dt.date) -> Optional[float]:
         for w in self.windows:
@@ -1118,9 +1128,30 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
     if sum(s.distance for s in sessions if s.counts) > w.target + EPS_M:
         _cap_week(w, w.target, ctx)   # a small week: the fixed parts of the sessions add up past its target
     _limit_easy_share(w, w.sessions, ctx, estimate_rest=False)
+    _easy_run_on_spare_day(w, ctx, easy_max)
     for s in w.sessions:
         if s.hard_or_long:
             hard_before.add(s.date)
+
+
+def _easy_run_on_spare_day(w: Week, ctx: Context, easy_max: float) -> None:
+    """Rule 4: a week with a quality session or a long run but no easy run (rule 4 dropped the quality session
+    whose km kept the easy runs out) gets one on a free run day (one not next to a hard day first) from the
+    km left of its target, when they reach the easy minimum. Not in a week with a blocked date or a fixed
+    session (their km are dropped, not moved to another day)."""
+    r = ctx.rules
+    if any(s.role in EASY_ROLES for s in w.sessions) or calendar_week(w, ctx) \
+            or not any(s.role in QUALITY_ROLES + ("long",) for s in w.sessions):
+        return
+    used = {s.date for s in w.sessions}
+    free = [d for d in w.days() if ctx.runnable(d) and d not in used and ctx.window_factor(d) is None]
+    left = _floor_m(min(float(w.target) - w.b_cut - _planned(w), easy_max))
+    if not free or left < float(r["easy_min_km"]) * 1000.0:
+        return
+    hard = {s.date for s in w.sessions if s.hard_or_long} | {d for d in w.days() if ctx.event_hard(d)}
+    day = sorted(free, key=lambda d: (not _adjacent_ok(d, hard), d))[0]
+    w.sessions.append(make_session(session_key(day), day, "easy", left, ctx.paces, r))
+    w.sessions.sort(key=lambda s: (s.date, s.key))
 
 
 def _mini_days(ctx: Context) -> Set[dt.date]:
@@ -1289,6 +1320,7 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
     assign_targets(weeks, ctx, lambda w: fill_week(w, ctx, hard, index),
                    lambda w: _capacity(w, ctx, hard, index))
     ctx.built_longs = _longs(all_weeks, ctx)
+    reenforce_acwr(all_weeks, ctx)   # item 12: the days after a week before the next week's first run
     return all_weeks, ctx
 
 
@@ -1422,149 +1454,273 @@ def session_load(s: Session, ctx: Context) -> float:
     return float(secs) / 60.0 * model.lpm["run"]
 
 
-def day_loads(weeks: Sequence[Week], ctx: Context) -> Dict[dt.date, float]:
-    """Load per day: recorded up to today, then the fixed sessions, the B races and the plan's runs."""
-    model = ctx.load
-    if model is None:
-        return {}
-    out = dict(model.actual)
-    for d, v in model.fixed.items():
-        out[d] = out.get(d, 0.0) + v
-    for w in weeks:
-        for s in w.sessions:
-            if s.date > ctx.snapshot.today:
-                out[s.date] = out.get(s.date, 0.0) + session_load(s, ctx)
-    return out
-
-
-def _cuttable(w: Week) -> List[Session]:
-    return [s for s in w.sessions if s.role in ("easy", "strides")]
-
-
 def _report_days(w: Week, ctx: Context) -> List[dt.date]:
     """Week w's days whose planned ratio is reported: after today, before the A race."""
     return [d for d in w.days() if ctx.snapshot.today < d < ctx.inputs.race_date]
-
-
-def _acwr_days(w: Week, ctx: Context) -> List[dt.date]:
-    """The days the cap acts on: the reported days a cut of the week can lower, i.e. on or after its first
-    easy run (whose 7-day window then holds it), not a B race day (its own load is not the plan's to cut)."""
-    cut = [s.date for s in _cuttable(w) if s.date > ctx.snapshot.today]
-    if not cut:
-        return []
-    first = min(cut)
-    return [d for d in _report_days(w, ctx) if d >= first and ctx.b_race_on(d) is None]
 
 
 def _acwr_floor(w: Week, ctx: Context) -> float:
     return float(ctx.rules["acwr"]["min_keep_of_target"]) * float(w.target)
 
 
-def acwr_over(w: Week, ctx: Context, loads: Mapping[dt.date, float]) -> List[Tuple[dt.date, float]]:
-    """(day, planned ratio) of the days the cap acts on in week w that are above the limit."""
-    limit = float(ctx.rules["acwr"]["max"])
-    out = []
-    for d in _acwr_days(w, ctx):
-        r = acwr_on(d, loads, ctx.rules)
-        if r is not None and r > limit + 1e-9:
-            out.append((d, r))
-    return out
-
-
 def _planned(w: Week) -> float:
     return float(sum(s.distance for s in w.sessions if s.counts))
 
 
-def _acwr_step(w: Week, ctx: Context, day: dt.date, floor: float, step: float) -> bool:
-    """One cut for the ratio on `day`: the longest easy run of week w on or before it gets `step` metres
-    shorter (100 m steps), or goes when it would fall under the easy minimum, never taking the week under
-    `floor`; a quality session goes too if the week would fall under 80% easy, and the step is undone if
-    that takes the week under the floor. True when the week got smaller."""
+# Rule 4's smallest quality sessions (quality_work's minimums): an ACWR cut takes reps off down to these.
+QUALITY_MIN_REPS = {"threshold": 1, "intervals": 3}
+EASY_ROLES = ("easy", "strides")
+
+
+def _built_m(w: Week, s: Session) -> float:
+    """A session's distance before the ACWR cuts of its week."""
+    op = w.acwr_ops.get(s.key)
+    return float(op[1]) if op is not None else float(s.distance)
+
+
+def _cap_sessions(weeks: Sequence[Week], ctx: Context) -> List[Tuple[Week, Session, bool]]:
+    """The plan as the ratio cap counts it: (week, session, an ACWR cut may change it). A session a reduce-only
+    override (easy, cap_km, rest, cap_week_km) changed or removed counts as it was before that override and is
+    never cut: easing a run never makes the cap cut another one."""
+    out: List[Tuple[Week, Session, bool]] = []
+    for w in weeks:
+        for s in w.sessions:
+            was = ctx.cap_as.get(s.key)
+            out.append((w, s, True) if was is None else (w, dataclasses.replace(was, date=s.date), False))
+    for key in sorted(ctx.cap_ghosts):
+        gw, g = ctx.cap_ghosts[key]
+        out.append((gw, g, False))
+    return out
+
+
+def _loads_of(sessions: Iterable[Session], ctx: Context) -> Dict[dt.date, float]:
+    model = ctx.load
+    if model is None:
+        return {}
+    out = dict(model.actual)
+    for d, v in model.fixed.items():
+        out[d] = out.get(d, 0.0) + v
+    for s in sessions:
+        if s.date > ctx.snapshot.today:
+            out[s.date] = out.get(s.date, 0.0) + session_load(s, ctx)
+    return out
+
+
+def day_loads(weeks: Sequence[Week], ctx: Context) -> Dict[dt.date, float]:
+    """Load per day: recorded up to today, then the fixed sessions, the B races and the plan's runs."""
+    return _loads_of((s for w in weeks for s in w.sessions), ctx)
+
+
+def cap_loads(weeks: Sequence[Week], ctx: Context) -> Dict[dt.date, float]:
+    """day_loads of the plan as the cap counts it (_cap_sessions)."""
+    return _loads_of((s for _w, s, _c in _cap_sessions(weeks, ctx)), ctx)
+
+
+def acwr_cap_days(weeks: Sequence[Week], ctx: Context, days: Optional[Iterable[dt.date]] = None
+                  ) -> List[Tuple[dt.date, float, Week]]:
+    """(day, ratio, owner week) of the days the cap acts on (all of them, or those of `days`): after today and
+    before the A race (a B race day too: its mini-taper runs can lower it), with a planned run in the 7
+    days ending on it (a cut of one lowers the ratio). The ratio is measured on the plan as the cap counts it;
+    the owner is the week of the latest such run."""
+    today, race = ctx.snapshot.today, ctx.inputs.race_date
+    view = _cap_sessions(weeks, ctx)
+    loads = _loads_of((s for _w, s, _c in view), ctx)
+    runs = sorted(((s.date, w.number, w) for w, s, _c in view if s.counts and s.date > today),
+                  key=lambda x: (x[0], x[1]))
+    if days is None:
+        days = [today + dt.timedelta(days=i) for i in range(1, (race - today).days)]
+    acute_n = int(ctx.rules["acwr"]["acute_days"])
+    out = []
+    for d in days:
+        if not today < d < race:
+            continue
+        lo = d - dt.timedelta(days=acute_n - 1)
+        inside = [x for x in runs if lo <= x[0] <= d]
+        if not inside:
+            continue
+        r = acwr_on(d, loads, ctx.rules)
+        if r is not None:
+            out.append((d, r, inside[-1][2]))
+    return out
+
+
+def _easy_share_ok(sessions: Sequence[Session], ctx: Context) -> bool:
+    """Rule 4 as the invariant easy_share measures it: quality work at most 20% of the week's time."""
+    hard = sum(hard_seconds(s, ctx.paces)[0] for s in sessions if s.counts)
+    total = sum(hard_seconds(s, ctx.paces)[1] for s in sessions if s.counts)
+    return total <= 0 or hard / total <= 1 - float(ctx.rules["easy_share_min"]) + 1e-6
+
+
+def _fewer_reps(s: Session, ctx: Context) -> Optional[Session]:
+    """A quality session one rep (marathon pace: 1 km) shorter, or None at rule 4's smallest session."""
     r, paces = ctx.rules, ctx.paces
-    cands = [s for s in _cuttable(w) if ctx.snapshot.today < s.date <= day]
-    if not cands:
-        return False
-    saved = list(w.sessions)
-    planned = _planned(w)
-    room = planned - floor
-    s = max(cands, key=lambda x: (x.distance, x.key))
-    cut = math.floor(min(step, room) / 100.0 + 1e-9) * 100.0
-    if cut < 100.0:
-        return False
-    new_d = float(s.distance) - cut
+    work = [st for st in _leaves(s.steps) if st.kind == "interval" and st.band == s.role]
+    if not work:
+        return None
+    rep = float(work[0].value)
+    if s.role == "mp":
+        if rep - 1000.0 < float(r["mp_min_km"]) * 1000.0:
+            return None
+        return make_session(s.key, s.date, "mp", Meters(0.0), paces, r, (Meters(rep - 1000.0), Meters(rep - 1000.0)))
+    times = next((st.times for st in s.steps if st.kind == "repeat"), 1)
+    if times - 1 < QUALITY_MIN_REPS[s.role]:
+        return None
+    return make_session(s.key, s.date, s.role, Meters(0.0), paces, r, (Meters((times - 1) * rep), Meters(rep)))
+
+
+def _cut_options(weeks: Sequence[Week], ctx: Context, day: dt.date, owner: Week
+                 ) -> List[Tuple[Week, Session, Optional[Session]]]:
+    """The cuts for `day`, best first: those of the week that owns it (_week_cuts). Never an earlier week's: a
+    cut there lowers the chronic load of the days a week after it and so raises their ratio. Empty: nothing
+    is left to cut (the day is held)."""
+    return _week_cuts(weeks, ctx, day, lambda w: w is owner, ctx.built_longs is None)
+
+
+def _week_cuts(weeks: Sequence[Week], ctx: Context, day: dt.date, allowed: Callable[[Week], bool],
+               long_ok: bool) -> List[Tuple[Week, Session, Optional[Session]]]:
+    """The cuts of the `allowed` weeks that lower the planned ratio on `day`, best first: (week, session, its
+    shorter version or None to drop it). Only their runs in the 7 days ending on `day` (after today, not
+    changed by a reduce-only override), never taking a week under 0.6 x its target. First shorter sessions
+    (the most room for its size first): a quality session one rep shorter (down to rule 4's smallest), the
+    long run (long_ok: the owner's, only while the plan is built, before the later long runs step from it) 5%
+    of the week's target shorter (not under the long-run classifier's 15 km nor 0.6 x it as built), an easy
+    run 5% shorter (not under the easy minimum); each only while the week keeps 80% of its time easy. Then
+    dropping an easy run (not the week's first run), only while the week keeps another one."""
+    r, paces = ctx.rules, ctx.paces
+    a = r["acwr"]
+    today = ctx.snapshot.today
+    lo = day - dt.timedelta(days=int(a["acute_days"]) - 1)
     easy_min = float(r["easy_min_km"]) * 1000.0
-    if new_d < easy_min:
-        if s.distance <= room + EPS_M:
-            w.sessions.remove(s)
-        elif s.distance - easy_min >= 100.0:
-            new_d = easy_min
-        else:
-            return False
-    if s in w.sessions:
-        w.sessions[w.sessions.index(s)] = make_session(s.key, s.date, s.role, Meters(new_d), paces, r)
-    _limit_easy_share(w, w.sessions, ctx, estimate_rest=False)   # shorter easy runs: keep 80% easy
-    after = _planned(w)
-    if after < floor - EPS_M or after >= planned - EPS_M:
-        w.sessions = saved
-        return False
-    return True
+    long_min = float(r["long_km_by_classifier"]) * 1000.0
+    keep = float(a["min_keep_of_target"])
+    shorter: List[Tuple[Tuple[int, float, str], Week, Session, Session]] = []
+    drops: List[Tuple[Tuple[int, float, str], Week, Session]] = []
+    for w, s, cuttable in _cap_sessions(weeks, ctx):
+        if not allowed(w) or not cuttable or not s.counts or not (today < s.date and lo <= s.date <= day):
+            continue
+        room = _planned(w) - _acwr_floor(w, ctx)
+        cut = math.floor(min(float(a["cut_step"]) * float(w.target), room) / 100.0 + 1e-9) * 100.0
+        new: Optional[Session] = None
+        if s.role in QUALITY_ROLES:
+            new = _fewer_reps(s, ctx)
+            if new is not None and s.distance - new.distance > room + EPS_M:
+                new = None
+        elif cut >= 100.0 and (s.role in EASY_ROLES or (s.role == "long" and long_ok)):
+            low = max(long_min, keep * _built_m(w, s)) if s.role == "long" else easy_min
+            new_d = _floor_m(max(low, float(s.distance) - cut))
+            if s.distance - new_d >= 100.0:
+                new = make_session(s.key, s.date, s.role, new_d, paces, r)
+        if new is not None and new.distance < s.distance and s.distance - new.distance <= room + EPS_M:
+            rest = [new if x is s else x for x in w.sessions]
+            if _easy_share_ok(rest, ctx) or not _easy_share_ok(w.sessions, ctx):
+                shorter.append(((-w.number, -(s.distance - new.distance) / s.distance, s.key), w, s, new))
+        # (never the week's first run: the days before its next run would pass to the week before, already cut)
+        if s.role in EASY_ROLES and s.distance <= room + EPS_M \
+                and sum(1 for x in w.sessions if x.role in EASY_ROLES) >= 2 \
+                and s.date > min(x.date for x in w.sessions if x.counts):
+            rest = [x for x in w.sessions if x is not s]
+            if _easy_share_ok(rest, ctx) or not _easy_share_ok(w.sessions, ctx):
+                drops.append(((-w.number, float(s.distance), s.key), w, s))
+    out: List[Tuple[Week, Session, Optional[Session]]] = [(w, s, n) for _k, w, s, n in sorted(shorter, key=lambda x: x[0])]
+    return out + [(w, s, None) for _k, w, s in sorted(drops, key=lambda x: x[0])]
+
+
+def _owned_days(w: Week, ctx: Context) -> List[dt.date]:
+    """The days whose ratio week w answers for (owned by w): its own days and, once the plan is built (the
+    weeks after it placed), up to 6 days after it."""
+    days = [w.start + dt.timedelta(days=i) for i in range(13 if ctx.built_longs is not None else 7)]
+    return [d for d, _r, owner in acwr_cap_days(ctx.all_weeks, ctx, days) if owner is w]
+
+
+def _apply_cut(w: Week, s: Session, new: Optional[Session], day: dt.date, ratio: float) -> None:
+    if not w.acwr_ops:
+        w.acwr_first = (day, ratio)
+        before = _planned(w)
+        if before > w.acwr_from[0]:
+            w.acwr_from = (before, sum(1 for x in w.sessions if x.counts))
+    op = w.acwr_ops.setdefault(s.key, [s.role, float(s.distance), float(s.distance), s.date])
+    if new is None:
+        w.sessions.remove(s)
+        op[2] = 0.0
+    else:
+        w.sessions[w.sessions.index(s)] = new
+        op[2] = float(new.distance)
 
 
 def enforce_acwr(w: Week, ctx: Context) -> bool:
-    """Item 12: while the model is enforced and a day the cap acts on (on or after the week's first easy
-    run) has a planned ratio above the limit, cut the week's easy runs on or before the highest such day in
-    steps of 5% of the week's km. The long run and quality stay (the long-run step is untouched); the week
-    never ends under 0.6 x its target. It stops, with the warning acwr_floor and w.acwr_held, when no step
-    is left or a step no longer lowers the highest ratio (that step is undone). True when it cut. Never
-    raises a session."""
+    """Item 12: while the model is enforced and a day week w answers for (_owned_days) has a planned ratio
+    above the limit, take the best cut (_cut_options) for the highest such day that has one, and again,
+    until no day is above the limit or none has a cut left (held: warning acwr_floor in the answer). True
+    when it cut. Never raises a session."""
     model = ctx.load
     w.acwr_held = False
     if model is None or not model.enforced:
         return False
-    a = ctx.rules["acwr"]
-    floor = _acwr_floor(w, ctx)
-    before = _planned(w)
-    n_before = sum(1 for s in w.sessions if s.counts)
-    step = float(a["cut_step"]) * before
-    first: Optional[Tuple[dt.date, float]] = None
-    for _ in range(60):
-        over = acwr_over(w, ctx, day_loads(ctx.all_weeks, ctx))
+    limit = float(ctx.rules["acwr"]["max"])
+    cut_any = False
+    for _ in range(400):
+        over = [(d, r) for d, r, owner in acwr_cap_days(ctx.all_weeks, ctx, _owned_days(w, ctx))
+                if r > limit + 1e-9]
         if not over:
             break
-        first = first or over[0]
-        top_day, top = max(over, key=lambda x: (x[1], x[0]))
-        saved = list(w.sessions)
-        lowered = False
-        if _acwr_step(w, ctx, top_day, floor, step):
-            loads = day_loads(ctx.all_weeks, ctx)
-            now = max((acwr_on(d, loads, ctx.rules) or 0.0 for d, _ in over), default=0.0)
-            lowered = now < top - 1e-9
-            if not lowered:
-                w.sessions = saved
-        if not lowered:
+        for d, r in sorted(over, key=lambda x: (-x[1], x[0])):
+            options = _cut_options(ctx.all_weeks, ctx, d, w)
+            if options:
+                cw, s, new = options[0]
+                _apply_cut(cw, s, new, d, r)
+                cut_any = True
+                break
+        else:
             w.acwr_held = True
-            ctx.warnings.append({"id": "acwr_floor", "dates": [d.isoformat() for d, _ in over[:5]],
-                                 "detail": f"the planned acute:chronic ratio stays above {a['max']} (up to "
-                                           f"{round(top, 2)}): no further cut of the week's easy runs lowers it "
-                                           f"(they stop at {a['min_keep_of_target']} x the week's target)"})
             break
-    after = _planned(w)
-    if after >= before - EPS_M or first is None:
-        return False
-    if before > w.acwr_from[0]:
-        w.acwr_from = (before, n_before)
-    model.cuts.append({"week": w.number, "from_km": km(before), "to_km": km(after), "date": first[0].isoformat(),
-                       "ratio": round(first[1], 2)})
-    ctx.warnings.append({"id": "acwr_cut", "dates": [w.start.isoformat()],
-                         "detail": f"run km cut from {km(before)} to {km(after)} km: the planned acute:chronic "
-                                   f"ratio reached {round(first[1], 2)} on {first[0].isoformat()} (limit {a['max']})"})
-    return True
+    return cut_any
+
+
+def _cut_text(w: Week) -> str:
+    names = {"easy": "easy run", "strides": "strides run", "long": "long run", "threshold": "threshold",
+             "intervals": "intervals", "mp": "marathon pace"}
+    parts = []
+    for key in sorted(w.acwr_ops, key=lambda k: (w.acwr_ops[k][3], k)):
+        role, was, now, day = w.acwr_ops[key]
+        what = f"{names.get(role, role)} {day.isoformat()}"
+        parts.append(f"{what} dropped" if now <= 0 else f"{what} {km(was)} -> {km(now)} km")
+    return ", ".join(parts)
+
+
+def _acwr_cuts(weeks: Sequence[Week]) -> List[Dict[str, Any]]:
+    out = []
+    for w in weeks:
+        if not w.acwr_ops or w.acwr_first is None:
+            continue
+        taken = sum(op[1] - op[2] for op in w.acwr_ops.values())
+        out.append({"week": w.number, "from_km": km(w.acwr_from[0]), "to_km": km(w.acwr_from[0] - taken),
+                    "date": w.acwr_first[0].isoformat(), "ratio": round(w.acwr_first[1], 2)})
+    return out
+
+
+def acwr_held(weeks: Sequence[Week], ctx: Context) -> Tuple[List[Tuple[dt.date, float, Week]], List[str]]:
+    """([(day, ratio, owner)] of the days the cap acts on that stay above the limit with no cut left (held),
+    [problems]: such days that still have a cut). Nothing while the ratio is not enforced."""
+    model = ctx.load
+    if model is None or not model.enforced:
+        return [], []
+    limit = float(ctx.rules["acwr"]["max"])
+    held, bad = [], []
+    for d, r, owner in acwr_cap_days(weeks, ctx):
+        if r <= limit + 1e-9:
+            continue
+        if _cut_options(weeks, ctx, d, owner):
+            bad.append(f"{d.isoformat()}: ratio {round(r, 2)}")
+        else:
+            held.append((d, r, owner))
+    return held, bad
 
 
 def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
     """The answer's "acwr" block: whether item 12 is enforced and why not, the model's numbers, the checks
-    against Garmin, the B races' modelled load, the cuts and the highest planned ratio (every day after today
-    and before the A race). Adds acwr_not_enforced / acwr_high warnings."""
+    against Garmin, the B races' modelled load, the cuts, the highest planned ratio (every day after today
+    and before the A race), the highest ratio on the days the cap acts on (cap_max) and the days held above
+    it. Adds the acwr_cut (what each cut changed), acwr_floor, acwr_not_enforced and acwr_high warnings."""
     model = ctx.load
     a = ctx.rules["acwr"]
     rules_echo = {k: a[k] for k in sorted(a)}
@@ -1582,7 +1738,32 @@ def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
                 top = (r, d)
             if r > float(a["max"]) + 1e-9:
                 over.append(d)
-    if not model.enforced:
+    cuts = _acwr_cuts(weeks)
+    model.cuts = cuts
+    for w in weeks:
+        if w.acwr_ops and w.acwr_first is not None:
+            c = next(x for x in cuts if x["week"] == w.number)
+            ctx.warnings.append({"id": "acwr_cut", "dates": [w.start.isoformat()],
+                                 "detail": f"run km cut from {c['from_km']} to {c['to_km']} km ({_cut_text(w)}): "
+                                           f"the planned acute:chronic ratio reached {c['ratio']} on {c['date']} "
+                                           f"(limit {a['max']})"})
+    cap_top: Optional[Tuple[float, dt.date]] = None
+    held: List[Tuple[dt.date, float, Week]] = []
+    if model.enforced:
+        for d, r, _o in acwr_cap_days(weeks, ctx):
+            if cap_top is None or r > cap_top[0] + 1e-12:
+                cap_top = (r, d)
+        held, _bad = acwr_held(weeks, ctx)
+        for w in weeks:
+            days = [(d, r) for d, r, owner in held if owner is w]
+            if days:
+                ctx.warnings.append({"id": "acwr_floor", "dates": [d.isoformat() for d, _r in days[:5]],
+                                     "detail": f"the planned acute:chronic ratio stays above {a['max']} (up to "
+                                               f"{round(max(r for _d, r in days), 2)}): nothing of the week is left "
+                                               f"to cut (quality and the long run at their floors, one easy run kept, "
+                                               f"80% of the time easy, the week not under "
+                                               f"{a['min_keep_of_target']} x its target)"})
+    else:
         ctx.warnings.append({"id": "acwr_not_enforced", "dates": [], "detail": str(model.reason)})
         if over:
             ctx.warnings.append({"id": "acwr_high", "dates": [d.isoformat() for d in over[:5]],
@@ -1596,29 +1777,25 @@ def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
                         "load": int(round(mins * rate)) if rate is not None else None})
     return {"enforced": model.enforced, "reason": model.reason, "rules": rules_echo,
             "load_per_min": {k: round(v, 3) for k, v in model.lpm.items()},
-            "checks": model.checks, "b_races": b_loads, "cuts": model.cuts,
+            "checks": model.checks, "b_races": b_loads, "cuts": cuts,
             "planned_max": {"ratio": round(top[0], 2), "date": top[1].isoformat()} if top else None,
-            "days_over": len(over)}
+            "days_over": len(over),
+            "cap_max": {"ratio": round(cap_top[0], 2), "date": cap_top[1].isoformat()} if cap_top else None,
+            "held": [{"date": d.isoformat(), "ratio": round(r, 2)} for d, r, _o in held]}
 
 
-def check_acwr(weeks: Sequence[Week], ctx: Context) -> List[str]:
-    """Invariant acwr_cap: while enforced, no day the cap acts on is above the limit unless its week is at
-    its floor or the engine held it (no further cut lowered the ratio)."""
+def check_acwr(weeks: Sequence[Week], ctx: Context) -> Optional[List[str]]:
+    """Invariant acwr_cap: while enforced, every day the cap acts on (acwr_cap_days, the series the cuts
+    measure) is at or under the limit unless nothing is left to cut for it. None while not enforced."""
     model = ctx.load
     if model is None or not model.enforced:
-        return []
-    loads = day_loads(weeks, ctx)
-    out = []
-    for w in weeks:
-        if w.acwr_held or _planned(w) <= _acwr_floor(w, ctx) + EPS_M:
-            continue
-        out += [f"{d.isoformat()}: ratio {round(r, 2)}" for d, r in acwr_over(w, ctx, loads)]
-    return out
+        return None
+    return acwr_held(weeks, ctx)[1]
 
 
 def reenforce_acwr(weeks: Sequence[Week], ctx: Context) -> None:
-    """After an override: cut the weeks again, in order, where the edit pushed the planned ratio up (a
-    smaller week lowers the chronic load of the weeks after it). Only ever cuts."""
+    """After an override that moves a session: cut the weeks again, in order, where the edit pushed the
+    planned ratio up. Only ever cuts."""
     for w in weeks:
         enforce_acwr(w, ctx)
 
@@ -1756,22 +1933,34 @@ def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any
     refused: List[Dict[str, Any]] = []
     for o in ctx.inputs.overrides:
         saved = [copy.deepcopy(w.sessions) for w in weeks]
-        saved_from = [(w.acwr_from, w.acwr_held) for w in weeks]
-        saved_warnings, saved_cuts = len(ctx.warnings), len(ctx.load.cuts) if ctx.load else 0
+        saved_from = [(w.acwr_from, w.acwr_held, copy.deepcopy(w.acwr_ops), w.acwr_first) for w in weeks]
+        saved_cap = (dict(ctx.cap_as), dict(ctx.cap_ghosts))
+        saved_warnings = len(ctx.warnings)
         before = {i["id"] for i in check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules)
                   if not i["ok"]}
+        was = {s.key: (w, s) for w in weeks for s in w.sessions}
         ok, no = _apply_one(weeks, ctx, o)
+        if ok and o.kind in REDUCE_ONLY_OVERRIDES:
+            # item 12: the cap keeps counting what this edit changed or removed as it was, so easing a run never
+            # makes the cap cut another one (a smaller session lowers the chronic load of the days after it)
+            now = {s.key: s for w in weeks for s in w.sessions}
+            for key, (w, s) in was.items():
+                if key not in now:
+                    old = ctx.cap_as.pop(key, s)
+                    ctx.cap_ghosts[key] = (w, dataclasses.replace(old, date=s.date))
+                elif now[key] is not s:
+                    ctx.cap_as.setdefault(key, s)
+        elif ok:
+            reenforce_acwr(weeks, ctx)   # a moved session can raise a later day's planned ratio
         if ok:
-            reenforce_acwr(weeks, ctx)   # a moved or smaller session can raise a later day's planned ratio
             after = [i for i in check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules)
                      if not i["ok"] and i["id"] not in before]
             if after:
-                for w, sessions, was in zip(weeks, saved, saved_from):
+                for w, sessions, was_w in zip(weeks, saved, saved_from):
                     w.sessions = sessions
-                    w.acwr_from, w.acwr_held = was
+                    w.acwr_from, w.acwr_held, w.acwr_ops, w.acwr_first = was_w
+                ctx.cap_as, ctx.cap_ghosts = saved_cap
                 del ctx.warnings[saved_warnings:]
-                if ctx.load:
-                    del ctx.load.cuts[saved_cuts:]
                 refused.append(_refuse(o, after[0]["id"], after[0]["detail"], "the plan's rules"))
                 continue
         applied += ok
@@ -2049,6 +2238,14 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
         total = sum(hard_seconds(s, paces)[1] for s in w.sessions if s.counts)
         if total > 0 and hard / total > 1 - float(rules["easy_share_min"]) + 1e-6:
             probs["easy_share"].append(f"week {w.number}: {round(100 * (1 - hard / total))}% easy")
+        # and an easy run in every week with a quality session or a long run, a run day left for one and room in
+        # its target for one beside them
+        used = {s.date for s in w.sessions}
+        fixed_m = sum(_built_m(w, s) for s in w.sessions if s.role in QUALITY_ROLES + ("long",))   # before cuts
+        if fixed_m > 0 and not any(s.role in EASY_ROLES for s in w.sessions) and not calendar_week(w, ctx) \
+                and w.target - w.b_cut - fixed_m >= float(rules["easy_min_km"]) * 1000.0 \
+                and any(ctx.runnable(d) and d not in used and ctx.window_factor(d) is None for d in w.days()):
+            probs["easy_share"].append(f"week {w.number}: no easy run")
     for k in ("growth_cap", "no_makeup"):
         add(k, probs[k])
     # deload cadence: at most 3 normal weeks in a row, 4 when a B week follows
@@ -2143,7 +2340,12 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
     add("one_run_per_day", [f"{d.isoformat()}: {n} runs" for d, n in sorted(days_seen.items())
                             if n > 1 or (n >= 1 and ctx.fixed_run(d))]
         + [f"key {k}: {n} sessions" for k, n in sorted(keys_seen.items()) if n > 1])   # session_key is per day
-    add("acwr_cap", check_acwr(weeks, ctx))   # v2
+    acwr = check_acwr(weeks, ctx)   # v2
+    if acwr is None:
+        reason = ctx.load.reason if ctx.load is not None else None
+        out.append({"id": "acwr_cap", "ok": True, "not_enforced": True, "detail": f"not enforced: {reason}"})
+    else:
+        add("acwr_cap", acwr)
     return out
 
 
@@ -2322,7 +2524,9 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
         plan["race_pacing"] = pacing
     inv = check_invariants(plan, rules)
     plan["invariants"] = {"ok": all(i["ok"] for i in inv), "failed": [i for i in inv if not i["ok"]],
-                          "checked": [i["id"] for i in inv]}
+                          "checked": [i["id"] for i in inv if not i.get("not_enforced")],
+                          "not_enforced": [{"id": i["id"], "detail": i["detail"]} for i in inv
+                                           if i.get("not_enforced")]}
     if what_if_runs:
         plan["what_if"] = what_if(inputs, snap, plan, rules, born)
     return plan
