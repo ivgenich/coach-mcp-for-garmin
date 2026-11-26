@@ -157,7 +157,8 @@ answers, with those sources failed and their values in `missing`, as the live se
 and `client.post/put/delete(domain, path, json=, api=)` answers the same workout-service paths (the raw calls the
 plan executor makes; a GraphQL `query` POST is a read). Writes change the world: a created workout (ids from
 91000001) answers `get_workout_by_id`, a scheduled one (entry ids from 92000001) shows in
-`workoutScheduleSummariesScalar` until it is unscheduled or its workout deleted; an unknown id is HTTP 404.
+`workoutScheduleSummariesScalar` until it is unscheduled (deleting its workout leaves the entry, as Garmin is not
+known to remove it); an unknown id is HTTP 404. `get_workouts` lists the newest workout first, as Garmin does.
 `evals/garmin_writes.py` names every write the same way for the faults and for the grading's `garmin_writes_none`.
 
 A fault on a write name takes a write group, optionally `@N` (the first N such writes succeed):

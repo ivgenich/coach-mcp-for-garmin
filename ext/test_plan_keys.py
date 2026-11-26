@@ -205,6 +205,105 @@ class Rebuilds(unittest.TestCase):
         self.assertEqual(self.calendar_days(), cal, "every committed day is still on Garmin")
 
 
+class UnscheduleFirst(tpw.Base):
+    """Deleting a workout is not known to remove its calendar entries (docs: Garmin facts); the fakes keep them.
+    Every delete unschedules the workout's entries first (from the calendar when no entry id is stored), and
+    nothing is deleted while the calendar cannot be read."""
+
+    def committed(self, sessions=None):
+        pid, commit = self.preview(sessions=sessions)
+        self.assertEqual(self.commit(pid, commit["token"])["status"], "done")
+        return pid
+
+    def forget_entry_ids(self, pid):
+        for key in list(self.rows(pid)):
+            self.store.workout_rows[(pid, key)]["garmin_schedule_id"] = None
+
+    def assert_calendar_clean(self):
+        alive = set(self.garmin.library)
+        self.assertEqual([e for e in self.garmin.calendar if e["workoutId"] not in alive], [],
+                         "a calendar entry of a deleted workout")
+
+    def test_cleanup_reads_the_entry_when_no_id_is_stored(self):
+        pid = self.committed()
+        self.forget_entry_ids(pid)
+        counts = pw.cleanup(self.store, self.garmin, tpw.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
+        self.assertEqual((counts["deleted"], counts["failed"]), (3, 0), counts)
+        self.assertEqual(self.garmin.calendar, [])
+        self.assertEqual(self.garmin.library, {})
+
+    def test_cleanup_deletes_nothing_when_the_calendar_cannot_be_read(self):
+        pid = self.committed()
+        self.forget_entry_ids(pid)
+        self.garmin.read_faults["calendar"] = ConnectionError("down")
+        mark = len(self.garmin.writes())
+        with self.assertRaises(ConnectionError):
+            pw.cleanup(self.store, self.garmin, tpw.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
+        self.assertEqual(len(self.garmin.writes()), mark)
+        self.assertEqual({r["state"] for r in self.rows(pid).values()}, {"scheduled"})
+
+    def test_cleanup_takes_rows_a_crash_left_mid_request(self):
+        pid = self.committed()
+        keys = sorted(self.rows(pid))
+        self.store.workout_rows[(pid, keys[0])]["state"] = "uploading"
+        self.store.workout_rows[(pid, keys[1])]["state"] = "scheduling"
+        self.forget_entry_ids(pid)
+        counts = pw.cleanup(self.store, self.garmin, tpw.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
+        self.assertEqual(counts["deleted"], 3, counts)
+        self.assertEqual((self.garmin.library, self.garmin.calendar), ({}, []))
+
+    def test_orphans_are_unscheduled_before_they_are_deleted(self):
+        pid = self.committed()
+        tag = self.store.install_tag()
+        later = tpw.TODAY + dt.timedelta(days=4)
+        with self.garmin.lock:
+            self.garmin.library[701] = {"workoutId": 701, "workoutName": "Coach Easy",
+                                        "description": f"coach-mcp {tag} {pid} 20261205-run h12345678"}
+            self.garmin.calendar.append({"workoutId": 701, "scheduleDate": later.isoformat(),
+                                         "scheduledWorkoutId": 7011, "workoutName": "Coach Easy",
+                                         "workoutType": "running"})
+        counts = pw.cleanup(self.store, self.garmin, tpw.TODAY, dry_run=False, orphans=True, sleep=lambda s: None,
+                            join_s=2)
+        self.assertEqual(counts["deleted"], 4, counts)
+        writes = self.garmin.writes()
+        self.assertLess(writes.index(("DELETE", "workout-service/schedule/7011")),
+                        writes.index(("DELETE", "workout-service/workout/701")))
+        self.assert_calendar_clean()
+
+    def executor_reading_only_the_first_day(self, pid, first):
+        ex = pw.Executor(self.garmin, self.store, self.store.get_plan(self.fp, pid), tpw.TODAY, sleep=lambda s: None,
+                         join_s=2)
+        ex.prepare([first.isoformat()])   # the calendar around the first day only
+        return ex
+
+    def test_a_row_outside_the_read_range_is_unscheduled_from_a_read_around_its_day(self):
+        days = [tpw.TODAY + dt.timedelta(days=n) for n in (1, 9)]
+        pid = self.committed([tpw.session(pe.session_key(d), d) for d in days])
+        far = pe.session_key(days[1])
+        self.forget_entry_ids(pid)
+        wid = self.rows(pid)[far]["garmin_workout_id"]
+        ex = self.executor_reading_only_the_first_day(pid, days[0])
+        ex.delete({"op": "delete", "key": far, "workout_id": wid, "reason": "removed"})
+        self.assertEqual((ex.remaining, self.rows(pid)[far]["state"]), (0, "deleted"))
+        writes = self.garmin.writes()
+        self.assertEqual(writes[-2][1].rsplit("/", 2)[-2], "schedule", writes[-2:])
+        self.assertEqual(writes[-1], ("DELETE", f"workout-service/workout/{wid}"))
+        self.assert_calendar_clean()
+
+    def test_a_delete_waits_when_the_calendar_around_its_day_cannot_be_read(self):
+        days = [tpw.TODAY + dt.timedelta(days=n) for n in (1, 9)]
+        pid = self.committed([tpw.session(pe.session_key(d), d) for d in days])
+        far = pe.session_key(days[1])
+        self.forget_entry_ids(pid)
+        ex = self.executor_reading_only_the_first_day(pid, days[0])
+        self.garmin.read_faults["calendar"] = ConnectionError("down")
+        ex.delete({"op": "delete", "key": far, "workout_id": self.rows(pid)[far]["garmin_workout_id"],
+                   "reason": "removed"})
+        self.assertEqual(ex.remaining, 1)
+        self.assertEqual(self.rows(pid)[far]["state"], "scheduled")
+        self.assertIn(self.rows(pid)[far]["garmin_workout_id"], self.garmin.library)
+
+
 class KeyShape(unittest.TestCase):
     def test_every_golden_plan_keys_each_session_by_its_day(self):
         import glob

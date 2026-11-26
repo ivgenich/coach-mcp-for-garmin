@@ -716,7 +716,7 @@ class Cleanup(b.DeepBase):
         with self.garmin.lock:
             self.garmin.library[wid] = {"workoutId": wid, "workoutName": "Coach Easy", "description": desc}
             for i, day in enumerate(days):
-                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "id": wid * 10 + i,
+                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "scheduledWorkoutId": wid * 10 + i,
                                              "workoutName": "Coach Easy", "workoutType": "running",
                                              "associatedActivityId": linked})
 

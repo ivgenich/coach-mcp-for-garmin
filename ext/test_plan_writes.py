@@ -125,7 +125,7 @@ class FakeRaw:
                 if n not in self.g.library:
                     raise ConnectionError("API Error 404 - Not Found")
                 del self.g.library[n]
-                self.g.calendar = [e for e in self.g.calendar if e.get("workoutId") != n]
+                # its calendar entries stay: Garmin is not known to remove them with the workout
         return Resp({})
 
 
@@ -161,8 +161,10 @@ class FakeGarmin:
     def query_garmin_graphql(self, query):
         self._read("calendar")
         assert query["query"].startswith("query{workoutScheduleSummariesScalar")
-        with self.lock:
-            return {"data": {"workoutScheduleSummariesScalar": copy.deepcopy(self.calendar)}}
+        start, end = re.search(r'startDate:"([0-9-]+)", endDate:"([0-9-]+)"', query["query"]).groups()
+        with self.lock:   # only the asked days, as Garmin answers
+            return {"data": {"workoutScheduleSummariesScalar": copy.deepcopy(
+                [e for e in self.calendar if start <= str(e.get("scheduleDate"))[:10] <= end])}}
 
     def get_workouts(self, start, limit):
         self._read("library")
