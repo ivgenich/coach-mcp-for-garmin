@@ -22,7 +22,6 @@ first call answers like the status tools ("Error: <source phrase>"); a database 
 from __future__ import annotations
 
 import asyncio
-import copy
 import dataclasses
 import datetime as dt
 import json
@@ -564,8 +563,9 @@ async def fetch_snapshot(client: Any, today: dt.date, race_date: dt.date, course
 # --- answers ---------------------------------------------------------------------------------------------------
 
 def _slim(plan: Mapping[str, Any]) -> Dict[str, Any]:
-    """The plan answer without each session's step list (its "structure" text says the same)."""
-    out = dict(plan)
+    """The plan answer without each session's step list (its "structure" text says the same) and without the
+    stored plan_basis (what a rebuild grows from)."""
+    out = {k: v for k, v in plan.items() if k != "basis"}
     out["weeks"] = [{**w, "sessions": [{k: v for k, v in s.items() if k != "steps"} for s in w["sessions"]]}
                     for w in plan.get("weeks") or []]
     return out
@@ -596,7 +596,15 @@ def with_dto_checks(answer: Dict[str, Any], lt_speed: Optional[float]) -> Dict[s
 def plan_born(body: Any) -> Optional[dt.date]:
     """The day a stored plan counts as first built, for its week grid (plan_engine.build_plan(born=...)): the
     Sunday before its week 1, or week 1's Monday itself when the plan was built that Monday (no week 0 and no
-    session on that Monday: a plan built on a Monday plans from the Tuesday). None without a week 1."""
+    session on that Monday: a plan built on a Monday plans from the Tuesday). None without a week 1. The day
+    stored with the version (plan_basis "born") wins: a plan built on a Sunday whose Monday has no session (a
+    blocked date) is not one built on that Monday."""
+    basis = body.get("basis") if isinstance(body, dict) else None
+    if isinstance(basis, dict) and isinstance(basis.get("born"), str):
+        try:
+            return dt.date.fromisoformat(basis["born"])
+        except ValueError:
+            pass
     weeks = [w for w in (body.get("weeks") if isinstance(body, dict) else None) or [] if isinstance(w, dict)]
     try:
         first = next(dt.date.fromisoformat(str(w["start"])) for w in weeks if w.get("week") == 1)
@@ -607,48 +615,19 @@ def plan_born(body: Any) -> Optional[dt.date]:
     return first - dt.timedelta(days=1) if early else first
 
 
-def _week_with(week: Dict[str, Any], sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
-    if sessions == week.get("sessions"):
-        return week
-    longs = [float(s.get("km") or 0) for s in sessions if s.get("role") == "long"]
-    return {**week, "sessions": sessions,
-            "planned_km": round(sum(float(s.get("km") or 0) for s in sessions
-                                    if s.get("role") not in ("race", "b_race")), 1),
-            "long_km": max(longs) if longs else None}
-
-
-def carry_history(answer: Dict[str, Any], prior: Any, today: dt.date) -> None:
-    """An existing plan rebuilt: the days up to today stay as the stored version has them, so the new version
-    holds the plan's whole history and tracking, log_feedback and plan_review_week still find today's and the
-    past weeks' sessions. A stored week before this one is kept whole; in this week (and any new week that
-    starts by today) the stored sessions dated up to today replace the engine's. The engine's invariants ran on
-    the weeks it planned; the kept days are history and are not checked again. The content hash covers it all."""
-    t = today.isoformat()
-    old = [w for w in (prior.get("weeks") if isinstance(prior, dict) else None) or []
-           if isinstance(w, dict) and str(w.get("start", "")) <= t]
-    old_by_start = {str(w.get("start")): w for w in old}
-    new_starts = {str(w.get("start")) for w in answer["weeks"]}
-
-    def kept(week: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [copy.deepcopy(s) for s in (week or {}).get("sessions") or []
-                if isinstance(s, dict) and str(s.get("date", "")) <= t]
-
-    weeks = [_week_with(copy.deepcopy(w), kept(w)) for w in old if str(w.get("start")) not in new_starts]
-    for w in answer["weeks"]:
-        if str(w.get("start")) <= t:
-            mine = kept(old_by_start.get(str(w.get("start"))))
-            fresh = [s for s in w["sessions"] if str(s.get("date")) > t]
-            w = _week_with(w, sorted(mine + fresh, key=lambda s: (str(s.get("date")), str(s.get("key")))))
-        weeks.append(w)
-    weeks.sort(key=lambda w: str(w.get("start")))
-    if weeks != answer["weeks"]:
-        answer["weeks"] = weeks
-        answer["content_hash"] = pe.content_hash(pe.RULES_VERSION, answer["inputs"], weeks)
+def build_rebuilt(inputs: pe.PlanInputs, snap: pe.Snapshot, prior: Any) -> Dict[str, Any]:
+    """build_plan for plan_preview: a stored plan (`prior`, its version body) rebuilt keeps its week grid and
+    its history (build_plan(born=..., history=...): the weeks that ended by today and today's sessions up to
+    today stay as stored, the rest is planned around them and the merged plan is checked whole), so tracking,
+    log_feedback and plan_review_week still find the past weeks' sessions; None: a new plan."""
+    if not isinstance(prior, dict):
+        return pe.build_plan(inputs, snap)
+    return pe.build_plan(inputs, snap, born=plan_born(prior), history=prior)
 
 
 def check_final_days(answer: Dict[str, Any]) -> None:
-    """one_run_per_day on the version as stored (after carry_history): a session key or a day twice fails the
-    invariant, so the preview gets no commit token (the engine checked only the weeks it planned)."""
+    """one_run_per_day once more on a rebuilt version as it will be stored (its history included): a session key
+    or a day twice fails the invariant, so the preview gets no commit token."""
     keys: Dict[str, int] = {}
     days: Dict[str, int] = {}
     for s in _all_sessions(answer):
@@ -770,7 +749,7 @@ class PlanService:
             return f"Error: {exc}"
         prior = await asyncio.to_thread(self._prior, pid, profile) if pid is not None else None
         try:
-            plan = pe.build_plan(inputs, snap, born=plan_born(prior))
+            plan = build_rebuilt(inputs, snap, prior)
             refused = plan["overrides"]["refused"]
             if refused:
                 # A refused edit is never stored: the version keeps only the edits that applied (its inputs and
@@ -781,13 +760,13 @@ class PlanService:
                     if same is not None:
                         return sc.compact_json(same)
                 inputs = dataclasses.replace(inputs, overrides=kept)
-                plan = pe.build_plan(inputs, snap, born=plan_born(prior))
+                plan = build_rebuilt(inputs, snap, prior)
                 plan["overrides"]["refused"] = refused + plan["overrides"]["refused"]
         except pe.PlanError as exc:
             return bad_input_text(str(exc))
         answer = pe.plan_answer(plan)
+        answer["basis"] = pe.plan_basis(plan)   # stored with the version for the next rebuild, never answered
         if prior is not None:
-            carry_history(answer, prior, today)
             check_final_days(answer)
         answer = with_dto_checks(answer, snap.lt_speed_mps)
         answer["window"] = window(answer, today)

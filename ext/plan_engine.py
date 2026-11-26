@@ -8,7 +8,8 @@ race-pacing rules are echoed in their blocks of the answer).
 
 What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
  1. weeks Monday to Sunday up to the A-race week (week 1 starts the next Monday; week 0 is the rest of this
-    week, easy runs only); phases taper / peak / base / build;
+    week, easy runs only); phases taper / peak / base / build; a stored plan rebuilt (history=...) keeps its
+    grid, its weeks that ended and today's days up to today, and plans the rest around them;
  2. weekly km: km0 = mean of the last 4 full weeks; +8% per normal week at most, on the last normal week
     as planned (min(target, what was placed); days lost to blocked dates or fixed sessions do not count);
     never above the peak ceiling max(1.3 x the biggest week of the last 8, km0 + 25 km), held once reached; a
@@ -369,6 +370,13 @@ class Session:
     steps: Tuple[Step, ...] = ()
     note: str = ""
     advice: str = ""   # a fixed server text for the athlete (rule 7), the session's "note" in the answer
+    # an existing plan rebuilt (build_plan(history=...)): the stored version's session JSON of a day up to today,
+    # answered as it is (history: never planned, moved or cut again)
+    raw: Optional[Dict[str, Any]] = None
+
+    @property
+    def history(self) -> bool:
+        return self.raw is not None
 
     @property
     def hard_or_long(self) -> bool:
@@ -625,6 +633,11 @@ class Week:
     b_cut: float = 0.0               # rule 7: metres a B-race long-run limit took off (not made up, no shortfall)
     quality: Tuple[str, ...] = ()
     sessions: List[Session] = dataclasses.field(default_factory=list)
+    # an existing plan rebuilt: a week that ended by today, the stored version's (raw: its JSON, answered as it
+    # is); base_known: its base came with the stored plan (plan_basis), so the weeks after it grow from it
+    history: bool = False
+    raw: Optional[Dict[str, Any]] = None
+    base_known: bool = False
 
     @property
     def end(self) -> dt.date:
@@ -758,6 +771,11 @@ class Context:
     cap_ghosts: Dict[str, Tuple["Week", "Session"]] = dataclasses.field(default_factory=dict)
     # the overrides apply_overrides applied, in order (plan_tools stores only these with a plan version)
     applied_overrides: List[Override] = dataclasses.field(default_factory=list)
+    # an existing plan rebuilt (build_plan(history=...)): the peak ceiling and biggest week of the plan as first
+    # built (plan_ceiling; None: from this snapshot), and the stored version's session key of each day after today
+    ceiling: Optional[Tuple[Meters, Meters]] = None
+    keys_after: Dict[dt.date, str] = dataclasses.field(default_factory=dict)
+    born: Optional[dt.date] = None   # the day the plan counts as first built (its week grid; plan_basis stores it)
 
     def window_factor(self, day: dt.date) -> Optional[float]:
         for w in self.windows:
@@ -917,6 +935,14 @@ def peak_ceiling(snap: Snapshot, km0: Meters, rules: Mapping[str, Any],
     return Meters(max(float(pc["of_max_week"]) * biggest, km0 + float(pc["over_km0_km"]) * 1000.0)), biggest
 
 
+def plan_ceiling(ctx: "Context", rules: Optional[Mapping[str, Any]] = None) -> Tuple[Meters, Meters]:
+    """peak_ceiling of the plan: a rebuilt plan keeps the one it was first built with (ctx.ceiling), so the
+    weeks it planned itself and the athlete then ran never raise it."""
+    if ctx.ceiling is not None:
+        return ctx.ceiling
+    return peak_ceiling(ctx.snapshot, ctx.km0, ctx.rules if rules is None else rules, ctx.inputs.race_distance)
+
+
 def calendar_week(w: Week, ctx: Context) -> bool:
     """A week with a blocked date or a fixed calendar session: what it loses to them is not a cap."""
     return any(d in ctx.inputs.blocked_dates or d in ctx.fixed for d in w.days())
@@ -956,9 +982,11 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
     """Each week's km and long-run target, then place(week) fills it; the step and the peak long run follow
     the long runs actually placed (a long run that did not fit does not move the step). Weekly km grow from
     what was placed (week_base), so a week the easy-run cap holds below its target does not lift the weeks
-    after it. capacity(week) gives (km, sessions) the week would get without its calendar items."""
+    after it. capacity(week) gives (km, sessions) the week would get without its calendar items. A rebuilt
+    plan's past weeks (Week.history) come first: they keep their stored sessions (place() only counts them),
+    are never cut, and the chain goes on from them (their stored base when the plan carries one)."""
     r = ctx.rules
-    ceiling, biggest = peak_ceiling(ctx.snapshot, ctx.km0, r, ctx.inputs.race_distance)
+    ceiling, biggest = plan_ceiling(ctx)
     capped_warned = False
     last_normal = ctx.km0
     last_long = ctx.longest
@@ -1014,10 +1042,11 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
         if late_cap is not None and w.kind != "normal":
             w.long_target = _floor_m(min(w.long_target, late_cap))
         cap_km: Optional[float] = None
-        if w.kind == "normal" and capacity is not None and calendar_week(w, ctx):
+        if w.kind == "normal" and capacity is not None and calendar_week(w, ctx) and not w.history:
             cap_km = capacity(w)[0]
         place(w)
-        enforce_acwr(w, ctx)   # item 12: run km cut (never raised) while the planned ratio passes 1.3
+        if not w.history:
+            enforce_acwr(w, ctx)   # item 12: run km cut (never raised) while the planned ratio passes 1.3
         longs = [s for s in w.sessions if s.role == "long"]
         placed = max((s.distance for s in longs), default=0.0)
         if longs:   # the long run may have moved a day: "late" is decided on the day it is on (fill_week caps it)
@@ -1029,7 +1058,8 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
             if w.acwr_from[0] > got:
                 got, n_got = w.acwr_from
             got += w.b_cut   # nor is what rule 7 took off a long run before or after a B race
-            w.base = week_base(w.target, got, n_got, cap_km)
+            if not (w.history and w.base_known):
+                w.base = week_base(w.target, got, n_got, cap_km)
             last_normal = w.base
             peak = Meters(max(peak, w.base))
         if longs and w.kind == "normal":
@@ -1193,7 +1223,12 @@ def _why_parts(why: str) -> List[str]:
     return out
 
 
-def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str, int]) -> None:
+def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str, int],
+              carried: Optional[Sequence[Session]] = None, past_m: float = 0.0) -> None:
+    """Week w's sessions. carried (a rebuilt plan's current week, rule 1): the stored sessions of its days up to
+    today, kept as they are; only the days after today are planned (ctx.opens_after is today then), around them:
+    their hard days count for the spacing, a long run or quality kind among them is not planned again, and the
+    days after today get the week's target less past_m (the km of the days up to today)."""
     r, paces = ctx.rules, ctx.paces
     # rule 11: a blocked date drops its share and no other day runs more than it would without the block (a
     # blocked day can take the long run's spot, and an even split of the whole week then tops the split of
@@ -1202,9 +1237,19 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
     if any(d in ctx.inputs.blocked_dates for d in w.days()):
         dry_ctx = dataclasses.replace(ctx, inputs=dataclasses.replace(ctx.inputs, blocked_dates=()), warnings=[])
         dry = dataclasses.replace(w, sessions=[])
-        fill_week(dry, dry_ctx, set(hard_before), dict(index))
+        fill_week(dry, dry_ctx, set(hard_before), dict(index), carried, past_m)
         ceiling = {s.date: float(s.distance) for s in dry.sessions if s.counts}
-    long_day, placed = place_week(w, ctx, hard_before)
+    fixed = list(carried or [])
+    quality, long_target = w.quality, w.long_target
+    if carried is not None:
+        w.quality = quality_left(w.quality, fixed)
+        if any(s.role == "long" for s in fixed):
+            w.long_target = Meters(0.0)
+    w.sessions = list(fixed)
+    try:
+        long_day, placed = place_week(w, ctx, hard_before)
+    finally:
+        w.quality, w.long_target = quality, long_target
     sessions: List[Session] = []
     w.b_cut = 0.0
     easy_max = Meters(_floor_m(easy_cap(paces, r)))
@@ -1246,13 +1291,13 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
     # Easy days: every runnable day left; mini-taper days carry strides ("strides only").
     # A blocked date keeps its share of the week's km and drops it: the other days do not make it up.
     easy_days = [d for d in w.days() if ctx.open_day(d) and d not in used]
-    _limit_easy_share(w, sessions, ctx)
-    left = w.target - w.b_cut - sum(s.distance for s in sessions)
+    _limit_easy_share(w, sessions, ctx, extra=fixed, past_m=past_m)
+    left = w.target - w.b_cut - sum(s.distance for s in sessions) - past_m
     easy_min = float(r["easy_min_km"]) * 1000.0
     if easy_days and left >= easy_min:
         k = min(len(easy_days), int(left // easy_min))
         # Spread the runs: skip days next to hard days first.
-        hard = {s.date for s in sessions if s.hard_or_long} | {d for d in w.days() if ctx.event_hard(d)}
+        hard = {s.date for s in sessions + fixed if s.hard_or_long} | {d for d in w.days() if ctx.event_hard(d)}
         ranked = sorted(easy_days, key=lambda d: (not _adjacent_ok(d, hard), d))[:k]
         # Rule 7 per day: a B window day (mini-taper 0.6, recovery 0.5) gets that share of a full day's easy
         # km in the same week; a window day that would fall under the easy minimum is left out (the latest of
@@ -1276,17 +1321,21 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
                                                         and day in _mini_days(ctx))) else "easy"
             sessions.append(make_session(session_key(day), day, role, per_day[day], paces, r))
     for d in w.days():
+        if carried is not None and d <= ctx.snapshot.today:
+            continue   # the days up to today are the stored version's, races included
         b = ctx.b_race_on(d)
         if b is not None:
             sessions.append(Session(session_key(d, "b"), d, "b_race", Meters(0.0), (), b.kind))
         if d == ctx.inputs.race_date:
             dist = DISTANCES[ctx.inputs.race_distance]
             sessions.append(Session(session_key(d, "race"), d, "race", dist, (Step("interval", "distance", float(dist), "mp"),)))
+    sessions = fixed + sessions
     sessions.sort(key=lambda s: (s.date, s.key))
     w.sessions = sessions
     if sum(s.distance for s in sessions if s.counts) > w.target + EPS_M:
-        _cap_week(w, w.target, ctx)   # a small week: the fixed parts of the sessions add up past its target
-    _limit_easy_share(w, w.sessions, ctx, estimate_rest=False)
+        # a small week: the fixed parts of the sessions add up past its target (never a carried day)
+        _cap_week(w, w.target, ctx, frozen=fixed)
+    _limit_easy_share(w, w.sessions, ctx, estimate_rest=False, extra=fixed)
     _easy_run_on_spare_day(w, ctx, easy_max)
     for s in w.sessions:
         if s.hard_or_long:
@@ -1367,19 +1416,24 @@ def _cap_mini_days(per_day: Dict[dt.date, Meters], ctx: Context) -> None:
                                        "the km are not made up"})
 
 
-def _limit_easy_share(w: Week, sessions: List[Session], ctx: Context, estimate_rest: bool = True) -> None:
+def _limit_easy_share(w: Week, sessions: List[Session], ctx: Context, estimate_rest: bool = True,
+                      extra: Sequence[Session] = (), past_m: float = 0.0) -> None:
     """Shrink marathon-pace work (then drop the last quality session) until the quality work of the week's
-    planned sessions is at most 20% of the week's estimated time."""
+    planned sessions is at most 20% of the week's estimated time. extra: a rebuilt week's carried sessions
+    (in `sessions` or not): counted, never changed; past_m: the km of its days up to today."""
     r, paces = ctx.rules, ctx.paces
     limit = 1.0 - float(r["easy_share_min"])
+    frozen = {id(s) for s in extra}
     for _ in range(40):
-        qual = [s for s in sessions if s.role in QUALITY_ROLES]
+        qual = [s for s in sessions if s.role in QUALITY_ROLES and id(s) not in frozen]
         if not qual:
             return
-        hard = sum(hard_seconds(s, paces)[0] for s in qual)
-        total_q = sum(hard_seconds(s, paces)[1] for s in sessions)
+        pool = [s for s in sessions if id(s) not in frozen] + list(extra)
+        hard = sum(hard_seconds(s, paces)[0] for s in pool if s.role in QUALITY_ROLES)
+        total_q = sum(hard_seconds(s, paces)[1] for s in pool)
         # the easy runs are not placed yet: estimate them from the rest of the week's target
-        rest = max(0.0, w.target - w.b_cut - sum(s.distance for s in sessions)) if estimate_rest else 0.0
+        rest = max(0.0, w.target - w.b_cut - past_m - sum(s.distance for s in sessions if id(s) not in frozen)
+                   ) if estimate_rest else 0.0
         speed = paces.mid("easy")
         total = total_q + (rest / speed if speed and paces.lt is not None else rest)
         if total <= 0 or hard / total <= limit:
@@ -1663,8 +1717,278 @@ def check_inputs(i: PlanInputs) -> None:
         raise PlanError("easy_band_slowdown must be from 0 to 0.1")
 
 
+# --- an existing plan rebuilt (build_plan(history=...), rule 1) -----------------------------------------------
+
+WEEK_KINDS = ("normal", "deload", "b_race", "taper", "race", "week0")
+
+
+def _step_band(role: str, kind: str, nested: bool) -> Optional[str]:
+    """The pace band a stored step was built with (the answer gives its speeds, not the band's name)."""
+    if kind == "recovery":
+        return None
+    if kind in ("warmup", "cooldown"):
+        return "easy"
+    if role in QUALITY_ROLES:
+        return role
+    return {"long": "long", "race": "mp", "strides": "strides" if nested else "easy"}.get(role, "easy")
+
+
+def _history_steps(raw: Any, role: str, nested: bool = False) -> Tuple[Step, ...]:
+    out: List[Step] = []
+    for st in raw if isinstance(raw, list) else []:
+        if not isinstance(st, Mapping):
+            continue
+        kind = str(st.get("type") or "")
+        try:
+            if kind == "repeat":
+                out.append(Step("repeat", times=max(1, int(st.get("times") or 1)),
+                                children=_history_steps(st.get("steps"), role, True)))
+                continue
+            if "distance_m" in st:
+                end, value = "distance", float(st["distance_m"])
+            else:
+                end, value = "time", float(st.get("time_s") or 0)
+        except (TypeError, ValueError):
+            continue
+        target = st.get("target")
+        band = target if isinstance(target, str) else _step_band(role, kind, nested)
+        out.append(Step(kind, end, value, band))
+    return tuple(out)
+
+
+def history_session(raw: Any) -> Optional[Session]:
+    """A stored session (session_json) as a Session that answers as it was stored; None when it is not one."""
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        day = dt.date.fromisoformat(str(raw["date"]))
+        role = str(raw["role"])
+        meters = Meters(float(raw.get("km") or 0.0) * 1000.0)
+        key = str(raw["key"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if role not in ROLES or not key:
+        return None
+    note = str(raw.get("structure") or "") if role == "b_race" else ""
+    return Session(key, day, role, meters, _history_steps(raw.get("steps"), role), note, raw=copy.deepcopy(dict(raw)))
+
+
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    return float(value)
+
+
+def history_week(raw: Any, basis: Any) -> Optional[Week]:
+    """A stored week that ended by today as a history Week (its JSON answered as stored), with its chain
+    numbers from the stored plan_basis when there are some."""
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        start = dt.date.fromisoformat(str(raw["start"]))
+        number = int(raw["week"])
+        phase, kind = str(raw["phase"]), str(raw["kind"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if kind not in WEEK_KINDS or start.weekday() != 0:
+        return None
+    w = Week(number, start, phase, kind, history=True, raw=copy.deepcopy(dict(raw)))
+    w.sessions = sorted((x for x in map(history_session, raw.get("sessions") or []) if x is not None),
+                        key=lambda x: (x.date, x.key))
+    w.target = Meters((_number(raw.get("target_km")) or 0.0) * 1000.0)
+    own = basis.get(start.isoformat()) if isinstance(basis, Mapping) else None
+    if isinstance(own, Mapping):
+        base = _number(own.get("base_m"))
+        if base is not None and base > 0:
+            w.base, w.base_known = Meters(base), True
+        w.b_cut = max(0.0, _number(own.get("b_cut_m")) or 0.0)
+        built = own.get("built_m")
+        for x in w.sessions:
+            before = _number(built.get(x.key)) if isinstance(built, Mapping) else None
+            if before is not None and before > x.distance:
+                w.acwr_ops[x.key] = [x.role, before, float(x.distance), x.date]
+    return w
+
+
+@dataclasses.dataclass
+class _History:
+    weeks: List[Week]            # the stored weeks that ended by today (week 0 included), whole
+    carried: List[Session]       # the stored sessions of today's week dated up to today
+    keys_after: Dict[dt.date, str]
+    b_races: Tuple[BRace, ...]   # the stored plan's B races up to today (no longer in the inputs)
+    first: Optional[dt.date]     # the stored plan's first week
+
+
+def _history_of(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> _History:
+    basis = body.get("basis")
+    weeks_basis = basis.get("weeks") if isinstance(basis, Mapping) else None
+    past: List[Week] = []
+    carried: List[Session] = []
+    keys_after: Dict[dt.date, str] = {}
+    starts: List[dt.date] = []
+    for raw in body.get("weeks") or []:
+        w = history_week(raw, weeks_basis)
+        if w is None:
+            continue
+        starts.append(w.start)
+        if w.end <= today:
+            past.append(w)
+            continue
+        for x in w.sessions:
+            if x.date <= today:
+                carried.append(x)
+            elif x.is_run and x.counts:
+                keys_after.setdefault(x.date, x.key)
+    taken = {b.date for b in inputs.b_races}
+    b_races: List[BRace] = []
+    for b in body.get("b_races") or []:
+        try:
+            day, kind = dt.date.fromisoformat(str(b["date"])), str(b["kind"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if day <= today and day not in taken and kind in B_RACE_KINDS:
+            taken.add(day)
+            b_races.append(BRace(day, kind))
+    past.sort(key=lambda w: w.start)
+    carried.sort(key=lambda x: (x.date, x.key))
+    return _History(past, carried, keys_after, tuple(b_races), min(starts) if starts else None)
+
+
+def history_b_races(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> Tuple[BRace, ...]:
+    """A rebuilt plan's B races up to today, from its stored version (plan_preview takes only B races after
+    today): rule 7 and the B weeks around them still hold."""
+    return _history_of(body, today, inputs).b_races
+
+
+def _rebase(ctx: Context, body: Mapping[str, Any], first: Optional[dt.date]) -> None:
+    """A rebuilt plan grows from where it was first built: its km0, longest run and peak ceiling (plan_basis),
+    not this snapshot's, which hold weeks the plan itself planned. A plan stored before plan_basis: its start
+    block's km0 and longest run (this snapshot's when they round to the same), and the ceiling from this
+    snapshot's weeks before the plan began."""
+    raw_basis, raw_start = body.get("basis"), body.get("start")
+    basis: Mapping[str, Any] = raw_basis if isinstance(raw_basis, Mapping) else {}
+    start: Mapping[str, Any] = raw_start if isinstance(raw_start, Mapping) else {}
+
+    def pick(name: str, stored_km: Any, now: Meters) -> Meters:
+        exact = _number(basis.get(name))
+        if exact is not None and exact > 0:
+            return Meters(exact)
+        old = _number(stored_km)
+        if old is not None and old > 0 and km(now) != round(old, 1):
+            return Meters(old * 1000.0)
+        return now
+
+    ctx.km0 = pick("km0_m", start.get("km0"), ctx.km0)
+    ctx.longest = pick("longest_m", start.get("longest_run_8w_km"), ctx.longest)
+    ceiling, biggest = _number(basis.get("ceiling_m")), _number(basis.get("biggest_m"))
+    if ceiling is not None and ceiling > 0 and biggest is not None:
+        ctx.ceiling = (Meters(ceiling), Meters(biggest))
+        return
+    snap = ctx.snapshot
+    weeks = list(snap.week_m)
+    this = monday(snap.today)
+    # week i of week_m (oldest first) starts len - i weeks before this one: only those before the plan began
+    before = [m for i, m in enumerate(weeks)
+              if first is None or this - dt.timedelta(days=7 * (len(weeks) - i)) < first]
+    ctx.ceiling = peak_ceiling(dataclasses.replace(snap, week_m=tuple(before)), ctx.km0, ctx.rules,
+                               ctx.inputs.race_distance)
+
+
+def plan_basis(plan: Mapping[str, Any]) -> Dict[str, Any]:
+    """What a later rebuild of this plan grows from (build_plan(history=...)), JSON-ready: km0, the longest
+    run and the peak ceiling it was first built with, the day it counts as first built (born: a plan built on
+    a Sunday whose week 1 has no Monday session is not one built on that Monday), and each week's base (normal weeks), rule-7 cut and the
+    km of its ACWR-cut sessions before the cut. plan_tools stores it with the version, outside the answer."""
+    ctx: Context = plan["_check"]["ctx"]
+    ceiling, biggest = plan_ceiling(ctx)
+    weeks: Dict[str, Any] = {}
+    for w in plan["_check"]["weeks"]:
+        if w.kind == "week0":
+            continue
+        entry: Dict[str, Any] = {}
+        if w.kind == "normal":
+            entry["base_m"] = float(w.base)
+        if w.b_cut:
+            entry["b_cut_m"] = float(w.b_cut)
+        built = {k: float(op[1]) for k, op in sorted(w.acwr_ops.items()) if float(op[1]) > float(op[2])}
+        if built:
+            entry["built_m"] = built
+        if entry:
+            weeks[w.start.isoformat()] = entry
+    born = ctx.born or ctx.snapshot.today
+    return {"born": born.isoformat(), "km0_m": float(ctx.km0), "longest_m": float(ctx.longest),
+            "ceiling_m": float(ceiling), "biggest_m": float(biggest), "weeks": weeks}
+
+
+def quality_left(quality: Sequence[str], carried: Sequence[Session]) -> Tuple[str, ...]:
+    """The week's quality kinds not yet taken by its carried sessions (a carried kind is not planned again; a
+    carried quality session of another kind takes the first hard one, carried strides the strides)."""
+    left = list(quality)
+    for s in carried:
+        if s.role in QUALITY_ROLES:
+            same = [q for q in left if q == s.role or (s.role == "mp" and q == "mp_short")]
+            hard = [q for q in left if q in QUALITY_ROLES or q == "mp_short"]
+            if same or hard:
+                left.remove((same or hard)[0])
+        elif s.role == "strides" and "strides" in left:
+            left.remove("strides")
+    return tuple(left)
+
+
+def _same_days(a: Sequence[Session], b: Sequence[Session]) -> bool:
+    def shape(xs: Sequence[Session]) -> List[Tuple[dt.date, str, float]]:
+        return sorted((x.date, x.role, km(x.distance)) for x in xs)
+    return shape(a) == shape(b)
+
+
+def _own_keys(w: Week, ctx: Context) -> None:
+    """One key per session (rule 1): a carried session keeps its key (a moved one keeps the day it was planned
+    on); a new session whose key it holds takes the stored version's key of its day, else the key of another
+    day of its week that no session holds."""
+    used = {x.key for ww in ctx.all_weeks if ww is not w for x in ww.sessions}
+    used |= {x.key for x in w.sessions if x.history}
+    for x in sorted((x for x in w.sessions if not x.history), key=lambda x: (x.date, x.key)):
+        if x.key in used:
+            tail = x.key.rsplit("-", 1)[-1]
+            slot = tail if tail in SESSION_SLOTS else "run"
+            stored = ctx.keys_after.get(x.date) if x.role not in ("race", "b_race") else None
+            options = ([stored] if stored else []) + [session_key(d, slot) for d in w.days()]
+            x.key = next((k for k in options if k not in used), x.key)
+        used.add(x.key)
+
+
+def _fill_current(w: Week, ctx: Context, hard: Set[dt.date], index: Dict[str, int],
+                  carried: Sequence[Session]) -> None:
+    """A rebuilt plan's current week (rule 1): the stored days up to today stay. The week is planned as first
+    planned; when its own days up to today are the carried ones, its later days stay as planned. Else the days
+    after today are planned again around the carried ones (fill_week(carried=...)) from the week's target less
+    the larger of the carried km and the km the week as planned had on those days (nothing made up)."""
+    today = ctx.snapshot.today
+    hard_before, n_warnings, index_before = set(hard), len(ctx.warnings), dict(index)
+    fill_week(w, ctx, hard, index)
+    mine = [s for s in w.sessions if s.date <= today]
+    if _same_days(mine, carried):
+        w.sessions = sorted(list(carried) + [s for s in w.sessions if s.date > today], key=lambda s: (s.date, s.key))
+    else:
+        del ctx.warnings[n_warnings:]
+        hard.clear()
+        hard.update(hard_before | {s.date for s in carried if s.hard_or_long})
+        index.clear()
+        index.update(index_before)
+        past_m = max(sum(float(s.distance) for s in carried if s.counts),
+                     sum(float(s.distance) for s in mine if s.counts))
+        opens = ctx.opens_after
+        ctx.opens_after = today
+        try:
+            fill_week(w, ctx, hard, index, carried=carried, past_m=past_m)
+        finally:
+            ctx.opens_after = opens
+    _own_keys(w, ctx)
+
+
 def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
-                born: Optional[dt.date] = None) -> Tuple[List[Week], Context]:
+                born: Optional[dt.date] = None,
+                history: Optional[Mapping[str, Any]] = None) -> Tuple[List[Week], Context]:
     ctx = context(inputs, snap, rules)
     today = snap.today
     # An existing plan first built on `born` keeps its week grid once its week 1 has begun: the weeks, phases,
@@ -1672,24 +1996,62 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
     # week 0) from where it was first planned; the weeks before it are history and are not planned again.
     first = week1_start(min(born, today)) if born is not None else None
     anchored = first is not None and first <= monday(today)
+    ctx.born = min(born, today) if born is not None else today
     weeks, windows, warnings = skeleton(inputs, today, rules, first=first if anchored else None)
     ctx.windows = windows
     ctx.warnings.extend(warnings)
     assign_quality(weeks, ctx)
+    past: List[Week] = []
+    carried: List[Session] = []
+    if history is not None:
+        # The stored version (rule 1): its weeks that ended by today are history, kept whole, and the volume
+        # chain, rule 3's step and rule 7's references go on from them; today's week keeps its stored days up
+        # to today and plans only the days after today around them; the merged plan is checked whole.
+        h = _history_of(history, today, inputs)
+        past, carried, ctx.keys_after = h.weeks, h.carried, h.keys_after
+        for s in carried + [s for w in past for s in w.sessions]:
+            # the stored km are rounded to 0.1: the metres the steps give at this plan's paces when they round
+            # to the same km (a timed recovery's metres come from the pace)
+            if s.counts and s.steps:
+                exact = Meters(round(sum(step_distance(st, ctx.paces) for st in s.steps), 0))
+                if km(exact) == km(s.distance):
+                    s.distance = exact
+        _rebase(ctx, history, h.first)
     if born is not None and anchored:
         weeks = [w for w in weeks if w.end > today]
         ctx.opens_after = max(min(born, today), monday(today) - dt.timedelta(days=1))
-    hard: Set[dt.date] = set()
+    past = [w for w in past if not weeks or w.start < weeks[0].start]
+    hard: Set[dt.date] = {s.date for w in past for s in w.sessions if s.hard_or_long}
     index: Dict[str, int] = {}
     w0 = None if anchored else week0(ctx)
-    all_weeks = ([w0] if w0 is not None else []) + weeks
+    held = bool(weeks) and weeks[0].start <= today   # a planned week holds today
+    if carried and not held and (w0 is None or w0.start != monday(today)):
+        w0 = Week(0, monday(today), "base", "week0")   # carried days with no planned week left to hold them
+    all_weeks = sorted(past + ([w0] if w0 is not None else []) + weeks, key=lambda w: w.start)
     ctx.all_weeks = all_weeks
+    if w0 is not None and carried and not held:
+        w0.sessions = sorted(carried + [s for s in w0.sessions if s.date > today], key=lambda s: (s.date, s.key))
+        w0.target = Meters(sum(s.distance for s in w0.sessions if s.counts))
+        _own_keys(w0, ctx)
+        hard |= {s.date for s in carried if s.hard_or_long}
     ctx.load = load_model(snap, ctx)
     if w0 is not None:
         enforce_acwr(w0, ctx)
-    assign_targets(weeks, ctx, lambda w: fill_week(w, ctx, hard, index),
+
+    def place(w: Week) -> None:
+        if w.history:
+            return
+        if history is not None and held and w is weeks[0]:
+            _fill_current(w, ctx, hard, index, carried)
+        else:
+            fill_week(w, ctx, hard, index)
+
+    assign_targets([w for w in past if w.kind != "week0"] + weeks, ctx, place,
                    lambda w: _capacity(w, ctx, hard, index))
     ctx.built_longs = _longs(all_weeks, ctx)
+    if history is not None:
+        # the plan is built: from here on (overrides, invariants) no day up to today is a run day of it
+        ctx.opens_after = today
     reenforce_acwr(all_weeks, ctx)   # item 12: the days after a week before the next week's first run
     return all_weeks, ctx
 
@@ -2374,10 +2736,33 @@ def _warn_relaxed(o: Override, weeks: Sequence[Week], ctx: Context, before: Mapp
                          "detail": f"{o.kind} below the plan's rules, as the plan now is: " + "; ".join(new[:3])})
 
 
+def _history_refusal(o: Override, weeks: Sequence[Week], ctx: Context) -> Optional[Dict[str, Any]]:
+    """A rebuilt plan's days up to today are history: an edit of one of their sessions (or of a week that
+    ended by today) is refused (past_day)."""
+    hit: List[Session] = []
+    if o.key:
+        found = _find(weeks, o.key)
+        hit += [found[1]] if found is not None else []
+    for day in (o.date, o.date_b):
+        if day is not None and o.kind != "move":
+            hit += [s for _w, s in _on(weeks, day)]
+    if o.kind in ("cap_week_km", "long_run_day") and o.week_start is not None:
+        hit += [s for w in weeks if w.start == o.week_start and w.history for s in w.sessions]
+        if o.kind == "long_run_day":
+            hit += [s for w in weeks if w.start == o.week_start for s in w.sessions if s.role == "long"]
+    past = next((s for s in hit if s.history), None)
+    if past is None:
+        return None
+    return _refuse(o, "past_day", past.date.isoformat(), ctx.snapshot.today.isoformat())
+
+
 def _apply_one(weeks: List[Week], ctx: Context, edit: Override) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     applied: List[Dict[str, Any]] = []
     refused: List[Dict[str, Any]] = []
     paces, r = ctx.paces, ctx.rules
+    past = _history_refusal(edit, weeks, ctx)
+    if past is not None:
+        return applied, [past]
     for o in (edit,):
         if o.kind == "cap_long":
             found = _run_on(weeks, o.date) if o.date is not None else (_find(weeks, o.key) if o.key else None)
@@ -2547,10 +2932,12 @@ def _cap_long_refusal(o: Override, s: Session) -> Optional[Tuple[str, Any, Any]]
     return None
 
 
-def _cap_week(w: Week, limit: Meters, ctx: Context) -> None:
+def _cap_week(w: Week, limit: Meters, ctx: Context, frozen: Sequence[Session] = ()) -> None:
     """Cut the week to `limit` metres: easy runs first (shortest dropped below the easy minimum), then the long
-    run (not below the longest run of 8 weeks... unless needed), then the quality sessions from the last."""
+    run (not below the longest run of 8 weeks... unless needed), then the quality sessions from the last. The
+    `frozen` sessions (a rebuilt week's days up to today) count but are never cut."""
     paces, r = ctx.paces, ctx.rules
+    keep = {id(s) for s in frozen} | {id(s) for s in w.sessions if s.history}
 
     def total() -> float:
         return sum(s.distance for s in w.sessions if s.counts)
@@ -2558,7 +2945,7 @@ def _cap_week(w: Week, limit: Meters, ctx: Context) -> None:
     easy_min = float(r["easy_min_km"]) * 1000.0
     while total() > limit + EPS_M:
         excess = total() - limit
-        easies = [s for s in w.sessions if s.role in ("easy", "strides")]
+        easies = [s for s in w.sessions if s.role in ("easy", "strides") and id(s) not in keep]
         if easies:
             s = max(easies, key=lambda x: (x.distance, x.key))
             new_d = _floor_m(s.distance - excess)
@@ -2567,7 +2954,7 @@ def _cap_week(w: Week, limit: Meters, ctx: Context) -> None:
             else:
                 w.sessions[w.sessions.index(s)] = make_session(s.key, s.date, s.role, new_d, paces, r)
             continue
-        long_s = next((s for s in w.sessions if s.role == "long"), None)
+        long_s = next((s for s in w.sessions if s.role == "long" and id(s) not in keep), None)
         if long_s is not None:
             new_d = _floor_m(long_s.distance - excess)
             if new_d < easy_min:
@@ -2575,7 +2962,7 @@ def _cap_week(w: Week, limit: Meters, ctx: Context) -> None:
             else:
                 w.sessions[w.sessions.index(long_s)] = make_session(long_s.key, long_s.date, "long", new_d, paces, r)
             continue
-        qual = [s for s in w.sessions if s.role in QUALITY_ROLES]
+        qual = [s for s in w.sessions if s.role in QUALITY_ROLES and id(s) not in keep]
         if not qual:
             return
         w.sessions.remove(qual[-1])
@@ -2615,6 +3002,13 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, 
     The plan carries what the checks need ("_check" is internal and never part of the answer). as_built: the
     long-run step and cap and 80% easy count the sessions reduce-only overrides changed or removed as they were
     (_as_built_week); False checks the plan exactly as it is (apply_overrides' warnings)."""
+    return [{k: v for k, v in i.items() if k != "problems"}
+            for i in _invariant_problems(plan, rules, as_built=as_built)]
+
+
+def _invariant_problems(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, *,
+                        as_built: bool = True) -> List[Dict[str, Any]]:
+    """check_invariants with every problem of each rule ("problems"; the detail shows the first five)."""
     chk = plan["_check"]
     weeks: List[Week] = chk["weeks"]
     ctx: Context = chk["ctx"]
@@ -2622,13 +3016,13 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, 
     out: List[Dict[str, Any]] = []
 
     def add(rule: str, problems: List[str]) -> None:
-        out.append({"id": rule, "ok": not problems, "detail": "; ".join(problems[:5])})
+        out.append({"id": rule, "ok": not problems, "detail": "; ".join(problems[:5]), "problems": problems})
 
     def planned(w: Week) -> float:
         return sum(s.distance for s in w.sessions if s.counts)
 
     growth = 1 + float(rules["growth_max"])
-    ceiling, _biggest = peak_ceiling(ctx.snapshot, ctx.km0, rules, ctx.inputs.race_distance)
+    ceiling, _biggest = plan_ceiling(ctx, rules)
     step = float(rules["long_step_m"])
     days_late = int(rules["late_long_days"])
     t_cap = long_time_cap(paces, rules)
@@ -2674,7 +3068,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, 
             target = min(last_normal * growth, float(ceiling))
             # (what rule 7 took off a long run around a B race is no shortfall either)
             got = w.acwr_from if w.acwr_from[0] > p else (p, sum(1 for s in w_now.sessions if s.counts))
-            if not ctx.inputs.overrides and not calendar_week(w, ctx) \
+            if not ctx.inputs.overrides and not calendar_week(w, ctx) and not w.history \
                     and w.base > week_base(float(w.target), got[0] + w.b_cut, got[1], None) + EPS_M:
                 probs["growth_cap"].append(f"week {w.number}: grows from {km(w.base)} km, placed {km(p)} km")
             last_normal = min(target, float(w.base))
@@ -2931,6 +3325,8 @@ def structure_text(s: Session, paces: Paces) -> str:
 
 
 def session_json(s: Session, paces: Paces) -> Dict[str, Any]:
+    if s.raw is not None:   # a rebuilt plan's day up to today: as stored
+        return copy.deepcopy(s.raw)
     secs = session_seconds(s, paces)
     main = next((st for st in _leaves(s.steps) if st.kind == "interval"), None)
     out = {"key": s.key, "date": s.date.isoformat(), "weekday": WEEKDAYS[s.date.weekday()], "role": s.role,
@@ -2944,6 +3340,8 @@ def session_json(s: Session, paces: Paces) -> Dict[str, Any]:
 
 
 def week_json(w: Week, paces: Paces) -> Dict[str, Any]:
+    if w.raw is not None:   # a rebuilt plan's week that ended by today: as stored
+        return copy.deepcopy(w.raw)
     longs = [s.distance for s in w.sessions if s.role == "long"]
     return {"week": w.number, "start": w.start.isoformat(), "end": w.end.isoformat(), "phase": w.phase,
             "kind": w.kind, "target_km": km(w.target),
@@ -2966,11 +3364,22 @@ def summary(weeks: Sequence[Week]) -> Dict[str, Optional[float]]:
 
 
 def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RULES, *,
-               what_if_runs: bool = True, born: Optional[dt.date] = None) -> Dict[str, Any]:
+               what_if_runs: bool = True, born: Optional[dt.date] = None,
+               history: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """The plan for `inputs` on `snap` as a JSON-ready dict. Raises PlanError for inputs it cannot plan from.
     The "_check" key holds the objects check_invariants() reads; plan_answer() drops it. born: the day an
-    existing plan was first built (it keeps that plan's week grid, see _build_core); None for a new plan."""
-    weeks, ctx = _build_core(inputs, snap, rules, born)
+    existing plan was first built (it keeps that plan's week grid, see _build_core); None for a new plan.
+    history: that plan's stored version (its answer, with plan_basis under "basis"): its weeks that ended by
+    today and today's sessions up to today are kept as stored and the rest is planned around them (rule 1);
+    its B races up to today still count (rule 7); the merged plan is checked whole, and a rule only the kept
+    days break is a warning (history_rule), not a failed invariant."""
+    engine_inputs = inputs
+    if history is not None:
+        past_b = history_b_races(history, snap.today, inputs)
+        if past_b:
+            engine_inputs = dataclasses.replace(inputs, b_races=tuple(sorted(inputs.b_races + past_b,
+                                                                              key=lambda b: b.date)))
+    weeks, ctx = _build_core(engine_inputs, snap, rules, born, history)
     applied, refused = apply_overrides(weeks, ctx)
     b_notes(weeks, ctx)
     paces = ctx.paces
@@ -3014,14 +3423,64 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
     }
     if pacing is not None:
         plan["race_pacing"] = pacing
-    inv = check_invariants(plan, rules)
+    kept: List[Dict[str, Any]] = []
+    if history is None:
+        inv = check_invariants(plan, rules)
+    else:
+        inv, kept = merged_invariants(plan, rules)
     plan["invariants"] = {"ok": all(i["ok"] for i in inv), "failed": [i for i in inv if not i["ok"]],
                           "checked": [i["id"] for i in inv if not i.get("not_enforced")],
                           "not_enforced": [{"id": i["id"], "detail": i["detail"]} for i in inv
                                            if i.get("not_enforced")]}
+    if kept:
+        plan["invariants"]["history"] = kept
+        plan["warnings"] = _dedupe(plan["warnings"] + [
+            {"id": "history_rule", "dates": [], "detail": f"{k['id']}: {k['detail']} (days up to today, kept as "
+                                                          f"they were; the days after them keep the rule)"}
+            for k in kept])
     if what_if_runs:
-        plan["what_if"] = what_if(inputs, snap, plan, rules, born)
+        plan["what_if"] = what_if(inputs, snap, plan, rules, born, history)
     return plan
+
+
+def merged_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES
+                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """A rebuilt plan's invariants (rule 1), checked on the whole merged plan: (check_invariants' list, the
+    problems only the days up to today cause). A problem the kept days have on their own (the plan cut at
+    today: the same text) is history, a warning; any other one is a failure, so the days planned after today
+    keep every rule against the kept ones. Rule 4's easy share of today's week is history when the kept days
+    alone already miss it and the days after today add no quality session."""
+    weeks: List[Week] = plan["_check"]["weeks"]
+    ctx: Context = plan["_check"]["ctx"]
+    today = ctx.snapshot.today
+    cut = [dataclasses.replace(w, sessions=[s for s in w.sessions if s.date <= today])
+           for w in weeks if w.start <= today]
+    before = {i["id"]: set(i.get("problems") or []) for i in _invariant_problems({"_check": {"weeks": cut, "ctx": ctx}}, rules)}
+    added_quality = {w.number for w in weeks for s in w.sessions if s.date > today and s.role in QUALITY_ROLES}
+
+    def old(rule: str, problem: str) -> bool:
+        if problem in before.get(rule, set()):
+            return True
+        if rule != "easy_share" or not problem.startswith("week ") or ":" not in problem:
+            return False
+        subject = problem.split(":", 1)[0]
+        number = subject.split(" ", 1)[1]
+        return (number.isdigit() and int(number) not in added_quality
+                and any(p.split(":", 1)[0] == subject for p in before.get(rule, set())))
+
+    out: List[Dict[str, Any]] = []
+    kept: List[Dict[str, Any]] = []
+    for i in _invariant_problems(plan, rules):
+        problems = list(i.get("problems") or [])
+        history = [p for p in problems if old(i["id"], p)]
+        new = [p for p in problems if p not in history]
+        entry = {k: v for k, v in i.items() if k != "problems"}
+        if problems:
+            entry.update(ok=not new, detail="; ".join(new[:5]))
+        out.append(entry)
+        if history:
+            kept.append({"id": i["id"], "detail": "; ".join(history[:5])})
+    return out, kept
 
 
 def _dedupe(warnings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -3040,7 +3499,8 @@ def plan_answer(plan: Mapping[str, Any]) -> Dict[str, Any]:
 # --- what-if (Engine v1 item 10) ------------------------------------------------------------------------------
 
 def what_if(inputs: PlanInputs, snap: Snapshot, base: Mapping[str, Any],
-            rules: Mapping[str, Any] = RULES, born: Optional[dt.date] = None) -> List[Dict[str, Any]]:
+            rules: Mapping[str, Any] = RULES, born: Optional[dt.date] = None,
+            history: Optional[Mapping[str, Any]] = None) -> List[Dict[str, Any]]:
     variants: List[Tuple[str, PlanInputs]] = []
     delta = int(rules["what_if"]["goal_delta_s"])
     if inputs.goal_time_s:
@@ -3053,7 +3513,7 @@ def what_if(inputs: PlanInputs, snap: Snapshot, base: Mapping[str, Any],
     base_ids = {w["id"] for w in base["warnings"]}
     out = []
     for name, var in variants:
-        other = build_plan(var, snap, rules, what_if_runs=False, born=born)
+        other = build_plan(var, snap, rules, what_if_runs=False, born=born, history=history)
         ids = {w["id"] for w in other["warnings"]}
         bs, os_ = base["summary"], other["summary"]
         out.append({
