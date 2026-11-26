@@ -2668,6 +2668,28 @@ class PlanSection(unittest.TestCase):
             self.assertNotIn("plan", out)
             self.assertFalse(any("plan" in w for w in out["today"]))
 
+    def test_a_draft_is_not_shown_only_the_active_plan(self):
+        # The owner's live finding: with only a draft stored the report said "Plan: rest day". The status
+        # reports follow the active plan only (plan_store.tracked_plan); a draft stays out until activated.
+        import plan_store as ps
+        import plan_tracking
+
+        store = ps.MemoryPlanStore()
+        fp = store.account_fp(str(PROFILE))
+        body = {"weeks": [{"week": 1, "start": "2026-03-16", "end": "2026-03-22", "sessions": [
+            {"key": "w01-e1", "date": "2026-03-17", "role": "easy", "km": 8.0, "minutes": 50}]}]}
+        pid, _, _ = store.save_preview(fp, None, dt.date(2026, 4, 26), 1, {}, body, "d" * 64)
+        plan_tracking.configure(lambda: store)
+        self.addCleanup(plan_tracking.configure, None)
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertIsNone(out.get("plan"))
+        self.assertNotIn("Plan:", out["text"])
+        self.assertEqual(store.links(pid), [])                      # nothing tracked for a draft
+        store.move_plan(pid, "active")
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertEqual((out["plan"]["role"], out["plan"]["date"]), ("rest", DAY))
+        self.assertIn("Plan: rest day", out["text"])
+
     def test_switch_off_makes_no_database_call(self):
         mod = fake_tracking(store=None)
         self.build_with(mod)

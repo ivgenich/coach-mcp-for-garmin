@@ -1,12 +1,13 @@
 """Tracking the plan's own sessions against finished activities (PLAN_TRACKING=on, Stage 3).
 
-The plan tracked is the account's active plan, else its latest draft (plan_store.tracked_plan): tracking
-works on the plan's own sessions (date, sport, role) without any Garmin write. A Garmin workout id on a
+The plan tracked is the account's active plan (plan_store.tracked_plan); a draft is never tracked, so
+without an active plan nothing is stored and the readers answer None. Tracking works on the plan's own
+sessions (date, sport, role) without any Garmin write. A Garmin workout id on a
 session's row (Stage 2) is only an optional link, through which Garmin's own associatedActivityId wins.
 
 Rules (fixed; docs/training-plan.md "Tracking"):
 - Matching is status_common.match_completion_pairs with one day early or late (MAX_EARLY_DAYS,
-  MAX_LATE_DAYS) and not_before = the plan's activation (a draft: its creation), so an activity from before
+  MAX_LATE_DAYS) and not_before = the plan's activation (its creation for a row without one), so an activity from before
   the plan never completes one of its sessions. Each activity completes at most one session (an id listed
   twice counts once); the most sessions are completed and, of those ways, the most on their own day.
 - On one day the bigger run is offered first (by distance, then time, not by start time), so a warm-up jog
@@ -22,8 +23,7 @@ Rules (fixed; docs/training-plan.md "Tracking"):
   get_weekly_status's 14 days do, except from a failed activity search (activities None: nothing) or from
   the days a full page may lack (cut: only from the day after its oldest activity).
 - A stored done, partial or replaced link stays as it is when its activity is not in the data being matched
-  (a later refresh with fewer days never undoes it) or started before not_before (a draft tracked, then
-  activated by plan_commit: the activation does not undo what the draft already counted).
+  (a later refresh with fewer days never undoes it) or started before not_before.
 
 The links are written to plan_workouts (plan_store.save_links: a session without a Garmin row gets a
 `local` row) by refresh_links(), which get_daily_status calls with yesterday's and today's activities,
@@ -129,7 +129,7 @@ def plan_sessions(body: Any) -> List[Dict[str, Any]]:
 
 
 def _not_before(plan: Mapping[str, Any], tz: dt.tzinfo) -> Optional[dt.datetime]:
-    """The plan's activation (a draft: its creation) as a naive local time."""
+    """The plan's activation (its creation for a row without one) as a naive local time."""
     moment = plan.get("activated_at") or plan.get("created_at")
     if not isinstance(moment, dt.datetime):
         return None

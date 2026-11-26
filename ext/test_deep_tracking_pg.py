@@ -82,10 +82,11 @@ class PgTracking(unittest.TestCase):
         self.profile = str(10 ** 12 + secrets.randbelow(10 ** 12))
         self.fp = self.store.account_fp(self.profile)
         self.pid, _, _ = self.store.save_preview(self.fp, None, RACE, 1, {}, body(), secrets.token_hex(32))
-        # The plan is created now(); these tests' runs are in Nov/Dec 2026, so date its creation before them.
+        self.store.move_plan(self.pid, "active")   # tracking follows the active plan only
+        # The plan is created and activated now(); these tests' runs are in Nov/Dec 2026, so date both before them.
         with self.store.transaction() as conn:
-            conn.execute("UPDATE history.plans SET created_at = %s WHERE plan_id = %s",
-                         (dt.datetime(2026, 11, 1, tzinfo=UTC), self.pid))
+            conn.execute("UPDATE history.plans SET created_at = %s, activated_at = %s WHERE plan_id = %s",
+                         (dt.datetime(2026, 11, 1, tzinfo=UTC), dt.datetime(2026, 11, 1, tzinfo=UTC), self.pid))
         logger = logging.getLogger("garmin_ext.plans")
         saved = (logger.handlers[:], logger.propagate)
         logger.handlers, logger.propagate = [logging.NullHandler()], False
@@ -138,8 +139,7 @@ class PgTracking(unittest.TestCase):
 
     def test_activation_keeps_a_counted_link(self):
         tr.refresh_links(self.store, self.fp, day(1), [run(1, day(1))], [], tz=UTC, today=day(1))
-        self.store.move_plan(self.pid, "active")
-        with self.store.transaction() as conn:     # activated on Wednesday noon, between the two runs
+        with self.store.transaction() as conn:     # activation moved to Wednesday noon, between the two runs
             conn.execute("UPDATE history.plans SET activated_at = %s WHERE plan_id = %s",
                          (dt.datetime(2026, 12, 2, 12, 0, tzinfo=UTC), self.pid))
         self.weekly([run(1, day(1)), run(2, day(2))], day(6))

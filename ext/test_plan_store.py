@@ -170,11 +170,15 @@ class StoreContract:
         return {"workout_key": key, "date_local": day, "role": role, "dto_hash": h(key),
                 "linked_activity_id": activity, "link_status": status}
 
-    def test_tracked_plan_is_the_accounts_latest_open_plan(self):
+    def test_tracked_plan_is_the_accounts_active_plan(self):
         self.assertIsNone(self.store.tracked_plan(self.fp))
         first, _, _ = self.save(content="x")
         other = self.store.account_fp("654321")
         foreign, _, _ = self.save(content="y", fp=other)
+        self.assertIsNone(self.store.tracked_plan(self.fp))          # a draft is never tracked
+        self.assertEqual(self.store.get_plan(self.fp)["plan_id"], first)   # plan_get still gives it
+        self.store.move_plan(first, "active")
+        self.store.move_plan(foreign, "active")
         self.assertEqual(self.store.tracked_plan(self.fp)["plan_id"], first)
         self.assertEqual(self.store.tracked_plan(self.fp)["version_row"]["body"]["content"], "x")
         self.assertEqual(self.store.tracked_plan(other)["plan_id"], foreign)
@@ -350,6 +354,8 @@ class WriteContract(StoreContract):
         self.store.move_plan(active, "active")
         self.save(content="z")
         self.assertEqual(self.store.tracked_plan(self.fp)["plan_id"], active)
+        self.store.move_plan(active, "cancelled")                     # the drafts left are not tracked
+        self.assertIsNone(self.store.tracked_plan(self.fp))
 
     def test_a_garmin_row_keeps_its_state_and_date(self):
         pid, _, _ = self.save()

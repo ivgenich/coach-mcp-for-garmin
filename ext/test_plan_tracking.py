@@ -76,9 +76,12 @@ class Clock:
         return self.now
 
 
-def make_plan(store, fp, content="a"):
+def make_plan(store, fp, content="a", active=True):
+    """A stored plan, active unless active=False (tracking follows the active plan only)."""
     pid, version, _ = store.save_preview(fp, None, RACE, 1, {"race_date": RACE.isoformat()}, body(),
                                          ps.hashlib.sha256(content.encode()).hexdigest())
+    if active:
+        store.move_plan(pid, "active")
     return pid, version
 
 
@@ -205,14 +208,14 @@ class RealWeek(Base):
         self.assertEqual(self.statuses()["w02-long"], "done_late")
 
     def test_an_activity_before_the_plan_never_counts(self):
-        self.store.plans[self.pid]["created_at"] = dt.datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
+        self.store.plans[self.pid]["activated_at"] = dt.datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=2))
         self.weekly(WEEK1 + dt.timedelta(days=2))
         self.assertEqual(self.statuses().get("w01-e1"), "missed")    # its run was at 07:00, before the plan
 
     def test_activation_wins_over_creation(self):
         row = self.store.plans[self.pid]
-        row.update(status="active", activated_at=dt.datetime(2026, 12, 3, 8, 0, tzinfo=UTC))
+        row.update(created_at=dt.datetime(2026, 11, 1, 8, 0, tzinfo=UTC), activated_at=dt.datetime(2026, 12, 3, 8, 0, tzinfo=UTC))
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=4))
         self.weekly(WEEK1 + dt.timedelta(days=4))
         self.assertEqual(self.statuses()["w01-q1"], "missed")
@@ -227,15 +230,17 @@ class ReviewCases(unittest.TestCase):
 
     def setUp(self):
         self.clock = Clock()
-        self.clock.now = dt.datetime(2026, 11, 23, 8, 0, tzinfo=UTC)   # the draft: Monday 08:00
+        self.clock.now = dt.datetime(2026, 11, 23, 8, 0, tzinfo=UTC)   # the plan, activated: Monday 08:00
         self.store = ps.MemoryPlanStore(clock=self.clock)
         self.fp = self.store.account_fp("123456")
 
-    def plan(self, sessions):
+    def plan(self, sessions, active=True):
         body = {"weeks": [{"week": 1, "start": self.MON.isoformat(),
                            "end": (self.MON + dt.timedelta(days=6)).isoformat(), "sessions": sessions}],
                 "content_hash": "r"}
         self.pid, _, _ = self.store.save_preview(self.fp, None, RACE, 1, {}, body, "b" * 64)
+        if active:
+            self.store.move_plan(self.pid, "active")
 
     def day(self, n):
         return self.MON + dt.timedelta(days=n)
@@ -249,27 +254,21 @@ class ReviewCases(unittest.TestCase):
     def statuses(self):
         return {r["workout_key"]: (r["link_status"], r["linked_activity_id"]) for r in self.store.links(self.pid)}
 
-    def test_activation_keeps_what_the_draft_counted(self):
-        self.plan([session("w01-e1", self.day(0), "easy", 8.0, 45)])
+    def test_a_draft_is_not_tracked_until_it_is_activated(self):
+        self.plan([session("w01-e1", self.day(0), "easy", 8.0, 45),
+                   session("w01-e2", self.day(1), "easy", 6.0, 36)], active=False)
         acts = [act(5, self.day(0), 10, "running", 8.0, 45)]               # Monday 10:00, after the draft
-        self.daily(0, acts)
-        self.assertEqual(self.statuses(), {"w01-e1": ("done", 5)})
-        self.clock.now = dt.datetime(2026, 11, 24, 7, 0, tzinfo=UTC)       # plan_commit activates: Tuesday 07:00
+        self.assertIsNone(self.daily(0, acts))                             # a draft: no plan state, no links
+        self.assertIsNone(tr.today_plan(self.store, self.fp, self.day(0)))
+        self.assertIsNone(tr.week_counts(self.store, self.fp, self.MON))
+        self.assertEqual(self.statuses(), {})
+        self.clock.now = dt.datetime(2026, 11, 24, 7, 0, tzinfo=UTC)       # activated: Tuesday 07:00
         self.store.move_plan(self.pid, "active")
+        acts.append(act(6, self.day(1), 8, "running", 6.0, 36))            # Tuesday 08:00, after the activation
         self.daily(1, acts)
-        self.assertEqual(self.statuses(), {"w01-e1": ("done", 5)})
-        # Not counted before: a run before the activation still counts for nothing.
-        fresh = [session("w01-e2", self.day(1), "easy", 6.0, 36)]
-        other = ps.MemoryPlanStore(clock=self.clock)
-        other.save_preview(self.fp, None, RACE, 1, {}, {"weeks": [{"week": 1, "start": self.MON.isoformat(),
-                                                                   "end": self.day(6).isoformat(),
-                                                                   "sessions": fresh}]}, "c" * 64)
-        self.clock.now = dt.datetime(2026, 11, 24, 9, 0, tzinfo=UTC)
-        pid = other.tracked_plan(self.fp)["plan_id"]
-        other.move_plan(pid, "active")
-        tr.refresh_links(other, self.fp, self.day(1), [act(6, self.day(1), 8, "running", 6.0, 36)], [], tz=UTC,
-                         today=self.day(1))
-        self.assertEqual(other.links(pid), [])
+        # The run from before the activation counts for nothing; the one after it does.
+        self.assertEqual(self.statuses(), {"w01-e2": ("done", 6)})
+        self.assertEqual(tr.today_plan(self.store, self.fp, self.day(1))["link_status"], "done")
 
     def test_a_run_the_day_before_is_not_missed_by_a_later_daily(self):
         self.plan([session("w01-e1", self.day(2), "easy", 8.0, 45)])      # Wednesday
@@ -373,7 +372,7 @@ class Readers(Base):
                                           "as_of": "2026-12-20T06:00"}])
         self.assertEqual(view["feedback"], [{"key": "w01-e1", "rpe": 4, "pain": 2, "pain_location": "calf",
                                              "sharp": False}])
-        pid2, _ = make_plan(self.store, self.fp, "b")
+        pid2, _ = make_plan(self.store, self.fp, "b", active=False)
         self.assertEqual(tr.stored_links(self.store, pid2), {})
 
     def test_failures_never_raise_and_log_only_the_type(self):
@@ -441,6 +440,20 @@ class Feedback(unittest.TestCase):
     def log(self, **kw):
         args = {"workout_key": "w01-e1", "rpe": 4, "pain": 0, "pain_location": "none", "sharp": False, **kw}
         return self.svc.feedback(**args)
+
+    def test_a_draft_is_refused(self):
+        # Feedback goes to the active plan only: a draft, as the default or by its plan_id, gets a fixed text
+        # and nothing is stored.
+        self.store.move_plan(self.pid, "cancelled")
+        draft, _ = make_plan(self.store, self.fp, "draft", active=False)
+        self.assertEqual(self.log(), pt.TEXT_DRAFT)
+        self.assertEqual(self.log(plan_id=draft), pt.TEXT_DRAFT)
+        self.assertEqual(self.store.feedback(draft), [])
+        # An active plan wins over a newer draft as the default.
+        self.store.move_plan(draft, "active")
+        newer, _ = make_plan(self.store, self.fp, "newer", active=False)
+        self.assertEqual(json.loads(self.log())["plan_id"], draft)
+        self.assertEqual(self.log(plan_id=newer), pt.TEXT_DRAFT)
 
     def test_stored_then_replaced(self):
         out = json.loads(self.log())

@@ -273,6 +273,16 @@ class Flow(unittest.TestCase):
         if kinds == {"pain_advice"}:
             self.assertIsNone(out["apply"]["token"])
 
+    def test_a_draft_is_never_reviewed(self):
+        # Only the active plan is tracked and reviewed: a draft (here the only open plan) is refused with a
+        # fixed text, by its plan_id and as the default, and nothing is stored for it.
+        self.store.move_plan(self.pid, "cancelled")
+        draft = json.loads(run(self.plans.preview(**tpt.ARGS)))["stored"]["plan_id"]
+        self.assertEqual(self.store.get_plan(self.store.account_fp("123456"), draft)["status"], "draft")
+        self.assertEqual(run(self.review_svc.review(plan_id=draft, week_start="2026-11-30")), pt.TEXT_DRAFT)
+        self.assertEqual(run(self.review_svc.review(plan_id="", week_start="")), pt.TEXT_DRAFT)
+        self.assertEqual((self.store.links(draft), self.store.changes_of(draft)), ([], []))
+
     def test_without_writes_no_apply(self):
         self.review_svc.apply_hook = None
         out = self.review(week_start="2026-11-30")

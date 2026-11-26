@@ -285,6 +285,11 @@ def fingerprint(salt_hex: str, profile_id: Any) -> str:
     return hmac.new(bytes.fromhex(salt_hex), str(profile_id).strip().encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _active_only(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """get_plan(account_fp)'s row when it is the active plan (get_plan lists the active plan first), else None."""
+    return row if row is not None and row.get("status") == "active" else None
+
+
 def new_plan_id() -> str:
     return secrets.token_hex(16)
 
@@ -547,8 +552,9 @@ class MemoryPlanStore:
     # --- Stage 3: tracking links and feedback ---
 
     def tracked_plan(self, account_fp):
-        """The plan tracking follows: get_plan(account_fp) (the account's active plan, else its latest draft)."""
-        return self.get_plan(account_fp)
+        """The plan tracking, the status reports, log_feedback and plan_review_week follow: the account's active
+        plan, or None while it has none (a draft is never tracked; get_plan(account_fp) still gives it)."""
+        return _active_only(self.get_plan(account_fp))
 
     def save_links(self, plan_id, version, links, checked_at=None):
         """Upsert each session's link (check_link items). A session without a row gets a LOCAL_STATE row; a
@@ -1023,8 +1029,9 @@ class PgPlanStore:
     # --- Stage 3: tracking links and feedback ---
 
     def tracked_plan(self, account_fp):
-        """The plan tracking follows: get_plan(account_fp) (the account's active plan, else its latest draft)."""
-        return self.get_plan(account_fp)
+        """The plan tracking, the status reports, log_feedback and plan_review_week follow: the account's active
+        plan, or None while it has none (a draft is never tracked; get_plan(account_fp) still gives it)."""
+        return _active_only(self.get_plan(account_fp))
 
     _LINK_COLS = ("workout_key, version, date_local, role, dto_hash, state, garmin_workout_id, linked_activity_id, "
                   "link_status, link_checked_at")
