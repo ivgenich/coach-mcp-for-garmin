@@ -205,6 +205,7 @@ class Base(unittest.TestCase):
         self.confirm_binds = []
         self.may_write = True
         self.mono = [0.0]
+        self.day = TODAY               # the service's today (the store's clock moves apart)
         self.svc = self.service()
 
     def _release(self):
@@ -220,7 +221,7 @@ class Base(unittest.TestCase):
             return self.confirm_answer
 
         opts = {"sleep": lambda s: None, "join_s": 0.3, "clock": lambda: self.mono[0], **options}
-        return pw.WriteService(lambda: self.garmin, lambda: self.store, lambda: TODAY,
+        return pw.WriteService(lambda: self.garmin, lambda: self.store, lambda: self.day,
                                may_write=lambda: self.may_write, confirm=confirm, executor_options=opts)
 
     def preview(self, sessions=None, plan_id=None, content="a", days=14, fixed=(), lt=None):
@@ -240,6 +241,9 @@ class Base(unittest.TestCase):
 
     def rows(self, pid):
         return {r["workout_key"]: r for r in self.store.write_rows(pid)}
+
+    def deletes(self):
+        return [c[1] for c in self.garmin.writes() if c[0] == "DELETE"]
 
 
 class Commit(Base):
@@ -784,7 +788,10 @@ class Lifecycle(Base):
         self.assertEqual(self.rows(pid)["20261205-run"]["state"], "scheduled")
         self.assertEqual((len(self.garmin.library), len(self.garmin.calendar)), (3, 3))
 
-    def test_a_replacement_of_an_unknown_workout_deletes_the_old_one(self):
+    def test_a_replacement_of_an_unknown_workout_deletes_the_old_one_with_the_next_token(self):
+        """When the token was issued the old workout was `unknown`, so its ops name no delete: the token writes
+        only its ops (the replacement) and keeps the old workout (kept[]); the next preview lists its delete
+        (and the confirmation its remove), and that token deletes it."""
         day = TODAY + dt.timedelta(days=1)
         pid, c1 = self.preview(sessions=[session("20261202-run", day)])
         self.garmin.faults["schedule"] = ["block"]
@@ -795,7 +802,23 @@ class Lifecycle(Base):
         _p, c2 = self.preview(sessions=[session("20261202-run", day, km=10.0)], plan_id=pid, content="b")
         self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "20261202-run")])
         self.clock.advance(minutes=3)
+        self.confirm_answer = "accepted"
         out = self.commit(pid, c2["token"])
+        self.assertEqual(out["status"], "done", out)
+        self.assertEqual(self.confirm_calls[-1], {"action": "commit", "count": 1, "dates": [day.isoformat()],
+                                                  "roles": ["easy"]})
+        self.assertIn(old, self.garmin.library, "a workout outside the token's ops was deleted")
+        self.assertEqual(self.deletes(), [])
+        self.assertEqual(out["kept"], [{"key": "20261202-run", "date": day.isoformat(), "role": "easy",
+                                        "reason": pw.REASON_RETIRED_KEPT}])
+        self.assertEqual(out["replaced"], [])
+        _p, c3 = self.preview(sessions=[session("20261202-run", day, km=10.0)], plan_id=pid, content="b")
+        retired = [k for k in self.rows(pid) if "~" in k]
+        self.assertEqual([(o["op"], o["key"]) for o in c3["ops"]], [("delete", retired[0])])
+        out = self.commit(pid, c3["token"])
+        self.assertEqual(self.confirm_calls[-1], {"action": "commit", "count": 0, "dates": [], "roles": [],
+                                                  "removes": 1, "remove_dates": [day.isoformat()],
+                                                  "remove_roles": ["easy"]})
         self.assertEqual(out["status"], "done", out)
         self.assertNotIn(old, self.garmin.library)
         self.assertEqual(len(self.garmin.library), 1)
@@ -845,9 +868,18 @@ class Lifecycle(Base):
         self.assertEqual(prev["cancel"]["ops"], [])
         self.assertEqual(self.commit(pid, c1["token"])["status"], "done")
         out = self.cancel(pid, prev["cancel"]["token"])
-        self.assertEqual((out["status"], out["reason"]), ("refused", "superseded"))
+        # Issued while the plan was a draft; the commit started it (plan_changed is checked first, before the
+        # reads that would also find the token superseded).
+        self.assertEqual((out["status"], out["reason"]), ("refused", "plan_changed"))
         self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "active")
-        self.assertEqual(len(self.garmin.calendar), 3)
+        # The plan already active: a commit after the cancel preview adds a workout the token did not list.
+        prev = self.cancel(pid)
+        _p, c2 = self.preview(sessions=default_sessions() + [session("20261206-run", TODAY + dt.timedelta(days=5))],
+                              plan_id=pid, content="b")
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
+        out = self.cancel(pid, prev["cancel"]["token"])
+        self.assertEqual((out["status"], out["reason"]), ("refused", "superseded"))
+        self.assertEqual(len(self.garmin.calendar), 4)
 
     def test_a_refused_delete_leaves_the_cancel_partial_and_the_plan_open(self):
         pid, c1 = self.preview()
@@ -869,6 +901,204 @@ class Lifecycle(Base):
         self.garmin.profile = "999"
         self.assertEqual(self.commit(pid, c1["token"])["reason"], "other_account")
         self.assertEqual(self.garmin.writes(), [])
+
+
+class Guards(Base):
+    """The security review's findings on the write path (each test failed before its fix)."""
+
+    def _own(self, n, *, description=True):
+        with self.garmin.lock:
+            for i in range(n):
+                w = {"workoutId": 100 + i, "workoutName": f"Mine {i}"}
+                if description:
+                    w["description"] = "the user's own"
+                self.garmin.library[100 + i] = w
+
+    def _paged(self, *, honour_start=True):
+        orig = self.garmin.get_workouts
+
+        def paged(start, limit):          # oldest first: a landed upload sits on the last page
+            items = sorted(orig(start, limit), key=lambda w: w["workoutId"])
+            return items[start:start + limit] if honour_start else items[:limit]
+        self.garmin.get_workouts = paged
+
+    def _landed_late(self, pid, token):
+        self.garmin.faults["create"] = ["block"]   # the POST outlives the call (read timeout) and lands later
+        self.assertEqual(self.commit(pid, token)["status"], "unknown")
+        self.garmin.blocked.set()
+        self.assertTrue(pw.join_write_threads(5))
+        self.garmin.blocked.clear()
+        self.clock.advance(minutes=5)              # quarantine over
+
+    def _copies(self, pid, key):
+        head = f"coach-mcp {self.store.install_tag()} {pid} {key} "
+        return [w for w in self.garmin.library.values() if str(w.get("description", "")).startswith(head)]
+
+    def test_a_landed_upload_on_a_later_library_page_is_adopted(self):
+        self._own(100)
+        self._paged()
+        pid, c = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
+        self._landed_late(pid, c["token"])
+        again = self.commit(pid, c["token"])
+        self.assertEqual(again["status"], "done", again)
+        self.assertEqual(len(self._copies(pid, "20261202-run")), 1, "one token wrote the same workout twice")
+        self.assertEqual(self.garmin.writes().count(("POST", "workout-service/workout")), 1)
+        self.assertEqual(self.garmin.calls.count(("READ", "library")), 2)   # two pages read
+
+    def test_an_incomplete_listing_keeps_the_upload_unknown(self):
+        for honour_start, own in ((False, 150), (True, pw.LIBRARY_LIMIT * pw.LIBRARY_MAX_PAGES + 5)):
+            with self.subTest(honour_start=honour_start):
+                self.setUp()
+                self._own(own)
+                self._paged(honour_start=honour_start)
+                pid, c = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
+                self.garmin.faults["create"] = [ReadTimeout("read")]   # never landed, but that cannot be told
+                self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
+                self.clock.advance(minutes=5)
+                again = self.commit(pid, c["token"])
+                self.assertEqual((again["status"], again["retry_after_s"]), ("partial", pw.RETRY_AFTER_UNKNOWN_S))
+                self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
+                self.assertEqual(self.garmin.writes().count(("POST", "workout-service/workout")), 1)
+                self._release()
+
+    def test_a_listing_without_descriptions_never_uploads_again(self):
+        pid, c = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
+        self._landed_late(pid, c["token"])
+        orig = self.garmin.get_workouts
+        self.garmin.get_workouts = lambda start, limit: [
+            {k: v for k, v in w.items() if k != "description"} for w in orig(start, limit)]
+        again = self.commit(pid, c["token"])
+        self.assertEqual(again["status"], "partial", again)
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
+        self.assertEqual(len(self._copies(pid, "20261202-run")), 1)
+        self.garmin.get_workouts = orig      # the description is back: the landed upload is adopted
+        self.assertEqual(self.commit(pid, c["token"])["status"], "done")
+        self.assertEqual(len(self._copies(pid, "20261202-run")), 1)
+        self.assertEqual(self.garmin.writes().count(("POST", "workout-service/workout")), 1)
+        # Workouts not named as this server names them leave no doubt: an upload that never landed goes again.
+        self._own(3, description=False)
+        _p, c2 = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1)),
+                                        session("20261204-run", TODAY + dt.timedelta(days=3))], plan_id=pid,
+                              content="e")
+        self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "20261204-run")])
+        self.garmin.faults["create"] = [ReadTimeout("read")]
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "unknown")
+        self.clock.advance(minutes=5)
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
+        self.assertEqual(self.garmin.writes().count(("POST", "workout-service/workout")), 3)
+
+    def test_an_unknown_upload_never_adopts_a_workout_another_row_owns(self):
+        """A day replaced back to an earlier content while that content's old workout is still on Garmin (retired
+        row K~h): two library workouts carry the same marker; the unknown upload adopts the one no row owns."""
+        d1 = TODAY + dt.timedelta(days=1)
+        key = "20261202-run"
+        pid, c1 = self.preview(sessions=[session(key, d1, km=8.0)], content="a")
+        self.assertEqual(self.commit(pid, c1["token"])["status"], "done")
+        first = self.rows(pid)[key]["garmin_workout_id"]
+        _, c2 = self.preview(sessions=[session(key, d1, km=10.0)], plan_id=pid, content="b")
+        self.garmin.faults["delete"] = [ConnectionError("API Error 400 - Bad Request")]
+        self.commit(pid, c2["token"])
+        self.assertIn(first, self.garmin.library)                      # the retired row's workout stays
+        _, c3 = self.preview(sessions=[session(key, d1, km=8.0)], plan_id=pid, content="c")
+        self._landed_late(pid, c3["token"])
+        self.assertEqual(len(self._copies(pid, key)), 3)
+        out = self.commit(pid, c3["token"])
+        self.assertEqual(out["status"], "done", out)
+        row = self.rows(pid)[key]
+        self.assertNotEqual(row["garmin_workout_id"], first)
+        self.assertIn(row["garmin_workout_id"], self.garmin.library,
+                      "the plan's row points at a workout this same call deleted")
+        self.assertNotIn(first, self.garmin.library)
+        self.assertEqual([e["workoutId"] for e in self.garmin.calendar], [row["garmin_workout_id"]])
+        self.assertEqual(self.garmin.writes().count(("POST", "workout-service/workout")), 3)
+
+    def test_a_token_resumed_after_midnight_keeps_todays_workout(self):
+        d1, d2, d3 = (TODAY + dt.timedelta(days=n) for n in (1, 2, 3))
+        v1 = [session("20261202-run", d1), session("20261203-run", d2)]
+        pid, c1 = self.preview(sessions=v1, content="a")
+        self.assertEqual(self.commit(pid, c1["token"])["status"], "done")
+        wid_d1 = self.rows(pid)["20261202-run"]["garmin_workout_id"]
+        v2 = [session("20261203-run", d2), session("20261204-run", d3)]   # D+1 leaves, D+3 comes
+        _, c2 = self.preview(sessions=v2, plan_id=pid, content="b")
+        self.assertEqual([o["op"] for o in c2["ops"]], ["create", "delete"])
+        self.garmin.faults["create"] = [GarminConnectTooManyRequestsError("Too many")]
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "partial")
+        self.clock.advance(hours=20)     # next day, inside the token's 24 h: D+1 is today now
+        self.day = d1
+        again = self.commit(pid, c2["token"])
+        self.assertEqual(again["status"], "done", again)
+        self.assertIn(wid_d1, self.garmin.library, "today's workout was deleted by a token resumed past midnight")
+        self.assertEqual(self.deletes(), [])
+        self.assertEqual(again["kept"], [{"key": "20261202-run", "date": d1.isoformat(), "role": "easy",
+                                          "reason": "today"}])
+        self.assertEqual([w["key"] for w in again["written"]], ["20261204-run"])
+
+    def test_a_create_of_a_day_that_became_today_is_skipped(self):
+        d1 = TODAY + dt.timedelta(days=1)
+        pid, c = self.preview(sessions=[session("20261202-run", d1)])
+        self.confirm_answer = "accepted"
+        self.day = d1                    # the token is first used on the next day (inside its first 30 min)
+        out = self.commit(pid, c["token"])
+        self.assertEqual(out["status"], "done", out)
+        self.assertEqual(self.confirm_calls[-1], {"action": "commit", "count": 0, "dates": [], "roles": []})
+        self.assertEqual(self.garmin.writes(), [])
+        self.assertEqual(out["kept"], [{"key": "20261202-run", "date": d1.isoformat(), "role": "easy",
+                                        "reason": "today"}])
+        # A patched session of today in a token issued today (rule A8) still replaces today's workout.
+        ops = pw.commit_ops(plan_answer([session("20261202-run", d1)]), [], today=d1, days=7, tag="t",
+                            plan_id=pid, fixed_hard=[], lt_speed=None)
+        self.assertIsNone(pw.skip_reason([d1], d1, pw.issued_on(ops), "commit"))
+        self.assertEqual(pw.skip_reason([d1], d1, pw.issued_on(ops), "cancel"), "today")
+        self.assertEqual(pw.skip_reason([d1], d1, pw.issued_on({}), "commit"), "today")
+        self.assertEqual(pw.skip_reason([TODAY], d1, d1, "commit"), "in the past")
+
+    def test_cancel_keeps_todays_workout(self):
+        pid, c = self.preview()
+        self.assertEqual(self.commit(pid, c["token"])["status"], "done")
+        wid = self.rows(pid)["20261202-run"]["garmin_workout_id"]
+        self.day = TODAY + dt.timedelta(days=1)       # that workout is today's now (not linked)
+        prev = self.cancel(pid)
+        self.assertEqual([o["key"] for o in prev["cancel"]["ops"]], ["20261203-run", "20261205-run"])
+        self.assertEqual(prev["kept"], [{"key": "20261202-run", "date": "2026-12-02", "role": "easy",
+                                         "reason": "today"}])
+        out = self.cancel(pid, prev["cancel"]["token"])
+        self.assertEqual(out["status"], "done", out)
+        self.assertIn(wid, self.garmin.library, "plan_cancel deleted today's workout")
+        self.assertEqual(len(out["deleted"]), 2)
+        self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "cancelled")
+
+    def test_a_cancel_token_run_on_the_next_day_keeps_the_new_today(self):
+        pid, c = self.preview()
+        self.commit(pid, c["token"])
+        prev = self.cancel(pid)
+        self.assertEqual(len(prev["cancel"]["ops"]), 3)
+        self.day = TODAY + dt.timedelta(days=1)
+        out = self.cancel(pid, prev["cancel"]["token"])
+        self.assertEqual(out["status"], "done", out)
+        self.assertEqual([k["reason"] for k in out["kept"]], ["today"])
+        self.assertEqual(len(self.garmin.library), 1)
+
+    def test_a_token_is_refused_when_the_plan_status_changed_since_issue(self):
+        """Issued while the plan was active, then plan_activate stop made it a draft: the token must not start
+        it again."""
+        pid, _c = self.preview()
+        self.store.move_plan(pid, "active", today=TODAY)
+        _p, c = self.preview(plan_id=pid)                # same content, same version: issued while active
+        self.store.move_plan(pid, "draft")
+        out = self.commit(pid, c["token"])
+        self.assertEqual((out["status"], out.get("reason")), ("refused", "plan_changed"), out)
+        self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "draft")
+        self.assertEqual(self.garmin.calls, [])
+        # A cancel token likewise; a commit token of a draft resumes once its first run started the plan.
+        prev = self.cancel(pid)
+        self.store.move_plan(pid, "active", today=TODAY)
+        self.assertEqual(self.cancel(pid, prev["cancel"]["token"])["reason"], "plan_changed")
+        self.store.move_plan(pid, "draft")
+        _p, c2 = self.preview(plan_id=pid)
+        self.garmin.faults["create"] = [None, GarminConnectTooManyRequestsError("x")]
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "partial")
+        self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "active")
+        self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
 
 
 class Registration(unittest.TestCase):

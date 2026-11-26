@@ -70,6 +70,18 @@ row is kept as `<key>~<hash8>` (or `~<hash8>-<n>`) until it is deleted from Garm
 keys. Every key is checked (`plan_store.key_ok`: the shape and a real date) where it comes in: `log_feedback`,
 `overrides`, the stored rows and links, and the argument check before a tool runs.
 
+Plans stored before the date keys carry week-numbered keys (`w03-long`, `w00-e1`, `w05-race`, `w04-b`; a
+retired row `w03-long~<hash8>`). Migration `004_date_session_keys.sql` turns each into the date key of its
+session or row once: a version body's sessions by their date (and the same key in its inputs, so a stored
+override follows), the rows by their `date_local` (a retired row keeps its suffix), then the feedback (by its
+row, else by the current version's session) and the review changes. Two rows of one plan that land on one key
+(the old scheme's duplicate of a day) keep the date key for the linked row, else the one that may be on Garmin,
+else the newest; the other becomes a retired key (`<date key>~<md5 of the old key, 8 hex>`), so the next commit
+deletes that duplicate workout from Garmin like any replaced one. Feedback that names no row or session is
+deleted, and an open token whose ops name an old key expires (preview again). `plan_cancel` and
+`--plan-cleanup` never stop on a row whose key the store does not take: it is logged with a fixed text, left as
+it is and counted as failed, and the other workouts go on.
+
 ## AI roles
 
 The tool descriptions give the chat model two roles; neither decides a number.
@@ -196,8 +208,13 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
    nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km (with no ratio cut; a
    ratio cut of the return week's long run, rule 12, lowers the next week's step base with it). `long_step`
-   checks the same sequence on the finished plan, so an override that empties a week (`cap_week_km` 0) is refused until
-   the next normal week's long run is capped at the one before the gap (`cap_long`, listed first).
+   checks the same sequence on the finished plan. A long run that a reduce-only override (`rest`, `easy`,
+   `cap_km`, `cap_long`, `cap_week_km`) shortened or removed is not the step reference and a week such an
+   override emptied is not a gap: the step, the cap and the 80% easy check (rule 4) count those sessions as
+   built, so the next long run keeps its planned km (see [Overrides](#overrides)). A marathon or half plan
+   needs long runs: `long_cap` fails when no normal week 21 or more days out has one while one of them had
+   no blocked date, fixed session or B window and its long-run day was still to come (a plan built on its
+   long-run day plans nothing on today).
 4. Quality by phase: threshold, intervals, marathon pace, with dose caps (threshold 10%, intervals 8%,
    marathon pace 20% of the week's km) and at least 80% of the week's time easy. A week with a quality session
    or a long run has an easy run (or strides run) when a run day is free and its target leaves the easy
@@ -218,12 +235,16 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    - Garmin's 5K and 10K race predictions anchor the harder bands when there is one (a missing one is
      converted from the other by Riegel's formula, t2 = t1 x (d2/d1)^1.06), because a Garmin LT close to
      the 5K pace makes LT multiples faster than the athlete races: intervals run from the 5K pace to its
-     3K equivalent (never faster); a threshold band whose fast end is faster than the 10K pace moves down
-     until its fast end is the 10K pace (at most until its slow end is 0.91 x LT, so `get_daily_status`
-     still calls it hard), and its slow end is then no slower than the half-marathon pace. Without a 5K or
-     10K prediction the LT multiples stay. Strides keep 1.05-1.10.
+     3K equivalent, never faster; a threshold band whose fast end is faster than the 10K pace moves down
+     until its fast end is the 10K pace, never faster (a 10K pace faster than the 5K pace counts as the 5K
+     pace), and its slow end is then no slower than the half-marathon pace. Its slow end should stay at
+     0.91 x LT or faster, so `get_daily_status` still calls it hard; when the moved band (0.97/1.03 of the
+     10K pace to it) would end slower than that, the 10K bound wins and `threshold_anchor_conflict` warns:
+     the band narrows to 0.91 x LT (at most to half its width) or, when the 10K pace is even slower, keeps
+     its width below it. Without a 5K or 10K prediction the LT multiples stay. Strides keep 1.05-1.10.
    - Marathon pace (the race pace of the MP sessions; a half's for a half) and the feasibility check use
-     one source. With a goal: the goal pace +-1.5%, clamped to 0.85-0.96 of LT (`mp_clamped`), but never
+     one source. With a goal: the goal pace +-1.5%, clamped to 0.85-0.96 of LT (a half's 0.85-1.02,
+     `rules.by_distance`, up to the fastest goal its feasibility accepts) (`mp_clamped`), but never
      raised past the fastest goal feasibility accepts; a goal faster than that keeps its pace and warns
      `goal_beyond_feasible` with the corrected goal. Without a goal: the pace of feasibility's
      `corrected_goal_s` (Garmin's prediction, or the 0.93 x LT time when that is slower), never sped up to
@@ -232,8 +253,13 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
 6. Placement: long run first, then Q1 and Q2, so that no two hard-or-long days touch, counting fixed
    calendar sessions, the races and the weeks before and after. When a session does not fit, a fallback
    (Q2 dropped, long run moved, Q1 as strides, long run dropped) warns with its dates; a long run off its
-   long-run day for any reason (a blocked or rest day, a B window, hard days) warns `long_moved`. A week whose
-   run days are all blocked gets no run and one warning, `no_runs_blocked`, instead of the fallbacks.
+   long-run day for any reason (a blocked day, a B window, hard days) warns `long_moved`. The long run tries
+   its day, the day before, then the day after. A long-run day that is a rest day or not a run day (runs
+   Monday to Friday, the long run left on Sunday) moves the long runs to the run day nearest to it in the
+   week (the later of two equally near: Friday), with one warning, `long_run_day_not_a_run_day`; that week's
+   long run then tries every run day of the week, nearest first, still never next to another hard day. A
+   week whose run days are all blocked gets no run and one warning, `no_runs_blocked`, instead of the
+   fallbacks.
 7. B races: a 4-day mini-taper (0.6, strides only), the race, then easy recovery at 0.5 for 6 days after the
    race day (a 7-day window with the race: a Friday half-distance triathlon is followed by easy runs only
    through Thursday; 7 days after it and a warning after a full-distance triathlon). A peak week inside a B block becomes a B week (warning
@@ -272,8 +298,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    is refused (`b_windows`) while the first long run after it would then be over 0.75 x it, so cap that one
    first. `b_windows` checks all of them.
 8. Feasibility: `feasible`, `ambitious` or `unrealistic` from the weeks to race, the start km, the planned
-   peak and Garmin's prediction. The plan never grows faster to meet a goal; `corrected_goal_s` says what is
-   in reach.
+   peak, the longest planned long run and Garmin's prediction. The plan never grows faster to meet a goal;
+   `corrected_goal_s` says what is in reach. A plan with no long run at all fails `long_run_km` (not
+   feasible); a long run under the distance's minimum only warns.
 9. Invariants: every rule above is checked again on the finished plan, from the placed sessions (the
    planned weeks and the long run the 2 km step counts from, recomputed by the check) (`growth_cap`, `no_makeup`,
    `deload_cadence`, `deload_depth`, `long_cap`, `long_step`, `peak_long_timing`, `easy_share`,
@@ -302,6 +329,14 @@ every edit for a stored `plan_id` is refused, no new version is stored and the a
 `plan_overrides`) names the current version with `stored.changed` false. Name a session by its `date` where
 the edit takes one.
 
+The reduce-only edits (`rest`, `easy`, `cap_km`, `cap_long`, `cap_week_km`) are never refused for the long-run
+step and cap (`long_step`, `long_cap`) or 80% easy (`easy_share`): an athlete who is ill can always rest. Those
+rules count the sessions such an edit changed or removed as they were built (as the ratio cap of rule 12 does),
+so a shortened or dropped long run never becomes the step reference and the next long run keeps its planned km.
+When the plan as it now is breaks one of them (the next long run more than 2 km over the last one run, a week
+under 80% easy), the warning `override_relaxed` on the edited week says so. They are still refused for what
+can raise load or break the other rules: `raises_load`, the B-race limits (`b_windows`), `easy_min_km`.
+
 | kind | fields | does |
 |---|---|---|
 | `move` | `key`, `date` | moves a session to another day of its week |
@@ -309,7 +344,7 @@ the edit takes one.
 | `rest` | `date` | makes a day a rest day (its km is not made up) |
 | `easy` | `key` or `date` | turns a quality session or long run into an easy run of at most the same km |
 | `cap_km` | `key` or `date`, `km` | shortens one easy run, strides run or long run (never lengthens it; at least the easy-run minimum) |
-| `cap_long` | `date` (or `key`), `km` | lowers that day's long run to at most `km`; the rest of its week keeps its km. Refused: `not_long_run` (no long run that day), `raises_load` (above the planned km), `easy_min_km` (under 4 km), `unknown_session` |
+| `cap_long` | `date` (or `key`), `km` | lowers that day's long run to at most `km`; the rest of its week keeps its km, and the next long run steps from this one as built. Refused: `not_long_run` (no long run that day), `raises_load` (above the planned km), `easy_min_km` (under 4 km), `unknown_session`, `b_windows` (the last long run before a half-distance triathlon cut while the first one after it would be over 0.75 x it, rule 7). Never refused for `long_step`, `long_cap` or `easy_share` (warning `override_relaxed`) |
 | `cap_week_km` | `week_start`, `km` | lowers a week's km (never raises it) |
 | `long_run_day` | `week_start`, `weekday` | moves that week's long run to another day |
 
@@ -364,7 +399,8 @@ local-only, like `log_feedback`; only the switch adds it.
   (runs from before it never do).
 - `action` `stop` turns the active plan back into a draft: nothing follows it any more, `plan_get` still
   shows it, `plan_activate` can start it again (activated anew), and its links and feedback are kept
-  (retention then treats it as a draft: 30 days untouched). A draft rather than `cancelled`, so a stop can be
+  while the plan exists (it is a draft again, and retention deletes a draft untouched for 30 days with its
+  links and feedback). A draft rather than `cancelled`, so a stop can be
   undone and is not destructive. It is refused with a fixed text while the plan has workouts on the Garmin
   calendar (rows a Garmin write made): `plan_cancel` (`PLAN_WRITES=on`) deletes those and cancels the plan,
   or the server owner runs `launch.py --plan-cleanup`. Stopping a draft answers `changed: false`.
@@ -473,7 +509,8 @@ keep the lower one that passes: a refused lower cap leaves the other to apply.
 ## What is stored
 
 Migration `003_training_plans.sql` creates every table the plan stages need (`plans`, `plan_versions`,
-`plan_workouts`, `plan_tokens`, `plan_feedback`, `plan_changes`); the previews fill `plans` and
+`plan_workouts`, `plan_tokens`, `plan_feedback`, `plan_changes`; `004_date_session_keys.sql` converts old
+session keys, [Session keys](#session-keys)); the previews fill `plans` and
 `plan_versions`, `plan_commit` and `plan_cancel` fill `plan_workouts` (our own Garmin workout and calendar-entry ids, dates, roles, states) and `plan_tokens` (SHA-256 only); with `PLAN_TRACKING=on` tracking fills `plan_workouts` too (a `local` row per tracked session without a Garmin workout: date, role, link status and the linked activity's id) and `log_feedback` fills `plan_feedback` (numbers and the location only); `plan_review_week` fills `plan_changes` (the change's kind, from and to values, the machine edits, the fixed reason text and the evidence numbers; its status). Stored: the account fingerprint (the history's HMAC, never the profile id), dates, the
 rules version, the inputs and the plan JSON (numbers, enums and dates; no names or notes). A preview with
 the same content as the current version stores nothing new (it only marks the draft as used).
@@ -554,7 +591,11 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    or whose session left the plan (deleted). A shorter window than an earlier commit's leaves the later days
    alone. A rebuilt plan never plans today (it keeps the stored session, rule 1), so today's workout is never
    removed by a commit (only replaced by a
-   red-day change, rule A8). Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
+   red-day change, rule A8: today's session, still on today, with new content). No commit op deletes or
+   replaces a workout dated today or earlier on any other path: a session whose key's workout sits on today
+   but which the version now places on another day (a moved session) writes nothing, and a version that has one
+   session key or one day twice fails `one_run_per_day` (checked again on the version as stored, the kept
+   days included), so it gets no token. Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
    token while an invariant fails, nor when there is nothing to write.
 2. `plan_commit(plan_id, commit_token)`: when the client declares MCP form elicitation, the user confirms a
    summary the server builds (the workouts to add and those to remove, each with dates and roles) by
@@ -587,12 +628,23 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    calls for 15 minutes), `unknown` (a write may have landed: call plan_get first, then the same token after
    `retry_after_s` 180; the next call settles it from
    Garmin once the request's thread has ended and 2 minutes have passed; a create is adopted by its
-   marker in the library, a schedule from the calendar), `refused` (`reason`), `declined`. A started token
-   resumes for 24 hours; a new plan version makes it `superseded`. One write call per plan runs at a time
+   marker in the library, read page by page to its end, never a workout another row owns; when the library
+   cannot be read in full, or lists a `Coach ...` workout without its description, the row stays `unknown`
+   and nothing is uploaded again; a schedule from the calendar), `refused` (`reason`), `declined`. A started token
+   resumes for 24 hours; a new plan version makes it `superseded`. The plan is read again under the plan's
+   lock after the confirmation: when a new version was stored or the plan was started or stopped while the
+   user was asked, nothing is written (`plan_changed`, for commit, apply and cancel tokens alike; call
+   plan_preview again). The same answer when the plan's status changed since the token was issued: a token
+   issued while the plan was active never runs after `plan_activate` stop (a commit token issued on a draft
+   may run once the plan was started). A token writes only its ops, and each op is checked against today
+   when it runs: a token resumed after midnight leaves the workout that became today's alone (`kept[]`,
+   reason `today`). One write call per plan runs at a time
    (`busy`), also after the client cancelled the call: the lock belongs to the thread doing the writes. A
-   replaced workout always goes: one left on Garmin by an earlier call is deleted by the next commit.
-4. `plan_cancel(plan_id)` answers what it would delete (the plan's own workouts from today on, not linked to
-   an activity), what it keeps, and a cancel token (`xt1.`); with the token it deletes them (404 counts as
+   replaced workout always goes: one left on Garmin by an earlier call (or replaced while its workout was
+   `unknown` when the token was issued, listed in `kept[]`) is listed as a delete by the next preview and
+   deleted by that commit.
+4. `plan_cancel(plan_id)` answers what it would delete (the plan's own workouts after today, not linked to
+   an activity), what it keeps (linked, in the past, and today's: a cancel never deletes today's workout), and a cancel token (`xt1.`); with the token it deletes them (404 counts as
    gone) and cancels the plan. A cancel token covers only the workouts it listed: after a commit in between
    it is `superseded` (a workout it listed while its upload was `unknown` is the same one once settled). A
    delete Garmin refuses answers `partial` with `failed[]`, and the plan stays open.

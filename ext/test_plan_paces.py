@@ -137,11 +137,15 @@ class AnchoredBands(unittest.TestCase):
         self.assertNotIn("threshold", a)
         self.assertAlmostEqual(a["intervals"][0], 5000.0 / PRED_5K, places=6)
 
-    def test_the_threshold_band_moves_down_at_most_to_0_91_lt(self):
+    def test_a_10k_pace_far_under_lt_wins_over_the_0_91_lt_floor(self):
         snap = owner_snapshot(predictions=(("10k", 3000),))         # 5:00/km: far under LT 4:08
-        lo, hi = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)["threshold"]
-        self.assertAlmostEqual(lo, 0.91 * LT, places=6)
-        a = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)
+        warnings = []
+        a = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES, warnings)
+        lo, hi = a["threshold"]
+        self.assertAlmostEqual(hi, 10000.0 / 3000, places=6)          # never faster than the 10K pace (rule 5)
+        self.assertLess(lo, hi)
+        self.assertLess(lo, 0.91 * LT)                                 # under the floor: said in a warning
+        self.assertEqual([w["id"] for w in warnings], ["threshold_anchor_conflict"])
         self.assertGreaterEqual(a["intervals"][0], hi)               # intervals never under the threshold band
 
 

@@ -140,6 +140,38 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ### Fixed
 
+- Training plans stored before the date session keys (`w01-e1`, `w03-long`) are converted once by
+  migration 004 (bodies, inputs, workout rows, feedback, review changes; open tokens that name an
+  old key expire). Before, a commit on such a plan created the days again and then stopped on the
+  old rows (two workouts a day, answer `unknown`), `plan_cancel` deleted nothing,
+  `--plan-cleanup` crashed and `log_feedback` refused the keys `plan_get` showed. `plan_cancel` and
+  `--plan-cleanup` now count a row with an unexpected key as failed and go on.
+- A commit never deletes or replaces a workout dated today or earlier except for a red-day change of
+  today's session (rule A8): after a swap and a rebuild, today's moved workout was deleted. A version
+  with one session key or day twice fails `one_run_per_day` on the version as stored, so it gets no
+  commit token.
+- `plan_commit`, `plan_apply_changes` and `plan_cancel` read the plan again under its lock after the
+  user's confirmation and write nothing (`plan_changed`) when a new version was stored or the plan
+  was started or stopped meanwhile.
+- Plan writes, from a security review of the write path:
+  - An `unknown` upload is settled from the whole workout library, read page by page (at most 20
+    pages of 100), not from its first 100 workouts: a landed upload on a later page was uploaded
+    again by the same token. When the listing cannot be read in full, or lists a `Coach ...`
+    workout without its description, the row stays `unknown` and nothing is uploaded again.
+  - An `unknown` upload is never settled as a workout another row owns: with a retired row's old
+    workout carrying the same marker (a day changed back to an earlier content), it adopted that
+    one, and the same call then deleted it as the retired row.
+  - A token writes only its ops: a replaced workout that was `unknown` when the token was issued
+    was deleted without being in the ops or the confirmation. It now stays (`kept[]`), and the
+    next preview lists its delete.
+  - Every op is checked against today when the token runs, not only when it is issued: a partial
+    token resumed after midnight deleted the workout that had become today's. Such ops are
+    skipped and listed in `kept[]` (reason `today`).
+  - `plan_cancel` deletes only workouts after today; today's is kept (`kept[]`, reason `today`).
+  - A token is refused (`plan_changed`) when the plan's status changed since it was issued: a
+    token issued while the plan was active started it again after `plan_activate` stop.
+- `plan_activate` stop: the note says the links and feedback are kept while the plan exists (a
+  stopped plan is a draft, and drafts untouched for 30 days are deleted).
 - Plan rebuilds (`plan_preview` with a `plan_id`): the engine now plans around the stored version
   (`build_plan(history=...)`) instead of pasting the stored days up to today over a plan built
   without them. Today's week keeps its stored days as fixed sessions and plans only the days after
@@ -201,6 +233,29 @@ and so what a MAJOR, MINOR or PATCH release may change:
   full page of 100 activities settles nothing before the day after its oldest activity.
 - Plan tracking in the daily status: an activity with only a GMT start time is dated by the day
   Garmin listed it under, as the rest of the daily report dates it.
+- Training plans, from an independent review of the engine (each case a regression test,
+  `ext/test_plan_engine_repros.py`; the golden plans are unchanged):
+  - A long-run day that is a rest day (runs Monday to Friday, the long run left on Sunday) planned
+    no long run at all while every invariant passed. The long runs now go on the nearest run day
+    (the later of two), with one warning `long_run_day_not_a_run_day`; `long_cap` fails a plan
+    with no long run in its normal weeks, and feasibility fails `long_run_km` when nothing was
+    planned (it skipped the check). A week whose long-run day is today or earlier (a plan built on
+    its long-run day plans nothing on today) is not one that needed a long run.
+  - A half marathon's race pace was clamped to the marathon's 0.85-0.96 x LT while its
+    feasibility accepts goals up to 1.02 x LT: a feasible 1:30 goal trained and raced at
+    4:20-4:28/km instead of 4:16. The half has its own band, 0.85-1.02 (`rules.by_distance`).
+  - Anchored bands: the threshold band's fast end is never faster than the 10K pace and the
+    intervals never faster than the 3K equivalent (the 0.91 x LT floor had stopped the shift, so
+    LT 4:10 with a 4:24 5K gave threshold up to 4:19/km); when the floor conflicts the band
+    narrows and warns `threshold_anchor_conflict`.
+  - Reduce-only overrides (`rest`, `easy`, `cap_km`, `cap_long`, `cap_week_km`) on a long-run
+    day were refused (`long_cap`, `easy_share`): resting a sick day was impossible. They are no
+    longer refused for `long_step`, `long_cap` or `easy_share`; those rules count the edited
+    sessions as built, so a reduced long run is not the step reference, and the edited week warns
+    `override_relaxed`. An emptied week (`cap_week_km` 0) is no longer a gap that refuses the edit.
+  - Marathon-pace work without a pace target (no goal and no prediction) counted metres as
+    seconds in the 80%-easy check, so MP sessions shrank to 3 km or were dropped; it is timed at
+    the corrected goal's pace now (and a step whose band is outside the speed limits at that band).
 
 ## [1.0.5] - 2026-11-25
 

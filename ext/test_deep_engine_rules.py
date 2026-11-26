@@ -105,9 +105,9 @@ class OverridesApplied(OverrideBase):
         now = self.applied(pe.Override("swap", date=_day(e["date"]), date_b=empty))
         self.assertEqual(now[e["key"]]["date"], empty.isoformat())
 
-    # Each edit below only lowers load; one that breaks a rule on the finished plan (80% easy, the long-run
-    # cap and step that follow the longest long run so far) is undone and refused with that rule.
-    SIDE_EFFECTS = ("easy_share", "long_cap", "long_step")
+    # Each edit below only lowers load. Such an edit is never refused for 80% easy or the long-run cap and step
+    # (they count it as built and the week warns override_relaxed); a refusal would be one of these, so none here.
+    SIDE_EFFECTS: Tuple[str, ...] = ()
 
     def try_each(self, make, weeks):
         """Apply make(week) to each week alone: [(week, answer, sessions)] of those applied; every refusal is
@@ -131,8 +131,14 @@ class OverridesApplied(OverrideBase):
     def test_rest(self):
         w = self.a_normal_week()
         e = self.key(w, "easy")
-        # in a week with two quality sessions, resting an easy run breaks 80% easy: undone and refused
-        self.refused(pe.Override("rest", date=_day(self.sessions[e]["date"])), "easy_share")
+        # in a week with two quality sessions, resting an easy run takes it under 80% easy: a reduce-only edit
+        # still applies (a sick athlete may rest), with override_relaxed on that week
+        a, now = self.edit(pe.Override("rest", date=_day(self.sessions[e]["date"])))
+        self.assertEqual(a["overrides"]["refused"], [])
+        self.assertNotIn(e, now)
+        relaxed = [x for x in a["warnings"] if x["id"] == "override_relaxed"]
+        self.assertEqual([x["dates"] for x in relaxed], [[w["start"], w["end"]]])
+        self.assertIn("easy_share", relaxed[0]["detail"])
         for w, _a, now in self.try_each(lambda w: pe.Override("rest", date=_day(self.sessions[self.key(w, "easy")]["date"])),
                                         self.normal_weeks()):
             self.assertNotIn(self.key(w, "easy"), now)
@@ -164,13 +170,18 @@ class OverridesApplied(OverrideBase):
         w = self.a_normal_week()
         a, _ = self.edit(pe.Override("cap_week_km", week_start=_day(w["start"]), km=w["planned_km"]))
         self.assertEqual(a["weeks"], self.base["weeks"])
-        # a week cut to 0 km is a gap (rule 3): the next normal week's long run may not grow, so the edit alone
-        # is refused (long_cap, the step being part of that cap, before long_step) and applies once that long
-        # run is capped at the one before the gap
+        # a week cut to 0 km by an override is not a gap: the step counts the week as built, so the edit applies
+        # alone and the next weeks keep their km; the plan as it now is breaks the step there, which the edited
+        # week's override_relaxed warning says
         zero = pe.Override("cap_week_km", week_start=_day(w["start"]), km=0.0)
         a, _ = self.edit(zero)
-        self.assertEqual([r["rule"] for r in a["overrides"]["refused"]], ["long_cap"])
-        self.assertIn("first normal week after a gap", a["overrides"]["refused"][0]["value"] or "")
+        self.assertEqual(a["overrides"]["refused"], [])
+        later = [(x["start"], x["planned_km"], x["long_km"]) for x in a["weeks"] if x["start"] > w["end"]]
+        self.assertEqual(later, [(x["start"], x["planned_km"], x["long_km"]) for x in self.base["weeks"]
+                                 if x["start"] > w["end"]])
+        relaxed = [x for x in a["warnings"] if x["id"] == "override_relaxed"]
+        self.assertEqual([x["dates"] for x in relaxed], [[w["start"], w["end"]]])
+        # capping the next long run as well still applies
         real = [x for x in self.base["weeks"] if x["kind"] != "week0"]
         before = [x["long_km"] for x in real if x["kind"] == "normal" and x["start"] < w["start"] and x["long_km"]]
         ref = before[-1] if before else self.base["start"]["longest_run_8w_km"]
@@ -328,12 +339,14 @@ class OverridesRefused(OverrideBase):
         free = next(d for d in (_day(w["start"]) + dt.timedelta(days=i) for i in range(7))
                     if d.isoformat() not in {s["date"] for s in w["sessions"]}
                     and d.weekday() not in self.inputs.rest_days)
-        # move, then rest the old day (nothing left there) and the new day (refused: 80% easy in this week)
+        # move, then rest the old day (nothing left there) and the new day (applied: a reduce-only edit under 80%
+        # easy only warns, override_relaxed)
         a, now = self.edit(pe.Override("move", key=e["key"], date=free), pe.Override("rest", date=_day(e["date"])),
                            pe.Override("rest", date=free))
-        self.assertEqual([x["kind"] for x in a["overrides"]["applied"]], ["move"])
-        self.assertEqual([r["rule"] for r in a["overrides"]["refused"]], ["no_run_that_day", "easy_share"])
-        self.assertEqual(now[e["key"]]["date"], free.isoformat())
+        self.assertEqual([x["kind"] for x in a["overrides"]["applied"]], ["move", "rest"])
+        self.assertEqual([r["rule"] for r in a["overrides"]["refused"]], ["no_run_that_day"])
+        self.assertNotIn(e["key"], now)
+        self.assertIn("override_relaxed", [x["id"] for x in a["warnings"]])
         # rest, then move the removed session
         base_week = next(x for x in self.base["weeks"] if x["kind"] == "normal" and x["phase"] == "base")
         e0 = self.sessions[self.key(base_week, "easy")]
@@ -355,19 +368,19 @@ class OverridesRefused(OverrideBase):
         a, _ = self.edit(pe.Override("easy", key=q), pe.Override("easy", key=q))
         self.assertEqual([r["rule"] for r in a["overrides"]["refused"]], ["already_easy"])
 
-    def test_rest_on_the_long_run_day_is_refused_when_it_breaks_a_rule(self):
-        # a dropped long run lowers the longest run so far (the next long run then breaks the 2 km step and
-        # the long-run cap) and the week's easy time (80% easy): the edit is undone and refused with that
-        # invariant, or applied when every rule still holds
+    def test_rest_on_the_long_run_day_always_applies(self):
+        # a dropped long run is not the step reference (the next long run steps from it as built) and a
+        # reduce-only edit is never refused for 80% easy: it applies, and override_relaxed on its week says what
+        # the plan as it now is breaks
         for w in [x for x in self.base["weeks"] if x["kind"] == "normal"][:6]:
             lg = self.sessions[self.key(w, "long")]
             with self.subTest(week=w["start"]):
                 a, now = self.edit(pe.Override("rest", date=_day(lg["date"])))
-                if a["overrides"]["refused"]:
-                    self.assertIn(a["overrides"]["refused"][0]["rule"], ("long_cap", "long_step", "easy_share"))
-                    self.assertEqual(a["weeks"], self.base["weeks"])
-                else:
-                    self.assertNotIn(lg["key"], now)
+                self.assertEqual(a["overrides"]["refused"], [])
+                self.assertNotIn(lg["key"], now)
+                for x in a["warnings"]:
+                    if x["id"] == "override_relaxed":
+                        self.assertEqual(x["dates"], [w["start"], w["end"]])
 
     def test_no_override_puts_a_run_after_the_a_race(self):
         race = D(2027, 3, 17)   # a Wednesday: the race week has runs on Tuesday only

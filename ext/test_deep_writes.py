@@ -593,9 +593,11 @@ class DoneSessions(b.DeepBase):
     def test_cancel_keeps_a_done_workout(self):
         pid, wid = self.done_today()
         prev = self.cancel(pid)
+        # Today's workout: kept by the preview already (a cancel never deletes today's workout).
+        self.assertEqual([(k["key"], k["reason"]) for k in prev["kept"]], [("20261202-run", "today")])
+        self.assertEqual([o["key"] for o in prev["cancel"]["ops"]], ["20261205-run"])
         out = self.cancel(pid, prev["cancel"]["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual([k["key"] for k in out["kept"]], ["20261202-run"])
         self.assertEqual(set(self.garmin.library), {wid})
         self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
         self.assertEqual(self.rows(pid)["20261202-run"]["state"], "scheduled")

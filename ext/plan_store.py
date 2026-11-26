@@ -334,6 +334,73 @@ WORKOUT_KEY_RE = re.compile(r"[0-9]{8}-(run|race|b)(~[0-9a-f]{8}(-[1-9][0-9]{0,2
 ROLE_RE = re.compile(r"[a-z_]{1,16}", re.ASCII)
 MAX_GARMIN_ID = 10 ** 19 - 1
 
+# --- old session keys (before the date keys): migration 004 and MemoryPlanStore.upgrade_keys ------------------
+# Plans stored before session keys were dates have keys numbered by week ("w03-long", "w00-e1", "w05-race",
+# "w04-b"; a retired row "w03-long~<hash8>[-<n>]"). Migration 004 (history_sql/004_date_session_keys.sql) turns
+# each into the date key of its session or row (plan_engine.session_key(date, slot): the session's date in a
+# version body, date_local for a row); MemoryPlanStore.upgrade_keys() is the same conversion over the dicts,
+# step by step, and test_plan_store runs one contract on both. Steps:
+#   1. rows, per plan, the linked first, then those that may be on Garmin (LIVE_STATES), then the newest: the
+#      date key (a retired row keeps its "~<hash8>[-<n>]"); a key the plan already holds (a duplicate made by the
+#      old key scheme) becomes a retired key "<date key>~<md5(old key)[:8]>[-<n>]", which the next commit deletes
+#      from Garmin like any replaced workout. The feedback of an old session key moves to its row's date key.
+#   2. versions: every old session key in the body (and the same string in the version's inputs) becomes its
+#      session's date key; for the plan's current version, the feedback not moved in step 1 and the plan's
+#      changes follow the same mapping. Feedback moved onto a key that already has feedback is dropped.
+#   3. feedback still under an old key (no row, no session) is deleted; open tokens whose ops name an old key
+#      expire (a new preview issues a new one).
+OLD_KEY_RE = re.compile(r"w[0-9]{2}-([a-z0-9]{1,8})(~[0-9a-f]{8}(-[1-9][0-9]{0,2})?)?", re.ASCII)
+OLD_SESSION_KEY_RE = re.compile(r"w[0-9]{2}-([a-z0-9]{1,8})", re.ASCII)
+OLD_TOKEN_KEY_RE = re.compile(r'"w[0-9]{2}-[a-z0-9]{1,8}[~"]', re.ASCII)
+_ISO_DAY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+
+
+def _old_slot(old: str) -> str:
+    m = OLD_KEY_RE.fullmatch(old)
+    tail = m.group(1) if m else ""
+    return tail if tail in ("race", "b") else "run"
+
+
+def _old_suffix(old: str) -> str:
+    m = OLD_KEY_RE.fullmatch(old)
+    return (m.group(2) or "") if m else ""
+
+
+def _fallback_key(old: str, base: str, taken: Any) -> str:
+    h = hashlib.md5(old.encode("ascii"), usedforsecurity=False).hexdigest()[:8]
+    candidate, n = f"{base}~{h}", 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{base}~{h}-{n}"
+    return candidate
+
+
+def old_key_map(body: Any) -> Dict[str, str]:
+    """{old session key: its date key} for the sessions of a version body that still carry an old key."""
+    out: Dict[str, str] = {}
+    weeks = body.get("weeks") if isinstance(body, dict) else None
+    for w in weeks if isinstance(weeks, list) else []:
+        sessions = w.get("sessions") if isinstance(w, dict) else None
+        for s in sessions if isinstance(sessions, list) else []:
+            if not isinstance(s, dict):
+                continue
+            key, day = s.get("key"), s.get("date")
+            if isinstance(key, str) and OLD_SESSION_KEY_RE.fullmatch(key) and isinstance(day, str) \
+                    and _ISO_DAY_RE.fullmatch(day):
+                out[key] = day.replace("-", "") + "-" + _old_slot(key)
+    return out
+
+
+def replace_keys(value: Any, mapping: Mapping[str, str]) -> Any:
+    """`value` (JSON) with every string equal to an old key of `mapping` (also an object's key) replaced, as
+    migration 004 replaces '"<old>"' in the jsonb text."""
+    if value is None or not mapping:
+        return value
+    text = json.dumps(value)
+    for old, new in mapping.items():
+        text = text.replace(f'"{old}"', f'"{new}"')
+    return json.loads(text)
+
 
 class TokenRefused(LookupError):
     """A token that cannot be used now; .reason is one of unknown, expired, done_elsewhere (fixed words)."""
@@ -739,6 +806,62 @@ class MemoryPlanStore:
             for r in done:
                 r.update(status="finished", updated_at=now, ended_at=now)
         return len(done)
+
+    def upgrade_keys(self) -> int:
+        """Migration 004 over the dicts (see OLD_KEY_RE): old session keys become date keys. Returns how many
+        rows and versions changed; a second call changes nothing."""
+        changed = 0
+        with self._lock:
+            for pid in sorted(self.plans):
+                changed += self._upgrade_plan(pid)
+            for t in self.tokens.values():
+                if t["status"] in ("issued", "running", "partial") and OLD_TOKEN_KEY_RE.search(json.dumps(t["ops"])):
+                    t["status"] = "expired"
+        return changed
+
+    def _move_feedback(self, pid: str, old: str, new: str) -> None:
+        row = self.feedback_rows.pop((pid, old), None)
+        if row is not None and (pid, new) not in self.feedback_rows:
+            self.feedback_rows[(pid, new)] = {**row, "workout_key": new}
+
+    def _upgrade_plan(self, pid: str) -> int:
+        changed = 0
+        rows = [r for (p, k), r in self.workout_rows.items() if p == pid and OLD_KEY_RE.fullmatch(k)]
+        rows.sort(key=lambda r: (r.get("linked_activity_id") is None, r["state"] not in LIVE_STATES,
+                                 -r["state_changed_at"].timestamp(), r["workout_key"]))
+        taken = {k for (p, k) in self.workout_rows if p == pid}
+        for r in rows:
+            old = r["workout_key"]
+            base = r["date_local"].strftime("%Y%m%d") + "-" + _old_slot(old)
+            candidate = base + _old_suffix(old)
+            taken.discard(old)
+            if candidate in taken:
+                candidate = _fallback_key(old, base, taken)
+            taken.add(candidate)
+            del self.workout_rows[(pid, old)]
+            self.workout_rows[(pid, candidate)] = {**r, "workout_key": candidate}
+            if "~" not in old:
+                self._move_feedback(pid, old, base)
+            changed += 1
+        current = self.plans[pid]["current_version"]
+        for (p, version), v in sorted(self.versions.items()):
+            if p != pid:
+                continue
+            mapping = old_key_map(v["body"])
+            if not mapping:
+                continue
+            if version == current:
+                for old, new in mapping.items():
+                    self._move_feedback(pid, old, new)
+                for c in self.changes.values():
+                    if c["plan_id"] == pid:
+                        for k in ("from_value", "to_value", "evidence"):
+                            c[k] = replace_keys(c.get(k), mapping)
+            v["body"], v["inputs"] = replace_keys(v["body"], mapping), replace_keys(v["inputs"], mapping)
+            changed += 1
+        for key in [k for (p, k) in self.feedback_rows if p == pid and OLD_KEY_RE.fullmatch(k)]:
+            del self.feedback_rows[(pid, key)]
+        return changed
 
     def move_plan(self, plan_id: str, status: str, today: Optional[dt.date] = None) -> None:
         pid, status = check_plan_id(plan_id), _plan_status(status)

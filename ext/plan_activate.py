@@ -51,7 +51,8 @@ NOTE_STARTED = ("The plan is active: get_daily_status and get_weekly_status show
                 "on are linked to its sessions, and log_feedback and plan_review_week use it. Nothing was written "
                 "to Garmin.")
 NOTE_STOPPED = ("The plan is no longer followed: it is a draft again (plan_get shows it; plan_activate starts it "
-                "again). Its links and feedback are kept. Nothing was written to Garmin.")
+                "again). Its links and feedback are kept while the plan exists: a draft untouched for 30 days is "
+                "deleted with them. Nothing was written to Garmin.")
 NOTE_UNCHANGED = "Nothing changed: the plan was already in that state."
 
 DESCRIPTION = (
