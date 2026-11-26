@@ -71,7 +71,8 @@ QUARANTINE = dt.timedelta(minutes=2)
 RETRY_AFTER_RATE_S = 900
 RETRY_AFTER_UNKNOWN_S = 180
 RETRY_AFTER_NETWORK_S = 60
-LIBRARY_LIMIT = 100
+LIBRARY_LIMIT = 100                 # one page of the workout library listing
+LIBRARY_MAX_PAGES = 20              # at most this many pages (2000 workouts) are read for one check
 COMMIT_DAYS_DEFAULT = 7
 COMMIT_DAYS_MAX = 21
 MARKER_HEAD = "coach-mcp"
@@ -80,6 +81,7 @@ ON_GARMIN = ("uploaded", "scheduled", "unscheduling", "unscheduled", "deleting")
 # A row whose workout is (or may be) on Garmin: commit_ops never replaces one dated today or earlier.
 LIVE_ROW_STATES = ON_GARMIN + ("unknown", "uploading", "scheduling")
 MAYBE, NEVER_SENT, REJECTED, RATE, GONE = "maybe", "never_sent", "rejected", "rate_limited", "gone"
+REASON_RETIRED_KEPT = "replaced; its old workout stays until the next plan_preview and plan_commit delete it"
 
 NOTE_DONE = "Every write of this token is done. The same token again changes nothing."
 NOTE_DONE_FAILED_DELETES = (
@@ -337,7 +339,7 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
         # A retired row (key~hash: replaced by a new workout) still on Garmin is deleted by any later commit.
         deletes.append(_delete_op(row, key, "replaced" if retired else "removed"))
     return {"kind": "commit", "days": days, "ops": creates + deletes, "fixed_hard": list(fixed_hard),
-            "lt_speed_mps": lt_speed}
+            "lt_speed_mps": lt_speed, "issued_on": today.isoformat()}
 
 
 def retired_key(rows: Mapping[str, Mapping[str, Any]], key: str, dto_hash: str) -> str:
@@ -358,20 +360,74 @@ def _delete_op(row: Mapping[str, Any], key: str, reason: str) -> Dict[str, Any]:
 
 
 def cancel_ops(rows: Sequence[Mapping[str, Any]], today: dt.date) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """(the ops of a cancel token, the rows kept with their reason): the plan's own workouts from today on that
-    are on Garmin (or may be) and not linked to an activity."""
+    """(the ops of a cancel token, the rows kept with their reason): the plan's own workouts after today that
+    are on Garmin (or may be) and not linked to an activity. Today's workout is never deleted (kept, "today")."""
     ops, kept = [], []
     for row in rows:
-        if row["state"] not in ON_GARMIN + ("unknown", "uploading", "scheduling"):
+        if row["state"] not in LIVE_ROW_STATES:
             continue
         item = {"key": row["workout_key"], "date": row["date_local"].isoformat(), "role": row["role"]}
         if row.get("linked_activity_id"):
             kept.append({**item, "reason": "linked to an activity"})
         elif row["date_local"] < today:
             kept.append({**item, "reason": "in the past"})
+        elif row["date_local"] == today:
+            kept.append({**item, "reason": "today"})
         else:
             ops.append(_delete_op(row, str(row["workout_key"]), "cancel"))
-    return {"kind": "cancel", "ops": ops}, kept
+    return {"kind": "cancel", "ops": ops, "issued_on": today.isoformat()}, kept
+
+
+def skip_reason(dates: Iterable[dt.date], today: dt.date, issued_on: Optional[dt.date], action: str) -> Optional[str]:
+    """Why an op of a token is not run today ("in the past", "today"), or None. Checked when the token runs, for
+    every op: a workout dated before today is never touched; one dated today only by a commit or apply token
+    issued today (commit_ops and apply_ops let a patched session of today replace today's workout, rule A8),
+    never by a token issued on an earlier day (resumed after midnight) and never by a cancel."""
+    first = min(dates)
+    if first < today:
+        return "in the past"
+    if first == today and not (action in ("commit", "apply") and issued_on == today):
+        return "today"
+    return None
+
+
+def issued_on(payload: Mapping[str, Any]) -> Optional[dt.date]:
+    """The day a token was issued (its payload's issued_on); None when missing or malformed."""
+    try:
+        return dt.date.fromisoformat(str(payload.get("issued_on")))
+    except ValueError:
+        return None
+
+
+def library_pages(read: Callable[[int, int], Any], *, limit: int = LIBRARY_LIMIT,
+                  max_pages: int = LIBRARY_MAX_PAGES,
+                  enough: Optional[Callable[[List[Dict[str, Any]]], bool]] = None) -> Tuple[List[Dict[str, Any]], bool]:
+    """(the workout library's items, complete): get_workouts page by page (read(start, limit)) until a page is
+    shorter than `limit`, a page adds no workout not seen before (a listing that ignores `start`: incomplete),
+    `max_pages` pages were read (incomplete) or `enough(items so far)` says so. ReadFailed when a page is not a
+    list (None for an empty body, an object): an unreadable listing is never read as an empty library."""
+    items: List[Dict[str, Any]] = []
+    seen: Set[int] = set()
+    for page in range(max_pages):
+        payload = read(page * limit, limit)
+        if not isinstance(payload, list):
+            log.info("plans: the workout library answer was not a list")
+            raise ReadFailed("garmin_unreadable", None)
+        new = 0
+        for w in payload:
+            wid = _pos_int(w.get("workoutId")) if isinstance(w, dict) else None
+            if wid is None or wid in seen:
+                continue
+            seen.add(wid)
+            items.append(w)
+            new += 1
+        if len(payload) < limit:
+            return items, True
+        if new == 0:
+            return items, False
+        if enough is not None and enough(items):
+            return items, False
+    return items, False
 
 
 def op_summary(ops: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
@@ -423,6 +479,7 @@ class Executor:
         self.remaining = 0
         self.waiting = False                # an unknown row of an earlier call is still in quarantine
         self.action = "commit"
+        self.issued_on: Optional[dt.date] = None   # the day the token was issued (its payload's issued_on)
 
     # reads ----------------------------------------------------------------------------------------------------
 
@@ -513,7 +570,7 @@ class Executor:
         quarantine has passed: a create is adopted by its marker in the library, a schedule by the calendar."""
         live = live_labels()
         now = self.store.now()
-        library: Optional[List[Any]] = None
+        creates: List[str] = []
         for key, row in sorted(self.rows.items()):
             if not ps.key_ok(key):
                 log.warning("plans: a stored workout row has an unexpected key; it is left as it is")
@@ -533,33 +590,52 @@ class Executor:
                 else:
                     self._save(key, state="uploaded")
                 continue
-            if library is None:
-                try:
-                    library = self._library()
-                except ReadFailed as exc:
-                    # The row stays unknown; Garmin's 429 stops the call (no write after it).
-                    if exc.group == tool_errors.RATE_LIMITED:
-                        self.stop = "rate_limited"
-                    return
-            want = marker(self.tag, self.plan_id, key.split("~")[0], row["dto_hash"])
-            found = next((_pos_int(w.get("workoutId")) for w in library
-                          if isinstance(w, dict) and w.get("description") == want and _pos_int(w.get("workoutId"))),
-                         None)
-            if found:
+            creates.append(key)
+        if creates:
+            self._reconcile_creates(creates)
+
+    def _want(self, key: str) -> str:
+        return marker(self.tag, self.plan_id, key.split("~")[0], self.rows[key]["dto_hash"])
+
+    def _reconcile_creates(self, keys: Sequence[str]) -> None:
+        """Unknown uploads: adopted when the library holds a workout with the row's marker (which carries its dto
+        hash) that no row owns; a workout owned by another row (a retired row's old workout with the same content,
+        a deleted row's) is never adopted. Set back to pending (uploaded again) only when the whole library was
+        read and no workout of it could be the row's; otherwise the row stays unknown and the next call checks
+        again: a landed upload is never uploaded twice."""
+        wanted = {self._want(k) for k in keys}
+
+        def free(w: Mapping[str, Any]) -> Optional[int]:
+            wid = _pos_int(w.get("workoutId"))
+            return wid if wid is not None and wid not in self.our_ids else None
+
+        def enough(items: List[Dict[str, Any]]) -> bool:
+            return wanted <= {w.get("description") for w in items if free(w) is not None}
+
+        try:
+            library, complete = library_pages(
+                lambda start, limit: self._read("garmin_unreadable", lambda: self.client.get_workouts(start, limit)),
+                enough=enough)
+        except ReadFailed as exc:
+            # The rows stay unknown; Garmin's 429 stops the call (no write after it).
+            if exc.group == tool_errors.RATE_LIMITED:
+                self.stop = "rate_limited"
+            return
+        # A workout listed without its description that could be ours (named as this server names its
+        # workouts): whether it carries a row's marker cannot be told, so nothing is uploaded again.
+        blind = any("description" not in w and str(w.get("workoutName") or "").startswith("Coach ")
+                    and free(w) is not None for w in library)
+        for key in keys:
+            want = self._want(key)
+            found = max((wid for wid in (free(w) for w in library if w.get("description") == want)
+                         if wid is not None), default=None)
+            if found is not None:
                 self.our_ids.add(found)
                 self._save(key, state="uploaded", garmin_workout_id=found)
-            else:
+            elif complete and not blind:
                 self._save(key, state="pending")
-
-    def _library(self) -> List[Any]:
-        """The workout library; ReadFailed when Garmin's answer is not a list (None for an empty body, an
-        object): an unreadable listing is never read as an empty library, which would upload a landed workout
-        again."""
-        payload = self._read("garmin_unreadable", lambda: self.client.get_workouts(0, LIBRARY_LIMIT))
-        if not isinstance(payload, list):
-            log.info("plans: the workout library answer was not a list")
-            raise ReadFailed("garmin_unreadable", None)
-        return payload
+            else:
+                log.info("plans: the workout library could not be read in full; an unknown upload stays unknown")
 
     # writes ---------------------------------------------------------------------------------------------------
 
@@ -779,10 +855,27 @@ class Executor:
             if outcome == MAYBE:
                 self.stop = self.stop or "network"
 
+    def _skipped(self, op: Mapping[str, Any]) -> Optional[str]:
+        """skip_reason() for one op, from its date and the date of its row when that row is (or may be) on
+        Garmin (a session moved off a day never takes that day's workout away)."""
+        dates = [dt.date.fromisoformat(str(op["date"]))]
+        row = self.rows.get(str(op["key"]))
+        if row is not None and row["state"] in LIVE_ROW_STATES:
+            dates.append(row["date_local"])
+        return skip_reason(dates, self.today, self.issued_on, self.action)
+
     def run(self, ops: Sequence[Mapping[str, Any]], version: int) -> None:
+        """The token's ops, and only those: a token never writes what its ops (and the confirmation) did not name.
+        Every op is checked against today when it runs (skip_reason): a token resumed after midnight leaves the
+        workout that became today's alone; it is reported in kept[]."""
         for op in ops:
             if self.stop is not None:
                 self.remaining += 1
+                continue
+            reason = self._skipped(op)
+            if reason is not None:
+                self.out["kept"].append({"key": str(op["key"]).split("~")[0], "date": str(op["date"]),
+                                         "role": str(op["role"]), "reason": reason})
                 continue
             if op["op"] == "create":
                 self.create(op, version)
@@ -790,17 +883,16 @@ class Executor:
                 self.delete(op)
         if self.action not in ("commit", "apply"):
             return
-        # Every retired row (key~hash) still on Garmin goes too, also one retired in this run whose old workout
-        # was unknown when the token was issued: a replaced workout never stays next to its replacement.
+        # A retired row (key~hash) still on Garmin that the ops did not name (its old workout was unknown when the
+        # token was issued) is not deleted by this token: the next plan_preview lists its delete, and the user
+        # confirms it there. Reported in kept[].
         handled = {str(o["key"]) for o in ops if o["op"] == "delete"}
         for key, row in sorted(self.rows.items()):
             if "~" not in key or key in handled or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id") \
                     or row.get("linked_activity_id") or row["date_local"] < self.today:
                 continue
-            if self.stop is not None:
-                self.remaining += 1
-                continue
-            self.delete(_delete_op(row, key, "replaced"))
+            self.out["kept"].append({"key": key.split("~")[0], "date": row["date_local"].isoformat(),
+                                     "role": str(row["role"]), "reason": REASON_RETIRED_KEPT})
 
     def status(self) -> str:
         if self.stop == "unknown":
@@ -970,15 +1062,18 @@ class WriteService:
             return TEXT_DB
         if {r["change_id"] for r in stored if r["status"] in ("proposed", "approved")} != set(ids):
             return sc.compact_json(refused(pid, "superseded"))
+        if _status_changed("apply", plan, row):
+            return sc.compact_json(refused(pid, "plan_changed"))
         today = self._today()
-        ops = [o for o in payload.get("ops") or [] if not (o["op"] == "create" and o["date"] < today.isoformat())]
+        ops = list(payload.get("ops") or [])
+        shown = _runnable(ops, today, payload, "apply")
         previous = row.get("result") if isinstance(row.get("result"), dict) else {}
         if row["status"] == "issued":
-            answer = await self._confirmed(ctx, "apply", ops, _binding("apply", pid, token, sorted(ids)))
+            answer = await self._confirmed(ctx, "apply", shown, _binding("apply", pid, token, sorted(ids)))
             if _is_input_required(answer):
                 return answer
             if answer == "declined":
-                return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(ops),
+                return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(shown),
                                                note=NOTE_DECLINED))
             confirmed_by = "elicitation" if answer == "accepted" else "token"
         else:
@@ -994,6 +1089,7 @@ class WriteService:
             if plan is None or plan["status"] not in ps.OPEN_STATUSES:
                 return refused(pid, "unknown_plan")
             ops, kept = cancel_ops(store.write_rows(pid), self._today())
+            ops["plan_status"] = plan["status"]
             token, expires = store.issue_token(pid, int(plan["current_version"] or 1), "cancel", ops)
         except (ps.StoreError, ValueError, ps.PlanNotFound) as exc:
             log.warning("plans: plan_cancel could not prepare (%s)", type(exc).__name__)
@@ -1025,15 +1121,18 @@ class WriteService:
             return sc.compact_json(refused(pid, "unknown_plan"))
         if int(row["version"]) != int(plan["current_version"]):
             return sc.compact_json(refused(pid, "superseded"))
+        if _status_changed(action, plan, row):
+            return sc.compact_json(refused(pid, "plan_changed"))
         today = self._today()
-        ops = [o for o in row["ops"].get("ops") or [] if not (o["op"] == "create" and o["date"] < today.isoformat())]
+        ops = list(row["ops"].get("ops") or [])
+        shown = _runnable(ops, today, row["ops"], action)
         previous = row.get("result") if isinstance(row.get("result"), dict) else {}
         if row["status"] == "issued":
-            answer = await self._confirmed(ctx, action, ops, _binding(action, pid, token))
+            answer = await self._confirmed(ctx, action, shown, _binding(action, pid, token))
             if _is_input_required(answer):
                 return answer
             if answer == "declined":
-                return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(ops),
+                return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(shown),
                                                note=NOTE_DECLINED))
             confirmed_by = "elicitation" if answer == "accepted" else "token"
         else:
@@ -1077,6 +1176,7 @@ class WriteService:
         try:
             ex = Executor(self._client(), store, plan, today, **self._options)
             ex.action = action
+            ex.issued_on = issued_on(row["ops"])
             ex.prepare([o["date"] for o in ops])
             ex.reconcile()
             if action == "cancel" and _cancel_grew(ex.rows.values(), today, row["ops"]):
@@ -1169,6 +1269,31 @@ class WriteService:
         return result
 
 
+def _runnable(ops: Sequence[Mapping[str, Any]], today: dt.date, payload: Mapping[str, Any],
+              action: str) -> List[Mapping[str, Any]]:
+    """The ops the confirmation names: those skip_reason() lets run today (by their dates; the executor checks
+    each op again, with its row, when it runs)."""
+    when = issued_on(payload)
+    return [o for o in ops if skip_reason([dt.date.fromisoformat(str(o["date"]))], today, when, action) is None]
+
+
+def _status_changed(action: str, plan: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
+    """True when the plan's status changed since the token was issued (the payload's plan_status): a token
+    issued while the plan was active never runs after plan_activate stop made it a draft again (it would start
+    the plan the user stopped). A commit token issued on a draft may run on the plan started since (a commit
+    starts it; another commit or plan_activate start did that already), but once it ran (its first run started
+    the plan) it needs the plan active. A payload without plan_status (issued before this check) counts as
+    issued on the status a commit's first run leaves: active for a token that ran, unchecked otherwise."""
+    payload = row.get("ops") if isinstance(row.get("ops"), dict) else {}
+    expected = payload.get("plan_status")
+    status = plan.get("status")
+    if action == "commit":
+        if row.get("status") != "issued" or expected == "active":
+            return status != "active"
+        return expected is not None and status not in ("draft", "active")
+    return expected is not None and status != expected
+
+
 def _cancel_grew(rows: Iterable[Mapping[str, Any]], today: dt.date, payload: Mapping[str, Any]) -> bool:
     """True when the plan has a workout to delete that the cancel token did not list (a commit after the cancel
     preview): the user approved deleting the listed ones only, and the plan must not end cancelled with workouts
@@ -1236,7 +1361,8 @@ def apply_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, tod
     base = commit_ops(plan, rows, today=today, days=days, tag=tag, plan_id=plan_id, fixed_hard=fixed_hard,
                       lt_speed=lt_speed)
     ops = [o for o in base["ops"] if keep_today or o["date"] != today.isoformat()]
-    return {"kind": "apply", "days": days, "ops": ops, "fixed_hard": list(fixed_hard), "lt_speed_mps": lt_speed}
+    return {"kind": "apply", "days": days, "ops": ops, "fixed_hard": list(fixed_hard), "lt_speed_mps": lt_speed,
+            "issued_on": today.isoformat()}
 
 
 def apply_section(store: Any, plan: Mapping[str, Any], answer: Mapping[str, Any], snap: Any, accepted: Sequence[str],
@@ -1262,8 +1388,8 @@ def apply_section(store: Any, plan: Mapping[str, Any], answer: Mapping[str, Any]
                 "why": ("the plan has no workouts on Garmin from today on: plan_preview with accept_changes builds "
                         "the new version without writes")}
     body = {k: v for k, v in answer.items() if k not in ("window", "sources_failed")}
-    payload = {**ops, "change_ids": sorted(accepted), "inputs": answer["inputs"], "body": body,
-               "content_hash": answer["content_hash"], "race_date": answer["race"]["date"],
+    payload = {**ops, "plan_status": plan.get("status"), "change_ids": sorted(accepted), "inputs": answer["inputs"],
+               "body": body, "content_hash": answer["content_hash"], "race_date": answer["race"]["date"],
                "rules_version": int(answer["rules_version"])}
     token, expires = store.issue_token(pid, version, "apply", payload)
     return {"token": token, "expires_at": expires.isoformat(timespec="seconds"), "change_ids": sorted(accepted),
@@ -1306,6 +1432,7 @@ def commit_section(store: Any, answer: Mapping[str, Any], snap: Any, saved: Mapp
                          fixed_hard=fixed, lt_speed=float(lt) if lt else None)
         if not ops["ops"]:
             return {"token": None, "why": "every session of the window is already on Garmin", "ops": []}
+        ops["plan_status"] = plan["status"]
         token, expires = store.issue_token(pid, int(version), "commit", ops)
     except (ps.StoreError, ValueError, ps.PlanNotFound) as exc:
         log.warning("plans: no commit token (%s)", type(exc).__name__)
@@ -1330,8 +1457,9 @@ COMMIT_DESCRIPTION = (
     "Arguments: plan_id and commit_token, both exactly as plan_preview returned them.")
 CANCEL_DESCRIPTION = (
     "Cancel a training plan and delete its own future workouts from the Garmin calendar. Without cancel_token "
-    "it deletes nothing: it answers the workouts it would delete, those it keeps (linked to an activity, in the "
-    "past) and a cancel token. Show that to the user; only after they approve, call it again with the token. "
+    "it deletes nothing: it answers the workouts it would delete (after today), those it keeps (linked to an "
+    "activity, in the past, today's: today's workout is never deleted) and a cancel token. Show that to the "
+    "user; only after they approve, call it again with the token. "
     "Never touches a workout this plan did not write (TrainingPeaks, Garmin Coach, the user's own, another "
     "install's). Never use it to delete a single session or a finished activity. " + _CONSENT + " status as "
     "plan_commit: done (deleted[], kept[]), partial, unknown, refused, declined.\n\n"
@@ -1463,9 +1591,7 @@ def _orphans(client: Any, tag: str, owned: Set[int], today: dt.date) -> List[Tup
     install's marker that no row owns, each on the calendar today or later, never on an earlier day, never linked
     to an activity. Unscheduled ones are kept. ReadFailed when the library or the calendar cannot be read."""
     head = f"{MARKER_HEAD} {tag} "
-    library = client.get_workouts(0, LIBRARY_LIMIT)
-    if not isinstance(library, list):
-        raise ReadFailed("garmin_unreadable", None)
+    library, _complete = library_pages(client.get_workouts)   # a partial listing finds fewer orphans, never more
     days = _entries_by_workout(_calendar(client, today - dt.timedelta(days=ORPHAN_RANGE_DAYS),
                                          today + dt.timedelta(days=ORPHAN_RANGE_DAYS)))
     out = []

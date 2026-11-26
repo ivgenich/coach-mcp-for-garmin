@@ -370,11 +370,12 @@ class InputRequiredRound(b.DeepBase):
     def test_a_summary_that_changed_between_the_rounds_is_asked_again(self):
         pid, c = self.preview()
         first = self.round_one(pid, c["token"])
-        # Overnight the first day passed: the commit now adds two workouts, not the three the user saw.
+        # Two days later the first day passed and the second is today (a token issued on an earlier day never
+        # writes today's): the commit now adds one workout, not the three the user saw.
         with mock.patch.object(self.svc, "_today", lambda: b.TODAY + dt.timedelta(days=2)):
             out = self.round_two(pid, c["token"], first, accept("Add them"))
         self.assertTrue(plan_confirm.is_input_required(out), out)
-        self.assertTrue(out.input_requests["confirm"].params.message.startswith("Add 2 training-plan workouts"))
+        self.assertTrue(out.input_requests["confirm"].params.message.startswith("Add 1 training-plan workout "))
         self.assertEqual(self.garmin.calls, [])
 
     def test_cancel_with_a_token(self):

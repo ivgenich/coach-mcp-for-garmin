@@ -153,6 +153,23 @@ and so what a MAJOR, MINOR or PATCH release may change:
 - `plan_commit`, `plan_apply_changes` and `plan_cancel` read the plan again under its lock after the
   user's confirmation and write nothing (`plan_changed`) when a new version was stored or the plan
   was started or stopped meanwhile.
+- Plan writes, from a security review of the write path:
+  - An `unknown` upload is settled from the whole workout library, read page by page (at most 20
+    pages of 100), not from its first 100 workouts: a landed upload on a later page was uploaded
+    again by the same token. When the listing cannot be read in full, or lists a `Coach ...`
+    workout without its description, the row stays `unknown` and nothing is uploaded again.
+  - An `unknown` upload is never settled as a workout another row owns: with a retired row's old
+    workout carrying the same marker (a day changed back to an earlier content), it adopted that
+    one, and the same call then deleted it as the retired row.
+  - A token writes only its ops: a replaced workout that was `unknown` when the token was issued
+    was deleted without being in the ops or the confirmation. It now stays (`kept[]`), and the
+    next preview lists its delete.
+  - Every op is checked against today when the token runs, not only when it is issued: a partial
+    token resumed after midnight deleted the workout that had become today's. Such ops are
+    skipped and listed in `kept[]` (reason `today`).
+  - `plan_cancel` deletes only workouts after today; today's is kept (`kept[]`, reason `today`).
+  - A token is refused (`plan_changed`) when the plan's status changed since it was issued: a
+    token issued while the plan was active started it again after `plan_activate` stop.
 - `plan_activate` stop: the note says the links and feedback are kept while the plan exists (a
   stopped plan is a draft, and drafts untouched for 30 days are deleted).
 - Plan rebuilds (`plan_preview` with a `plan_id`): the engine now plans around the stored version

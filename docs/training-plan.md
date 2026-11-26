@@ -616,15 +616,23 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    calls for 15 minutes), `unknown` (a write may have landed: call plan_get first, then the same token after
    `retry_after_s` 180; the next call settles it from
    Garmin once the request's thread has ended and 2 minutes have passed; a create is adopted by its
-   marker in the library, a schedule from the calendar), `refused` (`reason`), `declined`. A started token
+   marker in the library, read page by page to its end, never a workout another row owns; when the library
+   cannot be read in full, or lists a `Coach ...` workout without its description, the row stays `unknown`
+   and nothing is uploaded again; a schedule from the calendar), `refused` (`reason`), `declined`. A started token
    resumes for 24 hours; a new plan version makes it `superseded`. The plan is read again under the plan's
    lock after the confirmation: when a new version was stored or the plan was started or stopped while the
    user was asked, nothing is written (`plan_changed`, for commit, apply and cancel tokens alike; call
-   plan_preview again). One write call per plan runs at a time
+   plan_preview again). The same answer when the plan's status changed since the token was issued: a token
+   issued while the plan was active never runs after `plan_activate` stop (a commit token issued on a draft
+   may run once the plan was started). A token writes only its ops, and each op is checked against today
+   when it runs: a token resumed after midnight leaves the workout that became today's alone (`kept[]`,
+   reason `today`). One write call per plan runs at a time
    (`busy`), also after the client cancelled the call: the lock belongs to the thread doing the writes. A
-   replaced workout always goes: one left on Garmin by an earlier call is deleted by the next commit.
-4. `plan_cancel(plan_id)` answers what it would delete (the plan's own workouts from today on, not linked to
-   an activity), what it keeps, and a cancel token (`xt1.`); with the token it deletes them (404 counts as
+   replaced workout always goes: one left on Garmin by an earlier call (or replaced while its workout was
+   `unknown` when the token was issued, listed in `kept[]`) is listed as a delete by the next preview and
+   deleted by that commit.
+4. `plan_cancel(plan_id)` answers what it would delete (the plan's own workouts after today, not linked to
+   an activity), what it keeps (linked, in the past, and today's: a cancel never deletes today's workout), and a cancel token (`xt1.`); with the token it deletes them (404 counts as
    gone) and cancels the plan. A cancel token covers only the workouts it listed: after a commit in between
    it is `superseded` (a workout it listed while its upload was `unknown` is the same one once settled). A
    delete Garmin refuses answers `partial` with `failed[]`, and the plan stays open.

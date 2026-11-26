@@ -486,7 +486,10 @@ class Sim:
             return None
         self.step = f"{label} of the {out['_today']} preview"
         c = out.get("commit") or {}
-        window = (self.today(), out["_today"] + dt.timedelta(days=out["_days"] - 1))
+        # A token issued on an earlier day (a preview before midnight) never writes today's session: every op is
+        # checked against today when it runs.
+        first = self.today() if out["_today"] >= self.today() else self.today() + dt.timedelta(days=1)
+        window = (first, out["_today"] + dt.timedelta(days=out["_days"] - 1))
         if not c.get("token"):
             if c.get("why") != "every session of the window is already on Garmin":
                 self.fail("commit token", f"no token: {c.get('why')}")
@@ -652,7 +655,7 @@ class Sim:
             return
         self.step = "plan_cancel"
         self._run_token("cancel", lambda: self.writes.cancel(plan_id=self.pid, cancel_token=token), None)
-        self.check_nothing_future("after plan_cancel")
+        self.check_nothing_future("after plan_cancel", today_kept=True)
 
     def cleanup(self, orphans: bool = True) -> Dict[str, int]:
         self.step = f"--plan-cleanup{' --orphans' if orphans else ''}"
@@ -769,7 +772,7 @@ class Sim:
 
     def check_writes(self, executed: List[Dict[str, Any]], action: str = "cleanup") -> None:
         """Past and done sessions never deleted or rewritten; today's never removed by a commit or apply unless it
-        schedules today's new workout (a token issued yesterday); non-ours never written."""
+        schedules today's new workout (a red-day change, rule A8); non-ours never written."""
         rescheduled = {x["date"] for x in executed if x["op"] == "schedule"}
         for x in executed:
             today = x["today"].isoformat()
@@ -847,11 +850,13 @@ class Sim:
                           f"our {e['workoutName']} (workout {e['workoutId']}) on {e['scheduleDate']}: the plan has "
                           "no session that day any more")
 
-    def check_nothing_future(self, label: str) -> None:
+    def check_nothing_future(self, label: str, today_kept: bool = False) -> None:
+        """Nothing of ours from today on (after today with `today_kept`: plan_cancel never deletes today's)."""
         today = self.today().isoformat()
         linked = self.linked_dates()
         left = [e for e in self.garmin.ours_entries() if e["scheduleDate"] >= today
-                and not (e["scheduleDate"] == today and (e["scheduleDate"] in linked or e.get("associatedActivityId")))]
+                and not (e["scheduleDate"] == today and (today_kept or e["scheduleDate"] in linked
+                                                         or e.get("associatedActivityId")))]
         if left:
             self.fail(f"nothing of ours from today on {label}",
                       f"{len(left)} of our entries left: {[(e['scheduleDate'], e['workoutName']) for e in left]}")
