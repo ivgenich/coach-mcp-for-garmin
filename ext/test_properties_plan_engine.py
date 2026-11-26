@@ -123,6 +123,9 @@ class PlanProperties(unittest.TestCase):
     @given(plan_case(), st.floats(1.0, 1.5))
     def test_targets_grow_with_the_starting_volume(self, case, more):
         inputs, snap = case
+        # rule 1 only: the ACWR cap (rules v2) can cut a bigger history's first weeks harder, and its long-run cut
+        # lowers the long runs that step from it, so with the cap a bigger start may plan less
+        snap = dataclasses.replace(snap, garmin_load=())
         bigger = dataclasses.replace(snap, week_m=tuple(pe.Meters(m * more) for m in snap.week_m))
         a = pe.plan_answer(pe.build_plan(inputs, snap, what_if_runs=False))
         b = pe.plan_answer(pe.build_plan(inputs, bigger, what_if_runs=False))
@@ -323,6 +326,7 @@ class AcwrProperties(unittest.TestCase):
         self.assertTrue(held["acwr"]["enforced"])
         self.assertFalse(free["acwr"]["enforced"])
         a, b = pe.plan_answer(held), pe.plan_answer(free)
+        before_cut = {w.number: w.acwr_from[0] / 1000.0 for w in held["_check"]["weeks"]}
         for wa, wb in zip(a["weeks"], b["weeks"]):
             # (a long run cut shifts km to easy runs in the weeks after it: their 100 m rounding can lower the km a
             # week counts as placed, and so the targets after it, never raise them)
@@ -337,6 +341,13 @@ class AcwrProperties(unittest.TestCase):
                 # than the easy minimum for an easy run) where this one, with a shorter long run, reached it: the
                 # weeks after grow from what each placed (no make-up), so from here the two plans differ by rule 1,
                 # which growth_cap checks, not by the cap
+                break
+            placed = max(wa["planned_km"], before_cut.get(wa["week"], 0.0))   # a cut is not a shortfall
+            if wa["kind"] == "normal" and placed >= wa["target_km"] - 0.1 * len(wa["sessions"]) - 1e-6 \
+                    and wb["planned_km"] < wb["target_km"] - 0.1 * len(wb["sessions"]) - 1e-6:
+                # the same: this week placed its target up to the 100 m rounding of each run (before its cuts;
+                # week_base counts the target) where the plan without the cap stopped short of its own (a longer
+                # long run, the easy-run cap): the weeks after grow from different bases by rule 1
                 break
         # a cut only ever shortens or drops a session (a later week only shifts km between its runs as its
         # shorter long run leaves more of its target to the others)
