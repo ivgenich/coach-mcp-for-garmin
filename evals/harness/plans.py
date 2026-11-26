@@ -51,29 +51,29 @@ REVIEW_TOOLS = ("plan_review_week",)
 # plan = "tracked": the stored plan's weeks (plan_tracking.plan_sessions reads key, date, role, km, minutes).
 TRACKED_PLAN = {"content_hash": "eval-tracked", "weeks": [
     {"week": 1, "start": "2026-11-16", "end": "2026-11-22", "sessions": [
-        {"key": "w01-e1", "date": "2026-11-17", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
-        {"key": "w01-q1", "date": "2026-11-19", "role": "threshold", "km": 10.0, "minutes": 55,
+        {"key": "20261202-run", "date": "2026-11-17", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
+        {"key": "20261203-run", "date": "2026-11-19", "role": "threshold", "km": 10.0, "minutes": 55,
          "structure": "10 km with 3 x 8 min threshold"},
-        {"key": "w01-long", "date": "2026-11-22", "role": "long", "km": 14.0, "minutes": 80,
+        {"key": "20300220-run", "date": "2026-11-22", "role": "long", "km": 14.0, "minutes": 80,
          "structure": "14 km long"}]},
     {"week": 2, "start": "2026-11-23", "end": "2026-11-29", "sessions": [
-        {"key": "w02-e1", "date": "2026-11-23", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
-        {"key": "w02-q1", "date": "2026-11-25", "role": "threshold", "km": 10.0, "minutes": 55,
+        {"key": "20300323-run", "date": "2026-11-23", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
+        {"key": "20300329-run", "date": "2026-11-25", "role": "threshold", "km": 10.0, "minutes": 55,
          "structure": "10 km with 3 x 8 min threshold"},
-        {"key": "w02-long", "date": "2026-11-29", "role": "long", "km": 16.0, "minutes": 90,
+        {"key": "20300401-run", "date": "2026-11-29", "role": "long", "km": 16.0, "minutes": 90,
          "structure": "16 km long"}]}]}
 # plan = "reviewed": week 0 (2026-11-09) before TRACKED_PLAN's two weeks; the world's runs complete weeks 0 and 1.
 REVIEWED_PLAN = {"content_hash": "eval-reviewed", "weeks": [
     {"week": 0, "start": "2026-11-09", "end": "2026-11-15", "sessions": [
-        {"key": "w00-e1", "date": "2026-11-10", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
-        {"key": "w00-q1", "date": "2026-11-12", "role": "threshold", "km": 10.0, "minutes": 55,
+        {"key": "20300102-run", "date": "2026-11-10", "role": "easy", "km": 8.0, "minutes": 45, "structure": "8 km easy"},
+        {"key": "20300108-run", "date": "2026-11-12", "role": "threshold", "km": 10.0, "minutes": 55,
          "structure": "10 km with 3 x 8 min threshold"},
-        {"key": "w00-long", "date": "2026-11-15", "role": "long", "km": 14.0, "minutes": 80,
+        {"key": "20300111-run", "date": "2026-11-15", "role": "long", "km": 14.0, "minutes": 80,
          "structure": "14 km long"}]}] + TRACKED_PLAN["weeks"]}
 REVIEWED_SINCE = "2026-11-09T06:00:00+00:00"
 # (workout_key, rpe, pain, pain_location, sharp)
-REVIEWED_FEEDBACK = (("w00-e1", 6, 0, "none", False), ("w01-e1", 6, 0, "none", False),
-                     ("w01-long", 6, 5, "calf", False))
+REVIEWED_FEEDBACK = (("20300102-run", 6, 0, "none", False), ("20261202-run", 6, 0, "none", False),
+                     ("20300220-run", 6, 5, "calf", False))
 TRACKED_SINCE = "2026-11-16T08:00:00+00:00"   # created and activated (before the world's runs of that week)
 TRACKED_NOW = "2026-11-23T09:00:00+00:00"     # the plan world's anchor (Europe/London is UTC in November)
 # The `writes` fixture (evals/cases.py WRITES_FIXTURES is the same tuple; test_cases checks it).

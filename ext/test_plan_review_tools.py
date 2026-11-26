@@ -108,8 +108,7 @@ class Flow(unittest.TestCase):
         self.clock.advance(days=12)
         # Easy runs at RPE 6 in week 0 and week 1 (rule A4: it always lowers the next week), and pain 5 after
         # week 1's first easy run (rule A6: proposed only where the next week has more to hold or drop).
-        easy = [s["key"] for w in out["weeks"][:2] for s in w["sessions"] if s["role"] in ("easy", "strides")]
-        week0, week1 = ([k for k in easy if k.startswith(p)] for p in ("w00", "w01"))
+        week0, week1 = ([s["key"] for s in w["sessions"] if s["role"] in ("easy", "strides")] for w in out["weeks"][:2])
         self.store.save_feedback(self.pid, week0[0], 6, 0, "none", False)
         self.store.save_feedback(self.pid, week1[0], 6, 5, "calf", False)
 
@@ -260,7 +259,7 @@ class Flow(unittest.TestCase):
         # Only pain left: next week has no quality and is lighter, so A6 is its advice alone.
         for key in [r["workout_key"] for r in self.store.feedback(self.pid)]:
             self.store.save_feedback(self.pid, key, 3, 0, "none", False)
-        week1 = [r for r in self.store.links(self.pid) if str(r["workout_key"]).startswith("w01-")]
+        week1 = [r for r in self.store.links(self.pid) if WEEK <= r["date_local"] < REVIEW]
         self.store.save_feedback(self.pid, str(week1[0]["workout_key"]), 3, 6, "calf", True)
         out = self.review(week_start="2026-11-30")
         kinds = {c["kind"] for c in out["changes"]}
@@ -293,7 +292,7 @@ class RedDay(Flow):
         self.level = "red"
         before = {r["workout_key"]: (r["date_local"], r["role"], r["dto_hash"]) for r in self.store.write_rows(self.pid)
                   if "~" not in r["workout_key"]}
-        self.assertEqual(before.get("w03-q1", (None, None))[1], "threshold")
+        self.assertEqual(before.get("20261215-run", (None, None))[1], "threshold")
         out = self.review(week_start="2026-11-30")
         self.assertEqual([c["rule"] for c in out["changes"]], ["A8"])
         apply = out["apply"]
@@ -302,13 +301,13 @@ class RedDay(Flow):
         self.assertEqual(done["status"], "done", done)
         after = {r["workout_key"]: (r["date_local"], r["role"], r["dto_hash"]) for r in self.store.write_rows(self.pid)
                  if "~" not in r["workout_key"] and r["state"] in ("uploaded", "scheduled")}
-        self.assertEqual(after["w03-q1"][1], "easy")
+        self.assertEqual(after["20261215-run"][1], "easy")
         for key, row in before.items():
-            if key != "w03-q1" and key in after:
+            if key != "20261215-run" and key in after:
                 self.assertEqual(after[key], row, key)
         fp = self.store.account_fp("123456")
         body = self.store.get_plan(fp, self.pid)["version_row"]["body"]
-        q = next(s for w in body["weeks"] for s in w["sessions"] if s["key"] == "w03-q1")
+        q = next(s for w in body["weeks"] for s in w["sessions"] if s["key"] == "20261215-run")
         self.assertEqual(q["role"], "easy")
 
 

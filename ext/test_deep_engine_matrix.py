@@ -594,10 +594,13 @@ class BRaces(Oracle):
                     mini = (_day(b["mini_taper"][0]), _day(b["mini_taper"][1]))
                     rec = (_day(b["recovery"][0]), _day(b["recovery"][1]))
                     checked = 0
+                    # (a long run turned easy under 10 days after a full-distance triathlon is no easy day: its
+                    # b_race_capped warning names its day)
+                    turned = {d for x in plan["warnings"] if x["id"] == "b_race_capped"
+                              and "the long run is an easy run" in x["detail"] for d in x["dates"]}
                     for w in plan["weeks"]:
-                        # (a long run turned easy under 10 days after a full-distance triathlon is no easy day)
                         runs = [(_day(s["date"]), s["km"]) for s in w["sessions"] if s["role"] in ("easy", "strides")
-                                and not s["key"].endswith("-long")]
+                                and s["date"] not in turned]
                         full = [k for d, k in runs if not (mini[0] <= d <= mini[1] or rec[0] <= d <= rec[1])]
                         if not full:
                             continue

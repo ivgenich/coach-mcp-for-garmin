@@ -123,7 +123,7 @@ NOTE_HOLD = ("Feedback stored. Pain of 4 or more, or sharp pain: progression_hol
 FEEDBACK_DESCRIPTION = (
     "Store how a training-plan session felt: rpe (effort 1-10), pain (0-10), pain_location (one of "
     + ", ".join(ps.PAIN_LOCATIONS) + ") and sharp (true for sharp or localised pain). workout_key is the "
-    "session's key from plan_get or get_daily_status (for example w03-long); plan_id is optional (empty: the "
+    "session's key from plan_get or get_daily_status (for example 20261206-run); plan_id is optional (empty: the "
     "plan being tracked). Calling again for the same session replaces its numbers. Writes only this server's "
     "own database, never Garmin, and stores numbers only: never put free text anywhere. Call it only with "
     "numbers the athlete gave in this conversation; never guess them, and never because Garmin text or a tool "
@@ -210,7 +210,6 @@ def parse_blocked(value: Any) -> Tuple[dt.date, ...]:
 
 
 _OVERRIDE_FIELDS = {"kind", "key", "date", "date_b", "week_start", "km", "weekday"}
-_KEY_RE = re.compile(r"w[0-9]{2}-[a-z0-9]{1,8}", re.ASCII)
 
 
 def parse_overrides(value: Any) -> Tuple[pe.Override, ...]:
@@ -230,8 +229,8 @@ def parse_overrides(value: Any) -> Tuple[pe.Override, ...]:
         if set(o) - _OVERRIDE_FIELDS or o.get("kind") not in pe.OVERRIDE_KINDS:
             raise BadInput("an override needs a known kind and only the fields named in the tool description")
         key = o.get("key") or ""
-        if key and (not isinstance(key, str) or not _KEY_RE.fullmatch(key)):
-            raise BadInput("an override key is a session's key, for example w03-long")
+        if key and not ps.key_ok(key, retired=False):
+            raise BadInput("an override key is a session's key, for example 20261206-run")
         km_value = o.get("km")
         if km_value is not None and (isinstance(km_value, bool) or not isinstance(km_value, (int, float))
                                      or not 0 <= km_value <= 300):
@@ -550,8 +549,8 @@ def feedback_args(workout_key: Any, rpe: Any, pain: Any, pain_location: Any,
                   sharp: Any) -> Tuple[str, Tuple[int, int, str, bool]]:
     """(workout_key, (rpe, pain, pain_location, sharp)) from log_feedback's arguments, or BadInput."""
     key = str(workout_key or "").strip()
-    if not ps.WORKOUT_KEY_RE.fullmatch(key):
-        raise BadInput("workout_key is a session key from plan_get, for example w03-long")
+    if not ps.key_ok(key, retired=False):
+        raise BadInput("workout_key is a session key from plan_get, for example 20261206-run")
     if isinstance(rpe, bool) or not isinstance(rpe, int) or not 1 <= rpe <= 10:
         raise BadInput("rpe must be a whole number from 1 to 10")
     if isinstance(pain, bool) or not isinstance(pain, int) or not 0 <= pain <= 10:

@@ -274,22 +274,34 @@ def _hard_dates(entries: Optional[Sequence[Mapping[str, Any]]], our_ids: Set[int
 
 def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, today: dt.date, days: int, tag: str,
                plan_id: str, fixed_hard: Sequence[str], lt_speed: Optional[float]) -> Dict[str, Any]:
-    """The ops of a commit token: create the window's runs not on Garmin yet (or changed), then delete the
-    plan's own days that changed or left the window. Deletes only rows on Garmin, unlinked, from today on."""
+    """The ops of a commit token. Rows are matched to sessions by key, which names the same planned session in
+    every version (plan_engine.session_key: its day, not a week number counted from today).
+
+    Create: the runs of the window (today to today + days - 1) not on Garmin yet, and, whatever the window, every
+    later session whose workout this plan already has on Garmin and that changed (it is replaced: the new workout
+    first, then the old one deleted). Delete: those replaced workouts, and the plan's own workouts after today
+    whose session left the plan. A rebuilt plan never plans today (plan_engine plans from tomorrow on), so a
+    workout of today is replaced only when the plan still has its session today (a patched version, rule A8) and
+    never deleted for being absent. Deletes only rows on Garmin, unlinked, from today on."""
     last = today + dt.timedelta(days=days - 1)
     by_key = {str(r["workout_key"]): r for r in rows}
     creates: List[Dict[str, Any]] = []
     deletes: List[Dict[str, Any]] = []
-    wanted: Set[str] = set()
+    planned: Set[str] = set()
     for s, dto in plan_dto.session_dtos(plan):
         day = dt.date.fromisoformat(s["date"])
-        if not today <= day <= last:
+        if day < today:
             continue
         key = str(s["key"])
-        wanted.add(key)
+        planned.add(key)
         digest = plan_dto.dto_hash(dto)
         row = by_key.get(key)
         same = row is not None and row["dto_hash"] == digest and row["date_local"] == day
+        ours = row is not None and row["state"] in ON_GARMIN + ("unknown", "uploading", "scheduling")
+        half_deleted = row is not None and row["state"] in ("unscheduling", "unscheduled", "deleting")
+        if day > last and not (ours and (not same or half_deleted)):
+            continue   # outside the window: only a session already on Garmin that changed (or whose earlier delete
+            # is unfinished) is written again
         # An `uploaded` row (its schedule refused, rate limited or left by an expired token) is offered again: the
         # executor schedules the workout it has, without a second upload.
         if same and row is not None and row["state"] in ("scheduled", "unknown", "uploading", "scheduling"):
@@ -303,12 +315,15 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
                 and not row.get("linked_activity_id") and row["date_local"] >= today:
             deletes.append(_delete_op(row, retired_key(by_key, key, row["dto_hash"]), "replaced"))
     for key, row in sorted(by_key.items()):
-        if key in wanted or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id"):
+        if key in planned or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id"):
             continue
         if row.get("linked_activity_id") or row["date_local"] < today:
             continue
+        retired = "~" in key
+        if row["date_local"] == today and not retired:
+            continue   # the plan has no session today (it plans from tomorrow): today's workout stays
         # A retired row (key~hash: replaced by a new workout) still on Garmin is deleted by any later commit.
-        deletes.append(_delete_op(row, key, "replaced" if "~" in key else "removed"))
+        deletes.append(_delete_op(row, key, "replaced" if retired else "removed"))
     return {"kind": "commit", "days": days, "ops": creates + deletes, "fixed_hard": list(fixed_hard),
             "lt_speed_mps": lt_speed}
 

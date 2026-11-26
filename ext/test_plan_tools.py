@@ -252,7 +252,7 @@ class Preview(Base):
     def test_bad_overrides(self):
         for value in ("not json", "{}", '[{"kind": "grow"}]', '[{"kind": "easy", "key": "../x"}]',
                       '[{"kind": "cap_week_km", "week_start": "2026-12-07", "km": -1}]',
-                      '[{"kind": "easy", "key": "w01-long", "extra": 1}]',
+                      '[{"kind": "easy", "key": "20300220-run", "extra": 1}]',
                       json.dumps([{"kind": "rest", "date": "2026-12-01"}] * 21)):
             with self.subTest(value=value[:40]):
                 self.assertTrue(self.preview(overrides=value).startswith("Error: Invalid input: "))

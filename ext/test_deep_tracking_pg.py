@@ -34,9 +34,9 @@ def session(key, when, role="easy", km=8.0, minutes=48):
     return {"key": key, "date": when.isoformat(), "role": role, "km": km, "minutes": minutes}
 
 
-SESSIONS = [session("w01-e1", day(1)), session("w01-q1", day(2), role="threshold", km=10.0, minutes=55),
-            session("w01-e2", day(4), minutes=36), session("w01-l", day(6), role="long", km=20.0, minutes=120),
-            session("w02-e1", day(8))]
+SESSIONS = [session("20261202-run", day(1)), session("20261203-run", day(2), role="threshold", km=10.0, minutes=55),
+            session("20261205-run", day(4), minutes=36), session("20300221-run", day(6), role="long", km=20.0, minutes=120),
+            session("20300323-run", day(8))]
 
 
 def body():
@@ -102,39 +102,39 @@ class PgTracking(unittest.TestCase):
         acts = [run(1, day(1)), run(2, day(3), km=10.0, minutes=55.0),
                 run(3, day(4), type_key="cycling", km=20.0, minutes=40.0), run(4, day(6), km=12.0, minutes=75.0)]
         state = self.weekly(acts, day(7))
-        expected = {"w01-e1": ("done", 1), "w01-q1": ("done_late", 2), "w01-e2": ("replaced", 3),
-                    "w01-l": ("partial", 4)}
+        expected = {"20261202-run": ("done", 1), "20261203-run": ("done_late", 2), "20261205-run": ("replaced", 3),
+                    "20300221-run": ("partial", 4)}
         self.assertEqual(self.links(), expected)
         self.assertEqual(tr.week_counts(self.store, self.fp, MON),
                          {"planned": 4, "done": 2, "partial": 1, "replaced": 1, "missed": 0, "open": 0, "moved": 1})
         self.assertEqual(tr.week_counts(self.store, self.fp, MON, state=state), tr.week_counts(self.store, self.fp,
                                                                                                MON))
         rows = {r["workout_key"]: r for r in self.store.links(self.pid)}
-        self.assertEqual(rows["w01-e1"]["state"], ps.LOCAL_STATE)
-        self.assertIsNotNone(rows["w01-e1"]["link_checked_at"])
+        self.assertEqual(rows["20261202-run"]["state"], ps.LOCAL_STATE)
+        self.assertIsNotNone(rows["20261202-run"]["link_checked_at"])
         # A refresh with fewer days keeps every counted link.
         tr.refresh_links(self.store, self.fp, day(8), [], [], tz=UTC, today=day(8))
         self.assertEqual(self.links(), expected)
 
     def test_missed_waits_then_upgrades(self):
         self.weekly([], day(7), today=day(7))
-        self.assertNotIn("w01-l", self.links())                      # Monday, its late day, is not over
+        self.assertNotIn("20300221-run", self.links())                      # Monday, its late day, is not over
         self.weekly([], day(7), today=day(8))
-        self.assertEqual(self.links()["w01-l"], ("missed", None))
+        self.assertEqual(self.links()["20300221-run"], ("missed", None))
         self.weekly([run(9, day(7), km=20.0, minutes=120.0)], day(7), today=day(8))
-        self.assertEqual(self.links()["w01-l"], ("done_late", 9))
+        self.assertEqual(self.links()["20300221-run"], ("done_late", 9))
 
     def test_garmin_row_keeps_its_state_and_link_wins(self):
-        self.store.put_workout(self.pid, {"workout_key": "w01-e1", "version": 1, "date_local": day(1), "role": "easy",
+        self.store.put_workout(self.pid, {"workout_key": "20261202-run", "version": 1, "date_local": day(1), "role": "easy",
                                           "dto_hash": "0" * 64, "state": "scheduled", "garmin_workout_id": 990001,
                                           "garmin_schedule_id": 77})
         entries = [{"workoutId": 990001, "scheduleDate": day(1).isoformat(), "associatedActivityId": 4242}]
         self.weekly([run(4242, day(3))], day(6), scheduled=entries)
         rows = {r["workout_key"]: r for r in self.store.links(self.pid)}
-        self.assertEqual((rows["w01-e1"]["link_status"], rows["w01-e1"]["linked_activity_id"]), ("done", 4242))
-        self.assertEqual((rows["w01-e1"]["state"], rows["w01-e1"]["garmin_workout_id"]), ("scheduled", 990001))
+        self.assertEqual((rows["20261202-run"]["link_status"], rows["20261202-run"]["linked_activity_id"]), ("done", 4242))
+        self.assertEqual((rows["20261202-run"]["state"], rows["20261202-run"]["garmin_workout_id"]), ("scheduled", 990001))
         self.assertEqual(tr.ours_by_garmin_id(self.store, self.fp, [990001, 5]),
-                         {990001: {"workout_key": "w01-e1", "role": "easy"}})
+                         {990001: {"workout_key": "20261202-run", "role": "easy"}})
 
     def test_activation_keeps_a_counted_link(self):
         tr.refresh_links(self.store, self.fp, day(1), [run(1, day(1))], [], tz=UTC, today=day(1))
@@ -143,32 +143,32 @@ class PgTracking(unittest.TestCase):
             conn.execute("UPDATE history.plans SET activated_at = %s WHERE plan_id = %s",
                          (dt.datetime(2026, 12, 2, 12, 0, tzinfo=UTC), self.pid))
         self.weekly([run(1, day(1)), run(2, day(2))], day(6))
-        self.assertEqual(self.links()["w01-e1"], ("done", 1))
-        self.assertEqual(self.links()["w01-q1"], ("missed", None))   # Wednesday's run predates the activation
+        self.assertEqual(self.links()["20261202-run"], ("done", 1))
+        self.assertEqual(self.links()["20261203-run"], ("missed", None))   # Wednesday's run predates the activation
 
     def test_today_plan_and_feedback(self):
         tr.refresh_links(self.store, self.fp, day(1), [run(1, day(1))], [], tz=UTC, today=day(1))
         today = tr.today_plan(self.store, self.fp, day(1))
         self.assertEqual((today["workout_key"], today["link_status"], today["feedback_due"], today["feedback_for"]),
-                         ("w01-e1", "done", True, "w01-e1"))
+                         ("20261202-run", "done", True, "20261202-run"))
         svc = pt.PlanService(lambda: None, lambda: OwnAccount(self.store, self.fp), lambda: day(1))
-        first = json.loads(svc.feedback("w01-e1", 4, 0, "none", False))
-        second = json.loads(svc.feedback("w01-e1", 7, 4, "achilles", True))
+        first = json.loads(svc.feedback("20261202-run", 4, 0, "none", False))
+        second = json.loads(svc.feedback("20261202-run", 7, 4, "achilles", True))
         self.assertEqual((first["updated"], second["updated"], second["progression_hold"]), (False, True, True))
         rows = self.store.feedback(self.pid)
         self.assertEqual([(r["rpe"], r["pain"], r["pain_location"], r["sharp"]) for r in rows],
                          [(7, 4, "achilles", True)])
         self.assertLessEqual(rows[0]["created_at"], rows[0]["updated_at"])
         self.assertFalse(tr.today_plan(self.store, self.fp, day(1))["feedback_due"])
-        self.assertTrue(svc.feedback("w01-e1", 0, 0, "none", False).startswith("Error: Invalid input: "))
-        self.assertIn("after tomorrow", svc.feedback("w02-e1", 4, 0, "none", False))
+        self.assertTrue(svc.feedback("20261202-run", 0, 0, "none", False).startswith("Error: Invalid input: "))
+        self.assertIn("after tomorrow", svc.feedback("20300323-run", 4, 0, "none", False))
         other = self.store.account_fp(str(int(self.profile) + 1))
         foreign, _, _ = self.store.save_preview(other, None, RACE, 1, {}, body(), secrets.token_hex(32))
-        self.assertEqual(svc.feedback("w01-e1", 4, 0, "none", False, foreign), pt.TEXT_NOT_FOUND)
+        self.assertEqual(svc.feedback("20261202-run", 4, 0, "none", False, foreign), pt.TEXT_NOT_FOUND)
         self.assertEqual(self.store.feedback(foreign), [])
         with mock.patch.dict(os.environ, {"REPORT_TZ": "Asia/Jerusalem"}):
             got = json.loads(svc.get(""))
-        self.assertEqual(got["tracking"]["links"][0]["key"], "w01-e1")
+        self.assertEqual(got["tracking"]["links"][0]["key"], "20261202-run")
         self.assertRegex(got["tracking"]["links"][0]["as_of"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
         self.assertEqual(got["tracking"]["feedback"][0]["pain_location"], "achilles")
 
@@ -187,7 +187,7 @@ class PgTracking(unittest.TestCase):
         self.addCleanup(lambda: setattr(quiet, "handlers", saved[0]) or setattr(quiet, "propagate", saved[1]))
         out = rep.build_daily(data, text_format="markdown")
         self.assertEqual((out["plan"]["workout_key"], out["plan"]["link_status"], out["plan"]["feedback_for"]),
-                         ("w01-e1", "done", "w01-e1"))
+                         ("20261202-run", "done", "20261202-run"))
         self.assertIn("Plan: easy run 8 km 48 min (done); feedback due (effort and pain)", out["text"])
 
 

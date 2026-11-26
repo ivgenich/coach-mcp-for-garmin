@@ -288,7 +288,7 @@ class Invariants(unittest.TestCase):
         for s in list(w.sessions):
             if s.date == day:
                 w.sessions.remove(s)
-        w.sessions.append(pe.make_session("w99-q9", day, "threshold", pe.Meters(8000), ctx.paces, ctx.rules))
+        w.sessions.append(pe.make_session("20401113-run", day, "threshold", pe.Meters(8000), ctx.paces, ctx.rules))
         failed = {i["id"] for i in pe.check_invariants(plan) if not i["ok"]}
         self.assertIn("no_adjacent_hard", failed)
 
@@ -474,7 +474,7 @@ class Overrides(unittest.TestCase):
     def test_refusals_name_their_rule(self):
         race_day = D(2027, 2, 26)
         cases = [
-            (pe.Override("easy", key="w99-q1"), "unknown_session"),
+            (pe.Override("easy", key="20401111-run"), "unknown_session"),
             (pe.Override("rest", date=race_day), "race_day"),
             (pe.Override("move", key=self.keys("long")[2], date=D(2025, 1, 1)), None),
             (pe.Override("cap_week_km", week_start=D(2030, 1, 7), km=10), "unknown_week"),
@@ -633,7 +633,7 @@ class Acwr(unittest.TestCase):
         plan = build("G5")
         weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
         w7 = next(w for w in weeks if w.number == 7)
-        easy = next(s for s in w7.sessions if s.role == "easy" and s.key == "w07-e2")
+        easy = next(s for s in w7.sessions if s.role == "easy" and s.key == "20270116-run")
         w7.sessions[w7.sessions.index(easy)] = pe.make_session(easy.key, easy.date, "easy", pe.Meters(14000.0),
                                                                 ctx.paces, ctx.rules)
         failed = {i["id"]: i for i in pe.check_invariants(plan) if not i["ok"]}

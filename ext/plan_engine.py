@@ -501,6 +501,20 @@ def quality_work(role: str, target: Meters, rules: Mapping[str, Any], short: boo
     return (work, work) if work >= float(rules["mp_min_km"]) * 1000 else None
 
 
+SESSION_SLOTS = ("run", "race", "b")
+
+
+def session_key(day: dt.date, slot: str = "run") -> str:
+    """A session's key: the day the plan places it and its slot, "YYYYMMDD-run" (a run), "-race" (the A race) or
+    "-b" (a B race); plan_store.SESSION_KEY_RE. A plan has at most one session a day (one_run_per_day; no run on a
+    race day), so the key is unique, and it does not depend on today: a plan rebuilt on a later day gives the same
+    planned session the same key, and the stored rows, links and feedback (matched by key) still name the same
+    session. An override that moves a session keeps its key (the day it was planned on)."""
+    if slot not in SESSION_SLOTS:
+        raise ValueError("plan_engine: unknown session slot")
+    return f"{day.strftime('%Y%m%d')}-{slot}"
+
+
 def make_session(key: str, date: dt.date, role: str, distance: Meters, paces: Paces,
                  rules: Mapping[str, Any], work: Optional[Tuple[Meters, Meters]] = None) -> Session:
     if role == "long":
@@ -1019,7 +1033,6 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
     r, paces = ctx.rules, ctx.paces
     long_day, placed = place_week(w, ctx, hard_before)
     sessions: List[Session] = []
-    tag = f"w{w.number:02d}"
     w.b_cut = 0.0
     easy_max = Meters(_floor_m(easy_cap(paces, r)))
     if long_day is not None:
@@ -1043,8 +1056,7 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
                 "detail": (f"the long run is an easy run: under {r['b_race']['long_after_min_days'][soon.kind]} days "
                            f"after the B race on {soon.date.isoformat()}") if soon is not None else
                           f"the long run is held at {km(new_m)} km around a B race; the km are not made up"})
-        sessions.append(make_session(f"{tag}-long", long_day, role, new_m, paces, r))
-    q_n = 0
+        sessions.append(make_session(session_key(long_day), long_day, role, new_m, paces, r))
     for role, day in placed:
         if role == "strides":
             continue
@@ -1055,8 +1067,7 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
             ctx.warnings.append({"id": "quality_too_small", "dates": [day.isoformat()],
                                  "detail": f"the week is too small for a {real} session"})
             continue
-        q_n += 1
-        sessions.append(make_session(f"{tag}-q{q_n}", day, real, Meters(0.0), paces, r, work))
+        sessions.append(make_session(session_key(day), day, real, Meters(0.0), paces, r, work))
     used = {s.date for s in sessions}
     strides_day = next((d for role, d in placed if role == "strides"), None)
     # Easy days: every runnable day left; mini-taper days carry strides ("strides only").
@@ -1084,21 +1095,19 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
             ctx.warnings.append({"id": "volume_capped", "dates": [w.start.isoformat()],
                                  "detail": "easy runs stop at the easy cap, so the week ends below its target"})
         _cap_mini_days(per_day, ctx)
-        e_n = 0
         for day in sorted(ranked):
             if day in ctx.inputs.blocked_dates:
                 continue
-            e_n += 1
             role = "strides" if (day == strides_day or (ctx.window_factor(day) is not None
                                                         and day in _mini_days(ctx))) else "easy"
-            sessions.append(make_session(f"{tag}-e{e_n}", day, role, per_day[day], paces, r))
+            sessions.append(make_session(session_key(day), day, role, per_day[day], paces, r))
     for d in w.days():
         b = ctx.b_race_on(d)
         if b is not None:
-            sessions.append(Session(f"{tag}-b", d, "b_race", Meters(0.0), (), b.kind))
+            sessions.append(Session(session_key(d, "b"), d, "b_race", Meters(0.0), (), b.kind))
         if d == ctx.inputs.race_date:
             dist = DISTANCES[ctx.inputs.race_distance]
-            sessions.append(Session(f"{tag}-race", d, "race", dist, (Step("interval", "distance", float(dist), "mp"),)))
+            sessions.append(Session(session_key(d, "race"), d, "race", dist, (Step("interval", "distance", float(dist), "mp"),)))
     sessions.sort(key=lambda s: (s.date, s.key))
     w.sessions = sessions
     if sum(s.distance for s in sessions if s.counts) > w.target + EPS_M:
@@ -1173,8 +1182,8 @@ def week0(ctx: Context) -> Optional[Week]:
     if per >= float(ctx.rules["easy_min_km"]) * 1000:
         each = {d: per for d in days}
         _cap_mini_days(each, ctx)   # rule 7: a B race early in week 1 has its mini-taper here
-        w.sessions = [make_session(f"w00-e{i}", d, "easy", each[d], ctx.paces, ctx.rules)
-                      for i, d in enumerate(days, 1)]
+        w.sessions = [make_session(session_key(d), d, "easy", each[d], ctx.paces, ctx.rules)
+                      for d in days]
     w.target = Meters(sum(s.distance for s in w.sessions))
     return w
 
@@ -2112,8 +2121,13 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
             if s.date.weekday() in ctx.inputs.rest_days or s.date in ctx.inputs.blocked_dates:
                 rd.append(f"{s.date.isoformat()}: a run on a rest day or blocked date")
     add("rest_days", rd)
+    keys_seen: Dict[str, int] = {}
+    for w in weeks:
+        for s in w.sessions:
+            keys_seen[s.key] = keys_seen.get(s.key, 0) + 1
     add("one_run_per_day", [f"{d.isoformat()}: {n} runs" for d, n in sorted(days_seen.items())
-                            if n > 1 or (n >= 1 and ctx.fixed_run(d))])
+                            if n > 1 or (n >= 1 and ctx.fixed_run(d))]
+        + [f"key {k}: {n} sessions" for k, n in sorted(keys_seen.items()) if n > 1])   # session_key is per day
     add("acwr_cap", check_acwr(weeks, ctx))   # v2
     return out
 

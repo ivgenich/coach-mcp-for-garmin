@@ -166,7 +166,7 @@ class StoreContract:
 
     # --- Stage 3: tracking links and feedback ---
 
-    def link(self, key="w01-e1", day=dt.date(2026, 12, 1), status="done", activity=101, role="easy"):
+    def link(self, key="20261202-run", day=dt.date(2026, 12, 1), status="done", activity=101, role="easy"):
         return {"workout_key": key, "date_local": day, "role": role, "dto_hash": h(key),
                 "linked_activity_id": activity, "link_status": status}
 
@@ -184,18 +184,18 @@ class StoreContract:
     def test_links_are_upserted_as_local_rows(self):
         pid, _, _ = self.save()
         self.assertEqual(self.store.links(pid), [])
-        self.assertEqual(self.store.save_links(pid, 1, [self.link(), self.link("w01-long", dt.date(2026, 12, 6),
+        self.assertEqual(self.store.save_links(pid, 1, [self.link(), self.link("20300220-run", dt.date(2026, 12, 6),
                                                                               "missed", None, "long")]), 2)
         rows = {r["workout_key"]: r for r in self.store.links(pid)}
-        self.assertEqual(rows["w01-e1"]["state"], ps.LOCAL_STATE)
-        self.assertEqual((rows["w01-e1"]["link_status"], rows["w01-e1"]["linked_activity_id"]), ("done", 101))
-        self.assertIsNone(rows["w01-e1"]["garmin_workout_id"])
-        self.assertIsNotNone(rows["w01-e1"]["link_checked_at"])
-        self.assertEqual(rows["w01-long"]["link_status"], "missed")
+        self.assertEqual(rows["20261202-run"]["state"], ps.LOCAL_STATE)
+        self.assertEqual((rows["20261202-run"]["link_status"], rows["20261202-run"]["linked_activity_id"]), ("done", 101))
+        self.assertIsNone(rows["20261202-run"]["garmin_workout_id"])
+        self.assertIsNotNone(rows["20261202-run"]["link_checked_at"])
+        self.assertEqual(rows["20300220-run"]["link_status"], "missed")
         self.store.save_links(pid, 2, [self.link(day=dt.date(2026, 12, 2), status="partial_late", activity=102)])
         rows = {r["workout_key"]: r for r in self.store.links(pid)}
-        self.assertEqual((rows["w01-e1"]["link_status"], rows["w01-e1"]["linked_activity_id"],
-                          rows["w01-e1"]["date_local"], rows["w01-e1"]["version"]),
+        self.assertEqual((rows["20261202-run"]["link_status"], rows["20261202-run"]["linked_activity_id"],
+                          rows["20261202-run"]["date_local"], rows["20261202-run"]["version"]),
                          ("partial_late", 102, dt.date(2026, 12, 2), 2))
         self.assertEqual(self.store.live_workouts(), 0)
         self.assertEqual(len(self.store.workouts(pid)), 2)
@@ -218,21 +218,21 @@ class StoreContract:
 
     def test_feedback_is_upserted(self):
         pid, _, _ = self.save()
-        self.assertTrue(self.store.save_feedback(pid, "w01-e1", 4, 0, "none", False))
-        self.assertFalse(self.store.save_feedback(pid, "w01-e1", 6, 3, "calf", True))
-        self.assertTrue(self.store.save_feedback(pid, "w01-q1", 7, 0, "none", False))
+        self.assertTrue(self.store.save_feedback(pid, "20261202-run", 4, 0, "none", False))
+        self.assertFalse(self.store.save_feedback(pid, "20261202-run", 6, 3, "calf", True))
+        self.assertTrue(self.store.save_feedback(pid, "20261203-run", 7, 0, "none", False))
         rows = self.store.feedback(pid)
         self.assertEqual([(r["workout_key"], r["rpe"], r["pain"], r["pain_location"], r["sharp"]) for r in rows],
-                         [("w01-e1", 6, 3, "calf", True), ("w01-q1", 7, 0, "none", False)])
-        for args in (("w01-e1", 0, 0, "none", False), ("w01-e1", 5, 11, "none", False),
-                     ("w01-e1", 5, 1, "left knee", False), ("w01-e1", 5, 1, "knee", "yes"),
-                     ("bad key", 5, 0, "none", False), ("w01-e1", True, 0, "none", False)):
+                         [("20261202-run", 6, 3, "calf", True), ("20261203-run", 7, 0, "none", False)])
+        for args in (("20261202-run", 0, 0, "none", False), ("20261202-run", 5, 11, "none", False),
+                     ("20261202-run", 5, 1, "left knee", False), ("20261202-run", 5, 1, "knee", "yes"),
+                     ("bad key", 5, 0, "none", False), ("20261202-run", True, 0, "none", False)):
             with self.subTest(args=args):
                 with self.assertRaises(ValueError) as cm:
                     self.store.save_feedback(pid, *args)
                 self.assertNotIn("left knee", str(cm.exception))
         with self.assertRaises(ps.PlanNotFound):
-            self.store.save_feedback("a" * 32, "w01-e1", 4, 0, "none", False)
+            self.store.save_feedback("a" * 32, "20261202-run", 4, 0, "none", False)
 
 
 class WriteContract(StoreContract):
@@ -240,7 +240,7 @@ class WriteContract(StoreContract):
 
     def test_token_round_trip(self):
         pid, version, _ = self.save()
-        ops = {"kind": "commit", "ops": [{"op": "create", "key": "w01-e1", "date": "2026-12-02"}]}
+        ops = {"kind": "commit", "ops": [{"op": "create", "key": "20261202-run", "date": "2026-12-02"}]}
         token, expires = self.store.issue_token(pid, version, "commit", ops)
         self.assertRegex(token, r"^ct1\.[A-Za-z0-9_-]{32}$")
         self.assertGreater(expires, self.store.now())
@@ -261,16 +261,16 @@ class WriteContract(StoreContract):
 
     def test_workout_rows_and_plan_moves(self):
         pid, version, _ = self.save()
-        row = {"workout_key": "w01-e1", "version": version, "date_local": dt.date(2026, 12, 2), "role": "easy",
+        row = {"workout_key": "20261202-run", "version": version, "date_local": dt.date(2026, 12, 2), "role": "easy",
                "dto_hash": h("dto"), "state": "pending"}
         self.store.put_workout(pid, row)
         self.store.put_workout(pid, {**row, "state": "scheduled", "garmin_workout_id": 11, "garmin_schedule_id": 12})
-        self.store.put_workout(pid, {**row, "workout_key": "w01-e1~abcdef01", "state": "deleted"})
+        self.store.put_workout(pid, {**row, "workout_key": "20261202-run~abcdef01", "state": "deleted"})
         rows = {r["workout_key"]: r for r in self.store.write_rows(pid)}
-        self.assertEqual(rows["w01-e1"]["garmin_workout_id"], 11)
-        self.assertEqual(rows["w01-e1"]["state"], "scheduled")
-        self.assertIsNone(rows["w01-e1"]["linked_activity_id"])
-        self.assertIsNotNone(rows["w01-e1"]["state_changed_at"])
+        self.assertEqual(rows["20261202-run"]["garmin_workout_id"], 11)
+        self.assertEqual(rows["20261202-run"]["state"], "scheduled")
+        self.assertIsNone(rows["20261202-run"]["linked_activity_id"])
+        self.assertIsNotNone(rows["20261202-run"]["state_changed_at"])
         self.assertEqual(len(self.store.all_write_rows()), 2)
         self.assertEqual(self.store.live_workouts(), 1)
         self.store.move_plan(pid, "active")
@@ -328,17 +328,17 @@ class WriteContract(StoreContract):
     def test_live_workouts_from_a_day_counts_what_cleanup_deletes(self):
         pid, version, _ = self.save()
         day = dt.date(2026, 12, 2)
-        for key, state, wid, when in (("w01-e1", "scheduled", 11, day),
-                                      ("w01-e2", "scheduled", 12, day - dt.timedelta(days=1)),   # past
-                                      ("w01-e3", "unscheduled", 13, day),
-                                      ("w01-e4", "deleted", 14, day),
-                                      ("w01-e5", "unknown", None, day),                         # no id
-                                      ("w01-e6", "scheduled", 16, day),                         # linked
-                                      ("w01-e1~abcdef01-2", "scheduled", 15, day)):
+        for key, state, wid, when in (("20261202-run", "scheduled", 11, day),
+                                      ("20261205-run", "scheduled", 12, day - dt.timedelta(days=1)),   # past
+                                      ("20300213-run", "unscheduled", 13, day),
+                                      ("20300214-run", "deleted", 14, day),
+                                      ("20300215-run", "unknown", None, day),                         # no id
+                                      ("20300216-run", "scheduled", 16, day),                         # linked
+                                      ("20261202-run~abcdef01-2", "scheduled", 15, day)):
             self.store.put_workout(pid, {"workout_key": key, "version": version, "date_local": when,
                                          "role": "easy", "dto_hash": h(key), "state": state,
                                          "garmin_workout_id": wid})
-        self.store.save_links(pid, version, [self.link(key="w01-e6", day=day, activity=77)])
+        self.store.save_links(pid, version, [self.link(key="20300216-run", day=day, activity=77)])
         self.assertEqual(self.store.live_workouts(on_or_after=day), 3)
         self.assertEqual(self.store.live_workouts(on_or_after=day + dt.timedelta(days=1)), 0)
         with self.assertRaises(ValueError):
@@ -353,7 +353,7 @@ class WriteContract(StoreContract):
 
     def test_a_garmin_row_keeps_its_state_and_date(self):
         pid, _, _ = self.save()
-        self.store.put_workout(pid, {"workout_key": "w01-e1", "version": 1, "date_local": dt.date(2026, 12, 1),
+        self.store.put_workout(pid, {"workout_key": "20261202-run", "version": 1, "date_local": dt.date(2026, 12, 1),
                                      "role": "easy", "dto_hash": h("dto"), "state": "scheduled",
                                      "garmin_workout_id": 9001})
         self.store.save_links(pid, 2, [self.link(day=dt.date(2026, 12, 3))])
@@ -365,7 +365,7 @@ class WriteContract(StoreContract):
     def test_a_commit_takes_over_a_local_row_and_keeps_its_link(self):
         pid, _, _ = self.save()
         self.store.save_links(pid, 1, [self.link(status="done_early", activity=55)])
-        self.store.put_workout(pid, {"workout_key": "w01-e1", "version": 2, "date_local": dt.date(2026, 12, 2),
+        self.store.put_workout(pid, {"workout_key": "20261202-run", "version": 2, "date_local": dt.date(2026, 12, 2),
                                      "role": "easy", "dto_hash": h("dto"), "state": "pending"})
         row = self.store.write_rows(pid)[0]
         self.assertEqual((row["state"], row["version"], row["date_local"], row["link_status"],
@@ -424,7 +424,7 @@ class MemoryStore(WriteContract, unittest.TestCase):
 
     def test_feedback_goes_with_its_plan(self):
         pid, _, _ = self.save()
-        self.store.save_feedback(pid, "w01-e1", 4, 0, "none", False)
+        self.store.save_feedback(pid, "20261202-run", 4, 0, "none", False)
         self.store.set_status(pid, "cancelled")
         self.clock.now += dt.timedelta(days=ps.ENDED_DAYS + 1)
         self.store.retention()
@@ -459,12 +459,12 @@ class MemoryStore(WriteContract, unittest.TestCase):
 
     def test_live_workouts_counts_only_live_states(self):
         pid, _, _ = self.save()
-        self.store.workout_rows[(pid, "w01-long")] = {"workout_key": "w01-long", "state": "scheduled",
+        self.store.workout_rows[(pid, "20300220-run")] = {"workout_key": "20300220-run", "state": "scheduled",
                                                       "date_local": RACE}
-        self.store.workout_rows[(pid, "w01-e1")] = {"workout_key": "w01-e1", "state": "deleted",
+        self.store.workout_rows[(pid, "20261202-run")] = {"workout_key": "20261202-run", "state": "deleted",
                                                     "date_local": RACE}
         self.assertEqual(self.store.live_workouts(), 1)
-        self.assertEqual([r["workout_key"] for r in self.store.workouts(pid)], ["w01-e1", "w01-long"])
+        self.assertEqual([r["workout_key"] for r in self.store.workouts(pid)], ["20261202-run", "20300220-run"])
 
 
 class Helpers(unittest.TestCase):

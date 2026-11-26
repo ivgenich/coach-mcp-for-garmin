@@ -59,7 +59,7 @@
    }
   },
   "b_races": [],
-  "content_hash": "bec05dcadcb8fe7d1192ad20c3f90efdd96125467928f160faa8d9639896ab59",
+  "content_hash": "0fc8fa080f54b788f9ba771c58e2695ccf9c636fdd57dda1ad56f0b3b40f8cd7",
   "feasibility": {
    "checks": [
     {
@@ -194,7 +194,7 @@
      {
       "date": "2026-11-26",
       "hard_or_long": false,
-      "key": "w00-e1",
+      "key": "20261126-run",
       "km": 9.6,
       "minutes": null,
       "pace": null,
@@ -212,7 +212,7 @@
      {
       "date": "2026-11-28",
       "hard_or_long": false,
-      "key": "w00-e2",
+      "key": "20261128-run",
       "km": 9.6,
       "minutes": null,
       "pace": null,
@@ -230,7 +230,7 @@
      {
       "date": "2026-11-29",
       "hard_or_long": false,
-      "key": "w00-e3",
+      "key": "20261129-run",
       "km": 9.6,
       "minutes": null,
       "pace": null,
@@ -260,7 +260,7 @@
      {
       "date": "2026-12-01",
       "hard_or_long": false,
-      "key": "w01-e1",
+      "key": "20261201-run",
       "km": 6.4,
       "minutes": null,
       "pace": null,
@@ -293,7 +293,7 @@
      {
       "date": "2026-12-02",
       "hard_or_long": false,
-      "key": "w01-e2",
+      "key": "20261202-run",
       "km": 6.4,
       "minutes": null,
       "pace": null,
@@ -311,7 +311,7 @@
      {
       "date": "2026-12-03",
       "hard_or_long": false,
-      "key": "w01-e3",
+      "key": "20261203-run",
       "km": 6.4,
       "minutes": null,
       "pace": null,
@@ -329,7 +329,7 @@
      {
       "date": "2026-12-05",
       "hard_or_long": false,
-      "key": "w01-e4",
+      "key": "20261205-run",
       "km": 6.4,
       "minutes": null,
       "pace": null,
@@ -347,7 +347,7 @@
      {
       "date": "2026-12-06",
       "hard_or_long": true,
-      "key": "w01-long",
+      "key": "20261206-run",
       "km": 25.9,
       "minutes": null,
       "pace": null,
@@ -377,7 +377,7 @@
      {
       "date": "2026-12-08",
       "hard_or_long": false,
-      "key": "w02-e1",
+      "key": "20261208-run",
       "km": 7.0,
       "minutes": null,
       "pace": null,
@@ -410,7 +410,7 @@
      {
       "date": "2026-12-09",
       "hard_or_long": false,
-      "key": "w02-e2",
+      "key": "20261209-run",
       "km": 7.0,
       "minutes": null,
       "pace": null,
@@ -428,7 +428,7 @@
      {
       "date": "2026-12-10",
       "hard_or_long": false,
-      "key": "w02-e3",
+      "key": "20261210-run",
       "km": 7.0,
       "minutes": null,
       "pace": null,
@@ -446,7 +446,7 @@
      {
       "date": "2026-12-12",
       "hard_or_long": false,
-      "key": "w02-e4",
+      "key": "20261212-run",
       "km": 7.0,
       "minutes": null,
       "pace": null,
@@ -464,7 +464,7 @@
      {
       "date": "2026-12-13",
       "hard_or_long": true,
-      "key": "w02-long",
+      "key": "20261213-run",
       "km": 27.9,
       "minutes": null,
       "pace": null,
@@ -494,7 +494,7 @@
      {
       "date": "2026-12-15",
       "hard_or_long": false,
-      "key": "w03-e1",
+      "key": "20261215-run",
       "km": 7.6,
       "minutes": null,
       "pace": null,
@@ -527,7 +527,7 @@
      {
       "date": "2026-12-16",
       "hard_or_long": false,
-      "key": "w03-e2",
+      "key": "20261216-run",
       "km": 7.6,
       "minutes": null,
       "pace": null,
@@ -545,7 +545,7 @@
      {
       "date": "2026-12-17",
       "hard_or_long": false,
-      "key": "w03-e3",
+      "key": "20261217-run",
       "km": 7.6,
       "minutes": null,
       "pace": null,
@@ -563,7 +563,7 @@
      {
       "date": "2026-12-19",
       "hard_or_long": false,
-      "key": "w03-e4",
+      "key": "20261219-run",
       "km": 7.6,
       "minutes": null,
       "pace": null,
@@ -581,7 +581,7 @@
      {
       "date": "2026-12-20",
       "hard_or_long": true,
-      "key": "w03-long",
+      "key": "20261220-run",
       "km": 29.9,
       "minutes": null,
       "pace": null,
@@ -611,7 +611,7 @@
      {
       "date": "2026-12-22",
       "hard_or_long": true,
-      "key": "w04-q1",
+      "key": "20261222-run",
       "km": 8.4,
       "minutes": null,
       "pace": null,
@@ -649,7 +649,7 @@
      {
       "date": "2026-12-23",
       "hard_or_long": false,
-      "key": "w04-e1",
+      "key": "20261223-run",
       "km": 5.1,
       "minutes": null,
       "pace": null,
@@ -667,7 +667,7 @@
      {
       "date": "2026-12-24",
       "hard_or_long": false,
-      "key": "w04-e2",
+      "key": "20261224-run",
       "km": 5.1,
       "minutes": null,
       "pace": null,
@@ -685,7 +685,7 @@
      {
       "date": "2026-12-26",
       "hard_or_long": false,
-      "key": "w04-e3",
+      "key": "20261226-run",
       "km": 5.1,
       "minutes": null,
       "pace": null,
@@ -703,7 +703,7 @@
      {
       "date": "2026-12-27",
       "hard_or_long": true,
-      "key": "w04-long",
+      "key": "20261227-run",
       "km": 23.3,
       "minutes": null,
       "pace": null,
@@ -733,7 +733,7 @@
      {
       "date": "2026-12-29",
       "hard_or_long": true,
-      "key": "w05-q1",
+      "key": "20261229-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -771,7 +771,7 @@
      {
       "date": "2026-12-30",
       "hard_or_long": false,
-      "key": "w05-e1",
+      "key": "20261230-run",
       "km": 7.5,
       "minutes": null,
       "pace": null,
@@ -789,7 +789,7 @@
      {
       "date": "2026-12-31",
       "hard_or_long": false,
-      "key": "w05-e2",
+      "key": "20261231-run",
       "km": 7.5,
       "minutes": null,
       "pace": null,
@@ -807,7 +807,7 @@
      {
       "date": "2027-01-02",
       "hard_or_long": false,
-      "key": "w05-e3",
+      "key": "20270102-run",
       "km": 7.5,
       "minutes": null,
       "pace": null,
@@ -825,7 +825,7 @@
      {
       "date": "2027-01-03",
       "hard_or_long": true,
-      "key": "w05-long",
+      "key": "20270103-run",
       "km": 31.9,
       "minutes": null,
       "pace": null,
@@ -855,7 +855,7 @@
      {
       "date": "2027-01-05",
       "hard_or_long": true,
-      "key": "w06-q1",
+      "key": "20270105-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -893,7 +893,7 @@
      {
       "date": "2027-01-06",
       "hard_or_long": false,
-      "key": "w06-e1",
+      "key": "20270106-run",
       "km": 7.9,
       "minutes": null,
       "pace": null,
@@ -911,7 +911,7 @@
      {
       "date": "2027-01-07",
       "hard_or_long": true,
-      "key": "w06-q2",
+      "key": "20270107-run",
       "km": 12.0,
       "minutes": null,
       "pace": null,
@@ -939,7 +939,7 @@
      {
       "date": "2027-01-09",
       "hard_or_long": false,
-      "key": "w06-e2",
+      "key": "20270109-run",
       "km": 7.9,
       "minutes": null,
       "pace": null,
@@ -957,7 +957,7 @@
      {
       "date": "2027-01-10",
       "hard_or_long": true,
-      "key": "w06-long",
+      "key": "20270110-run",
       "km": 32.0,
       "minutes": null,
       "pace": null,
@@ -987,7 +987,7 @@
      {
       "date": "2027-01-12",
       "hard_or_long": true,
-      "key": "w07-q1",
+      "key": "20270112-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1025,7 +1025,7 @@
      {
       "date": "2027-01-13",
       "hard_or_long": false,
-      "key": "w07-e1",
+      "key": "20270113-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1043,7 +1043,7 @@
      {
       "date": "2027-01-14",
       "hard_or_long": true,
-      "key": "w07-q2",
+      "key": "20270114-run",
       "km": 10.5,
       "minutes": null,
       "pace": null,
@@ -1081,7 +1081,7 @@
      {
       "date": "2027-01-16",
       "hard_or_long": false,
-      "key": "w07-e2",
+      "key": "20270116-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1099,7 +1099,7 @@
      {
       "date": "2027-01-17",
       "hard_or_long": true,
-      "key": "w07-long",
+      "key": "20270117-run",
       "km": 32.0,
       "minutes": null,
       "pace": null,
@@ -1129,7 +1129,7 @@
      {
       "date": "2027-01-19",
       "hard_or_long": true,
-      "key": "w08-q1",
+      "key": "20270119-run",
       "km": 8.4,
       "minutes": null,
       "pace": null,
@@ -1167,7 +1167,7 @@
      {
       "date": "2027-01-20",
       "hard_or_long": false,
-      "key": "w08-e1",
+      "key": "20270120-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1185,7 +1185,7 @@
      {
       "date": "2027-01-21",
       "hard_or_long": false,
-      "key": "w08-e2",
+      "key": "20270121-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1203,7 +1203,7 @@
      {
       "date": "2027-01-23",
       "hard_or_long": false,
-      "key": "w08-e3",
+      "key": "20270123-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1221,7 +1221,7 @@
      {
       "date": "2027-01-24",
       "hard_or_long": true,
-      "key": "w08-long",
+      "key": "20270124-run",
       "km": 24.9,
       "minutes": null,
       "pace": null,
@@ -1251,7 +1251,7 @@
      {
       "date": "2027-01-26",
       "hard_or_long": true,
-      "key": "w09-q1",
+      "key": "20270126-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1289,7 +1289,7 @@
      {
       "date": "2027-01-27",
       "hard_or_long": false,
-      "key": "w09-e1",
+      "key": "20270127-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1307,7 +1307,7 @@
      {
       "date": "2027-01-28",
       "hard_or_long": true,
-      "key": "w09-q2",
+      "key": "20270128-run",
       "km": 10.5,
       "minutes": null,
       "pace": null,
@@ -1345,7 +1345,7 @@
      {
       "date": "2027-01-30",
       "hard_or_long": false,
-      "key": "w09-e2",
+      "key": "20270130-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1363,7 +1363,7 @@
      {
       "date": "2027-01-31",
       "hard_or_long": true,
-      "key": "w09-long",
+      "key": "20270131-run",
       "km": 32.0,
       "minutes": null,
       "pace": null,
@@ -1393,7 +1393,7 @@
      {
       "date": "2027-02-02",
       "hard_or_long": true,
-      "key": "w10-q1",
+      "key": "20270202-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1431,7 +1431,7 @@
      {
       "date": "2027-02-03",
       "hard_or_long": false,
-      "key": "w10-e1",
+      "key": "20270203-run",
       "km": 9.1,
       "minutes": null,
       "pace": null,
@@ -1449,7 +1449,7 @@
      {
       "date": "2027-02-04",
       "hard_or_long": true,
-      "key": "w10-q2",
+      "key": "20270204-run",
       "km": 12.0,
       "minutes": null,
       "pace": null,
@@ -1477,7 +1477,7 @@
      {
       "date": "2027-02-06",
       "hard_or_long": false,
-      "key": "w10-e2",
+      "key": "20270206-run",
       "km": 9.1,
       "minutes": null,
       "pace": null,
@@ -1495,7 +1495,7 @@
      {
       "date": "2027-02-07",
       "hard_or_long": true,
-      "key": "w10-long",
+      "key": "20270207-run",
       "km": 32.0,
       "minutes": null,
       "pace": null,
@@ -1525,7 +1525,7 @@
      {
       "date": "2027-02-09",
       "hard_or_long": true,
-      "key": "w11-q1",
+      "key": "20270209-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1563,7 +1563,7 @@
      {
       "date": "2027-02-10",
       "hard_or_long": false,
-      "key": "w11-e1",
+      "key": "20270210-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1581,7 +1581,7 @@
      {
       "date": "2027-02-11",
       "hard_or_long": true,
-      "key": "w11-q2",
+      "key": "20270211-run",
       "km": 10.5,
       "minutes": null,
       "pace": null,
@@ -1619,7 +1619,7 @@
      {
       "date": "2027-02-13",
       "hard_or_long": false,
-      "key": "w11-e2",
+      "key": "20270213-run",
       "km": 9.9,
       "minutes": null,
       "pace": null,
@@ -1637,7 +1637,7 @@
      {
       "date": "2027-02-14",
       "hard_or_long": true,
-      "key": "w11-long",
+      "key": "20270214-run",
       "km": 32.0,
       "minutes": null,
       "pace": null,
@@ -1667,7 +1667,7 @@
      {
       "date": "2027-02-16",
       "hard_or_long": true,
-      "key": "w12-q1",
+      "key": "20270216-run",
       "km": 8.4,
       "minutes": null,
       "pace": null,
@@ -1705,7 +1705,7 @@
      {
       "date": "2027-02-17",
       "hard_or_long": false,
-      "key": "w12-e1",
+      "key": "20270217-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1723,7 +1723,7 @@
      {
       "date": "2027-02-18",
       "hard_or_long": false,
-      "key": "w12-e2",
+      "key": "20270218-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1741,7 +1741,7 @@
      {
       "date": "2027-02-20",
       "hard_or_long": false,
-      "key": "w12-e3",
+      "key": "20270220-run",
       "km": 7.8,
       "minutes": null,
       "pace": null,
@@ -1759,7 +1759,7 @@
      {
       "date": "2027-02-21",
       "hard_or_long": true,
-      "key": "w12-long",
+      "key": "20270221-run",
       "km": 24.9,
       "minutes": null,
       "pace": null,
@@ -1789,7 +1789,7 @@
      {
       "date": "2027-02-23",
       "hard_or_long": true,
-      "key": "w13-q1",
+      "key": "20270223-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1827,7 +1827,7 @@
      {
       "date": "2027-02-24",
       "hard_or_long": false,
-      "key": "w13-e1",
+      "key": "20270224-run",
       "km": 12.3,
       "minutes": null,
       "pace": null,
@@ -1845,7 +1845,7 @@
      {
       "date": "2027-02-25",
       "hard_or_long": true,
-      "key": "w13-q2",
+      "key": "20270225-run",
       "km": 12.0,
       "minutes": null,
       "pace": null,
@@ -1873,7 +1873,7 @@
      {
       "date": "2027-02-27",
       "hard_or_long": false,
-      "key": "w13-e2",
+      "key": "20270227-run",
       "km": 12.3,
       "minutes": null,
       "pace": null,
@@ -1891,7 +1891,7 @@
      {
       "date": "2027-02-28",
       "hard_or_long": true,
-      "key": "w13-long",
+      "key": "20270228-run",
       "km": 25.6,
       "minutes": null,
       "pace": null,
@@ -1921,7 +1921,7 @@
      {
       "date": "2027-03-02",
       "hard_or_long": true,
-      "key": "w14-q1",
+      "key": "20270302-run",
       "km": 10.7,
       "minutes": null,
       "pace": null,
@@ -1959,7 +1959,7 @@
      {
       "date": "2027-03-03",
       "hard_or_long": false,
-      "key": "w14-e1",
+      "key": "20270303-run",
       "km": 12.3,
       "minutes": null,
       "pace": null,
@@ -1977,7 +1977,7 @@
      {
       "date": "2027-03-04",
       "hard_or_long": true,
-      "key": "w14-q2",
+      "key": "20270304-run",
       "km": 12.0,
       "minutes": null,
       "pace": null,
@@ -2005,7 +2005,7 @@
      {
       "date": "2027-03-06",
       "hard_or_long": false,
-      "key": "w14-e2",
+      "key": "20270306-run",
       "km": 12.3,
       "minutes": null,
       "pace": null,
@@ -2023,7 +2023,7 @@
      {
       "date": "2027-03-07",
       "hard_or_long": true,
-      "key": "w14-long",
+      "key": "20270307-run",
       "km": 25.6,
       "minutes": null,
       "pace": null,
@@ -2053,7 +2053,7 @@
      {
       "date": "2027-03-09",
       "hard_or_long": true,
-      "key": "w15-q1",
+      "key": "20270309-run",
       "km": 9.0,
       "minutes": null,
       "pace": null,
@@ -2081,7 +2081,7 @@
      {
       "date": "2027-03-10",
       "hard_or_long": false,
-      "key": "w15-e1",
+      "key": "20270310-run",
       "km": 6.5,
       "minutes": null,
       "pace": null,
@@ -2099,7 +2099,7 @@
      {
       "date": "2027-03-11",
       "hard_or_long": false,
-      "key": "w15-e2",
+      "key": "20270311-run",
       "km": 6.5,
       "minutes": null,
       "pace": null,
@@ -2117,7 +2117,7 @@
      {
       "date": "2027-03-13",
       "hard_or_long": false,
-      "key": "w15-e3",
+      "key": "20270313-run",
       "km": 6.5,
       "minutes": null,
       "pace": null,
@@ -2135,7 +2135,7 @@
      {
       "date": "2027-03-14",
       "hard_or_long": true,
-      "key": "w15-long",
+      "key": "20270314-run",
       "km": 22.4,
       "minutes": null,
       "pace": null,
@@ -2165,7 +2165,7 @@
      {
       "date": "2027-03-16",
       "hard_or_long": false,
-      "key": "w16-e1",
+      "key": "20270316-run",
       "km": 6.2,
       "minutes": null,
       "pace": null,
@@ -2198,7 +2198,7 @@
      {
       "date": "2027-03-17",
       "hard_or_long": false,
-      "key": "w16-e2",
+      "key": "20270317-run",
       "km": 6.2,
       "minutes": null,
       "pace": null,
@@ -2216,7 +2216,7 @@
      {
       "date": "2027-03-18",
       "hard_or_long": false,
-      "key": "w16-e3",
+      "key": "20270318-run",
       "km": 6.2,
       "minutes": null,
       "pace": null,
@@ -2234,7 +2234,7 @@
      {
       "date": "2027-03-19",
       "hard_or_long": true,
-      "key": "w16-race",
+      "key": "20270319-race",
       "km": 42.2,
       "minutes": null,
       "pace": null,

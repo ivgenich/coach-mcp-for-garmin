@@ -138,8 +138,8 @@ class LiveCaseFixtures(unittest.TestCase):
             self.assertIn("log_feedback", {t["name"] for t in srv.tools})
             plan = _json(srv.call("get_daily_status", {}))["plan"]
             self.assertEqual((plan["date"], plan["role"], plan["planned_km"]), ("2026-11-23", "easy", 8.0))
-            self.assertEqual((plan["feedback_due"], plan["feedback_for"]), (True, "w01-long"))
-            stored = _json(srv.call("log_feedback", {"workout_key": "w01-long", "rpe": 6, "pain": 0}))
+            self.assertEqual((plan["feedback_due"], plan["feedback_for"]), (True, "20300220-run"))
+            stored = _json(srv.call("log_feedback", {"workout_key": "20300220-run", "rpe": 6, "pain": 0}))
             self.assertTrue(stored["stored"])
             self.assertFalse(_json(srv.call("get_daily_status", {}))["plan"]["feedback_due"])
             self.assertEqual([r["rpe"] for r in srv.plan_store.feedback_rows.values()], [6])
