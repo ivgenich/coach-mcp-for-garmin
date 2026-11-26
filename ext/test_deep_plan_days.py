@@ -523,7 +523,7 @@ class Sim:
         self.check_summary(action, summary, executed)
         self.check_writes(executed, action)
         if action in ("commit", "apply"):
-            self.check_unchanged(before, executed)
+            self.check_unchanged(before, executed, window)
             if window is not None and res.get("status") == "done":
                 self.check_window(window)
         self.check_all()
@@ -784,7 +784,8 @@ class Sim:
                 self.fail("done session rewritten", f"a new workout scheduled on {x['date']}, whose session was "
                                                     "already run")
 
-    def check_unchanged(self, before: List[Dict[str, Any]], executed: List[Dict[str, Any]]) -> None:
+    def check_unchanged(self, before: List[Dict[str, Any]], executed: List[Dict[str, Any]],
+                        window: Optional[Tuple[dt.date, dt.date]] = None) -> None:
         """A session on Garmin whose date and content the current version still has stays: not unscheduled, not
         deleted, not uploaded again."""
         today = self.today().isoformat()
@@ -800,10 +801,12 @@ class Sim:
             if e["scheduleDate"] < today or pair not in wanted or counted[pair] > 1:
                 continue
             if e["scheduledWorkoutId"] in removed or e["workoutId"] in removed_w:
-                self.fail("unchanged session deleted",
+                outside = window is not None and e["scheduleDate"] > window[1].isoformat()
+                self.fail("unchanged session deleted" + (" outside the commit window" if outside else ""),
                           f"{e['workoutName']} on {e['scheduleDate']} (workout {e['workoutId']}) is unchanged in "
                           "the plan but was " + ("unscheduled and deleted" if e["workoutId"] in removed_w
-                                                 else "unscheduled"))
+                                                 else "unscheduled")
+                          + (f" (window {window[0]}..{window[1]})" if window is not None else ""))
             if pair in new:
                 self.fail("unchanged session uploaded again",
                           f"{e['workoutName']} on {e['scheduleDate']} was already on Garmin with this content")
