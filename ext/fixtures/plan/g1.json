@@ -45,9 +45,9 @@
     },
     {
      "date": "2027-02-04",
-     "from_km": 45.8,
+     "from_km": 40.7,
      "ratio": 1.36,
-     "to_km": 38.5,
+     "to_km": 33.4,
      "week": 10
     }
    ],
@@ -108,7 +108,7 @@
     ]
    }
   ],
-  "content_hash": "86f33dc2228afca80f7ae9ac150f01fe4e3e80c3dbc890e357c8e3134a80a5e7",
+  "content_hash": "e179793a4ea7d4f723e5cea9e40dbf5d635cc8b8e503e274c5d0dad7a35990d4",
   "feasibility": {
    "checks": [
     {
@@ -274,7 +274,7 @@
     "dates": [
      "2027-02-07"
     ],
-    "detail": "the long run is held at 20.3 km around a B race; the km are not made up",
+    "detail": "the long run is held at 15.2 km around a B race; the km are not made up",
     "id": "b_race_capped"
    },
    {
@@ -288,7 +288,7 @@
     "dates": [
      "2027-02-01"
     ],
-    "detail": "run km cut from 45.8 to 38.5 km (easy run 2027-02-02 5.1 -> 4.0 km, easy run 2027-02-03 dropped, easy run 2027-02-04 5.1 -> 4.0 km): the planned acute:chronic ratio reached 1.36 on 2027-02-04 (limit 1.3)",
+    "detail": "run km cut from 40.7 to 33.4 km (easy run 2027-02-02 5.1 -> 4.0 km, easy run 2027-02-03 dropped, easy run 2027-02-04 5.1 -> 4.0 km): the planned acute:chronic ratio reached 1.36 on 2027-02-04 (limit 1.3)",
     "id": "acwr_cut"
    },
    {
@@ -1738,6 +1738,7 @@
       "key": "20270130-run",
       "km": 5.5,
       "minutes": 32,
+      "note": "Skip it if you're still sore.",
       "pace": "5:25-6:11",
       "role": "easy",
       "steps": [
@@ -1784,9 +1785,9 @@
    {
     "end": "2027-02-07",
     "kind": "b_race",
-    "long_km": 20.3,
+    "long_km": 15.2,
     "phase": "b_race",
-    "planned_km": 38.5,
+    "planned_km": 33.4,
     "sessions": [
      {
       "date": "2027-02-02",
@@ -1858,13 +1859,14 @@
       "date": "2027-02-07",
       "hard_or_long": true,
       "key": "20270207-run",
-      "km": 20.3,
-      "minutes": 117,
+      "km": 15.2,
+      "minutes": 88,
+      "note": "Run up to 15.2 km only if your legs feel normal and your HRV is back in its usual range; otherwise run 10-11 km easy.",
       "pace": "5:25-6:11",
       "role": "long",
       "steps": [
        {
-        "distance_m": 20300,
+        "distance_m": 15200,
         "pace": "5:25-6:11",
         "speed_mps": [
          2.695,
@@ -1873,7 +1875,7 @@
         "type": "interval"
        }
       ],
-      "structure": "20.3 km long at 5:25-6:11/km",
+      "structure": "15.2 km long at 5:25-6:11/km",
       "weekday": "sun"
      }
     ],

@@ -439,5 +439,21 @@ class EngineOverrides(unittest.TestCase):
         self.assertNotIn("easy_band_slowdown", INPUTS.echo())
 
 
+class RemadeNotes(unittest.TestCase):
+    """Rule 7's fixed notes survive a patched session: the first run's as it is, the first long run's with its
+    new km; another role drops the long-run note."""
+
+    def test_notes(self):
+        paces = pe.Paces(pe.MetersPerSecond(3.85), None, pe.RULES)
+        sore = {"key": "20270202-run", "date": "2027-02-02", "note": pe.NOTE_SORE}
+        self.assertEqual(pr._remake(sore, "easy", 4000.0, paces)["note"], pe.NOTE_SORE)
+        first = {"key": "20270205-run", "date": "2027-02-05", "note": pe.first_long_note(15200.0)}
+        out = pr._remake(first, "long", 12000.0, paces)
+        self.assertEqual(out["note"], pe.first_long_note(12000.0))
+        self.assertIn("Run up to 12.0 km", out["note"])
+        self.assertIn("otherwise run 8-9 km easy", out["note"])
+        self.assertNotIn("note", pr._remake(first, "easy", 12000.0, paces))
+
+
 if __name__ == "__main__":
     unittest.main()

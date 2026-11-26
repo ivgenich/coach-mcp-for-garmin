@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime
 import inspect
+import json
 import re
 import unicodedata
 
@@ -143,6 +144,52 @@ def _optional_date_ok(value):
     return value == "" or _iso_date_ok(value)
 
 
+# plan_preview's overrides (plan_engine.OVERRIDE_KINDS and plan_tools.parse_overrides; test_deep_config_paths
+# checks the kinds agree). Keys are checked by their shape only: plan_tools checks the session-key format.
+OVERRIDE_KINDS = frozenset({"move", "swap", "rest", "easy", "cap_week_km", "long_run_day", "cap_km", "cap_long"})
+_OVERRIDE_FIELDS = frozenset({"kind", "key", "date", "date_b", "week_start", "km", "weekday"})
+_OVERRIDE_KEY_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}", re.ASCII)
+_WEEKDAY_NAMES = frozenset({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
+MAX_OVERRIDES = 20                 # plan_tools.MAX_OVERRIDES
+MAX_OVERRIDES_CHARS = 8000
+
+
+def _override_ok(o):
+    if not isinstance(o, dict) or set(o) - _OVERRIDE_FIELDS or o.get("kind") not in OVERRIDE_KINDS:
+        return False
+    key = o.get("key")
+    if key not in (None, "") and not (isinstance(key, str) and _OVERRIDE_KEY_RE.fullmatch(key)):
+        return False
+    for name in ("date", "date_b", "week_start"):
+        if o.get(name) not in (None, "") and not _iso_date_ok(o[name]):
+            return False
+    km = o.get("km")
+    if km is not None and (isinstance(km, bool) or not isinstance(km, (int, float)) or not 0 <= km <= 300):
+        return False
+    weekday = o.get("weekday")
+    if weekday not in (None, "") and not (isinstance(weekday, str) and weekday.strip().lower()[:3] in _WEEKDAY_NAMES
+                                          and weekday.isascii()):
+        return False
+    if o["kind"] == "cap_long" and (km is None or not (o.get("date") or key)):
+        return False
+    return True
+
+
+def _overrides_ok(value):
+    """Blank (no edits), or a JSON list of at most MAX_OVERRIDES edits, each a known kind with only the known
+    fields: ISO dates, km a number from 0 to 300, a weekday name, a key of lower-case letters, digits and
+    dashes; cap_long needs km and a date or key."""
+    if not isinstance(value, str) or len(value) > MAX_OVERRIDES_CHARS:
+        return False
+    if not value.strip():
+        return True
+    try:
+        raw = json.loads(value)
+    except (ValueError, RecursionError):   # deep nesting: refused, not an error
+        return False
+    return isinstance(raw, list) and len(raw) <= MAX_OVERRIDES and all(_override_ok(o) for o in raw)
+
+
 ARGUMENT_CHECKS = {
     "get_workout_by_id": {"workout_id": (_workout_id_ok, tool_errors.GENERIC_DETAIL)},
     "get_vo2max_trend": {"start_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
@@ -153,6 +200,7 @@ ARGUMENT_CHECKS = {
     "plan_preview": {"race_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
                      "plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
                      "course_id": (_course_id_ok, tool_errors.GENERIC_DETAIL),
+                     "overrides": (_overrides_ok, tool_errors.GENERIC_DETAIL),
                      "accept_changes": (lambda v: _change_ids_ok(v, empty=True), tool_errors.GENERIC_DETAIL)},
     "plan_get": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL)},
     # log_feedback (PLAN_TRACKING=on) writes only the app's database; its values are checked here first too.

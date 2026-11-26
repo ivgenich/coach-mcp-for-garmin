@@ -77,7 +77,23 @@ and so what a MAJOR, MINOR or PATCH release may change:
   `built_on` is the local date (`REPORT_TZ`), no longer the UTC one.
 - Plan rules v2, B races: a long run 5 to 13 days before a B race and the first one after it are
   held at 0.70 x the peak long run (0.60 after a full-distance triathlon, whose first long run waits
-  10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`).
+  10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`). After a
+  half-distance triathlon the recovery is easy through race day + 6 and the first long run is also
+  at most 0.75 x the last long run before the race, with two fixed notes (that long run: up to its
+  km only if legs and HRV are back, otherwise 0.65-0.75 of it in whole km; the first run after
+  the race: skip it if still sore).
+- Plan rules v2, the long-run step: the +2 km counts from the last normal week's long run as
+  placed, not the longest so far (a week cut to 23 km let the next jump to 32 km). After a week
+  with no long run that has a blocked run day (or no run), the first normal week's long run returns
+  to the last one before the gap with no +2 km, and the step resumes the week after (deload and
+  B-race long runs in between change nothing); the `long_step` invariant checks that sequence (a
+  travel week then a deload had let the long run jump 18.5 to 25.8 km with no check). A week with
+  every run day blocked warns `no_runs_blocked` instead of `long_dropped` and `q1_to_strides`.
+- Plan overrides: `cap_long {date or key, km}` lowers one long run without cutting the rest of its
+  week (refused above the planned km, under 4 km or on a day without a long run). `plan_preview`
+  never stores a refused edit (the version keeps only the edits that applied), stores no new
+  version when every edit for a stored `plan_id` is refused, and its `overrides` argument is
+  checked before any Garmin call.
 
 ### Changed
 

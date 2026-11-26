@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import inspect
+import json
 import os
 import time
 import unittest
@@ -431,6 +432,24 @@ CASES = {
     "week_start": (("", "2026-11-02"), ("2026-02-30", "2026-11-02T00:00", "x", 0)),
     "version": ((0, 1, 7, 1_000_000), (-1, 1_000_001, True, False, 1.0, "1", None, 10 ** 30)),
     "action": (("", "start", "stop"), ("Start", "STOP", " start", "start ", "go", "cancel", 1, None, True)),
+    "overrides": (("", "[]", '[{"kind": "cap_long", "date": "2027-01-15", "km": 15.5}]',
+                   '[{"kind": "cap_long", "key": "20270115-run", "km": 15}]',
+                   '[{"kind": "rest", "date": "2026-12-01"}, {"kind": "long_run_day", "week_start": "2026-12-07", '
+                   '"weekday": "sat"}, {"kind": "swap", "date": "2026-12-01", "date_b": "2026-12-02"}]',
+                   '[{"kind": "cap_week_km", "week_start": "2026-12-07", "km": 0}]',
+                   '[{"kind": "easy", "key": "20261216-run"}]', json.dumps([{"kind": "rest", "date": "2026-12-01"}] * 20)),
+                  ("{}", '{"kind": "rest"}', "[1]", '[{"kind": "grow"}]', '[{"kind": "rest", "extra": 1}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15"}]', '[{"kind": "cap_long", "km": 15}]',
+                   '[{"kind": "cap_long", "date": "2027-02-30", "km": 15}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15", "km": "15"}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15", "km": true}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15", "km": 301}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15", "km": -1}]',
+                   '[{"kind": "cap_long", "date": "2027-01-15", "km": NaN}]',
+                   '[{"kind": "easy", "key": "../x"}]', '[{"kind": "easy", "key": "W03-Q1"}]',
+                   '[{"kind": "long_run_day", "week_start": "2026-12-07", "weekday": "funday"}]',
+                   '[{"kind": "long_run_day", "week_start": "2026-12-07", "weekday": 5}]',
+                   json.dumps([{"kind": "rest", "date": "2026-12-01"}] * 21), "[" * 5000, 1, b"[]")),
 }
 COLUMN = {"race_date": "date", "start_date": "date", "end_date": "date"}
 PLAN_TOOL_NAMES = frozenset({"plan_assess", "plan_preview", "plan_get", "log_feedback", "plan_commit", "plan_cancel",
@@ -473,11 +492,29 @@ class ArgumentChecks(unittest.TestCase):
                     if argument in ("cancel_token", "plan_id", "accept_changes", "pain_location", "week_start") \
                             and value == "":
                         continue
-                    if argument == "accept_changes" and isinstance(value, str) and not value.strip():
-                        continue   # optional: blank means no changes accepted
+                    if argument in ("accept_changes", "overrides") and isinstance(value, str) and not value.strip():
+                        continue   # optional: blank means no changes accepted, no edits
                     with self.subTest(tool=tool, argument=argument, bad=repr(value)[:40]):
                         self.assertFalse(check(value))
                         self.assertEqual(garmin_paths.refused_argument(tool, {argument: value}), (argument, detail))
+
+    def test_override_kinds_agree_with_the_engine(self):
+        import plan_engine
+        import plan_tools
+
+        self.assertEqual(garmin_paths.OVERRIDE_KINDS, frozenset(plan_engine.OVERRIDE_KINDS))
+        self.assertEqual(garmin_paths.MAX_OVERRIDES, plan_tools.MAX_OVERRIDES)
+        check = garmin_paths.ARGUMENT_CHECKS["plan_preview"]["overrides"][0]
+        good, bad = cases_for("overrides")
+        for value in good:   # what the check lets through, plan_tools parses
+            with self.subTest(value=value[:40]):
+                plan_tools.parse_overrides(value)
+        for value in bad:
+            if isinstance(value, str) and "W03" not in value:   # (a key's exact format is plan_tools' check)
+                with self.subTest(value=value[:40]):
+                    self.assertFalse(check(value))
+                    with self.assertRaises(plan_tools.BadInput):
+                        plan_tools.parse_overrides(value)
 
     def test_workout_ids(self):
         check = garmin_paths.ARGUMENT_CHECKS["get_workout_by_id"]["workout_id"][0]

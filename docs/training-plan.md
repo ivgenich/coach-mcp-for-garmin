@@ -161,11 +161,19 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    week. A reduced week is never made up afterwards. Taper: 0.70 x the peak week; race week: 0.45 x the
    peak week, pro rata to the days before the race, the race not counted (the peak week as planned too).
 3. Long run in a normal week: at most min(max(0.50 x the week's km, the longest run of the last 8 weeks),
-   3 h at the slow edge of its pace band, the longest long run placed so far + 2 km, `max_long_km`, 32 km).
+   3 h at the slow edge of its pace band, the last normal week's long run as placed + 2 km (21 or more days
+   out, a shortened one included, so a week cut to 23 km is followed by at most 25 km; one rule 7 holds around a
+   B race does not count; before any, the longest run of the last 8 weeks), `max_long_km`, 32 km).
    Reduced weeks scale it. Within 21 days of the A race no long run is longer than 0.80 x the peak long run
    (the longest long run of a normal week 21 days or more out; before there is one, the longest run so far:
    the longest of the last 8 weeks or a long run placed before it). The cap applies on the day the long run
-   lands, also when it moved a day, before the 80%-easy check and the easy runs fill the week.
+   lands, also when it moved a day, before the 80%-easy check and the easy runs fill the week. After a gap,
+   a normal or deload week with no long run that has a blocked run day or no run at all (travel, a week
+   off), the first normal week's long run returns to the last normal week's long run before the gap, with
+   no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
+   nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km. `long_step` checks the
+   same sequence on the finished plan, so an override that empties a week (`cap_week_km` 0) is refused until
+   the next normal week's long run is capped at the one before the gap (`cap_long`, listed first).
 4. Quality by phase: threshold, intervals, marathon pace, with dose caps (threshold 10%, intervals 8%,
    marathon pace 20% of the week's km) and at least 80% of the week's time easy. A week with a quality session
    or a long run has an easy run (or strides run) when a run day is free and its target leaves the easy
@@ -178,9 +186,11 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
 6. Placement: long run first, then Q1 and Q2, so that no two hard-or-long days touch, counting fixed
    calendar sessions, the races and the weeks before and after. When a session does not fit, a fallback
    (Q2 dropped, long run moved, Q1 as strides, long run dropped) warns with its dates; a long run off its
-   long-run day for any reason (a blocked or rest day, a B window, hard days) warns `long_moved`.
-7. B races: a 4-day mini-taper (0.6, strides only), the race, then easy recovery at 0.5 for 6 days (7 and a
-   warning after a full-distance triathlon). A peak week inside a B block becomes a B week (warning
+   long-run day for any reason (a blocked or rest day, a B window, hard days) warns `long_moved`. A week whose
+   run days are all blocked gets no run and one warning, `no_runs_blocked`, instead of the fallbacks.
+7. B races: a 4-day mini-taper (0.6, strides only), the race, then easy recovery at 0.5 for 6 days after the
+   race day (a 7-day window with the race: a Friday half-distance triathlon is followed by easy runs only
+   through Thursday; 7 days after it and a warning after a full-distance triathlon). A peak week inside a B block becomes a B week (warning
    `b_race_in_peak`); the A taper never moves. The factors are per day: an easy run on a mini-taper or recovery
    day is 0.6 or 0.5 of a full easy day of the same week (also when the recovery reaches into the next
    week); a window day that would fall under the easy minimum gets no run. A B race in the A-race week (or
@@ -196,15 +206,26 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
      triathlon), and after a full-distance triathlon it is 10 or more days later: a long run sooner becomes an
      easy run (at most the easy cap) and the next long run is the first.
 
+   After a half-distance triathlon (`tri_half`) the first long run is also at most 0.75 x the last long run
+   before the race (`long_after_of_last`; the longest run of the last 8 weeks before any), a ceiling in 100 m
+   steps: 20.8 km before gives at most 15.6 km. Two fixed notes (server text, the session's `note`): that long
+   run says "Run up to <its km> km only if your legs feel normal and your HRV is back in its usual range;
+   otherwise run <lo>-<hi> km easy.", lo and hi being 0.65 and 0.75 x its km in whole km
+   (`long_after_fallback_of_cap`; 15.6 km gives 10-12 km); the first run after the race says "Skip it if
+   you're still sore." `tri_full` and `run` B races keep the limits above and get no notes.
+
    The km these limits take off are not made up by other days, and the weeks after still grow from the
    week's target (the cut is no shortfall). Overrides that would break a limit (`move`, `swap`,
-   `long_run_day`) are refused with `b_window`; the reference is the plan as built, so an override that
-   shortens an earlier long run never tightens a later limit. `b_windows` checks all three.
+   `long_run_day`) are refused with `b_window`; the 0.70 and 0.60 reference is the plan as built, so an
+   override that shortens an earlier long run never tightens those limits. The 0.75 limit after a
+   half-distance triathlon follows the plan as it is: shortening the long run before the race with an override
+   is refused (`b_windows`) while the first long run after it would then be over 0.75 x it, so cap that one
+   first. `b_windows` checks all of them.
 8. Feasibility: `feasible`, `ambitious` or `unrealistic` from the weeks to race, the start km, the planned
    peak and Garmin's prediction. The plan never grows faster to meet a goal; `corrected_goal_s` says what is
    in reach.
 9. Invariants: every rule above is checked again on the finished plan, from the placed sessions (the
-   planned weeks and the longest long run placed so far, recomputed by the check) (`growth_cap`, `no_makeup`,
+   planned weeks and the long run the 2 km step counts from, recomputed by the check) (`growth_cap`, `no_makeup`,
    `deload_cadence`, `deload_depth`, `long_cap`, `long_step`, `peak_long_timing`, `easy_share`,
    `no_adjacent_hard`, `bands_match_roles`, `b_windows`, `a_taper`, `last_quality`, `rest_days`,
    `one_run_per_day`, `peak_ceiling`), plus `dto_valid` (upstream's workout checks pass on every workout JSON) and
@@ -220,7 +241,11 @@ The same inputs and the same Garmin numbers give the same plan, byte for byte (`
 ## Overrides
 
 `overrides` is a JSON list; each edit is checked by its own rule, then every invariant runs, and an edit that
-breaks one is undone and listed in `overrides.refused` with the rule.
+breaks one is undone and listed in `overrides.refused` with the rule, the value and the limit. A refused edit
+is never stored: the stored version's inputs, `content_hash` and body keep only the edits that applied. When
+every edit for a stored `plan_id` is refused, no new version is stored and the answer (`kind`
+`plan_overrides`) names the current version with `stored.changed` false. Name a session by its `date` where
+the edit takes one.
 
 | kind | fields | does |
 |---|---|---|
@@ -229,6 +254,7 @@ breaks one is undone and listed in `overrides.refused` with the rule.
 | `rest` | `date` | makes a day a rest day (its km is not made up) |
 | `easy` | `key` or `date` | turns a quality session or long run into an easy run of at most the same km |
 | `cap_km` | `key` or `date`, `km` | shortens one easy run, strides run or long run (never lengthens it; at least the easy-run minimum) |
+| `cap_long` | `date` (or `key`), `km` | lowers that day's long run to at most `km`; the rest of its week keeps its km. Refused: `not_long_run` (no long run that day), `raises_load` (above the planned km), `easy_min_km` (under 4 km), `unknown_session` |
 | `cap_week_km` | `week_start`, `km` | lowers a week's km (never raises it) |
 | `long_run_day` | `week_start`, `weekday` | moves that week's long run to another day |
 

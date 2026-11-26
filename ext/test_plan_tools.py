@@ -259,6 +259,59 @@ class Preview(Base):
         self.assertEqual(out["overrides"]["applied"], [{"kind": "easy", "key": key}])
         self.assertEqual(out["overrides"]["refused"][0]["rule"], "race_day")
 
+    def _version_row(self, pid):
+        return self.store.get_plan(self.store.account_fp("123456"), pid)
+
+    def test_a_refused_override_makes_no_new_version(self):
+        first = json.loads(self.preview())
+        pid = first["stored"]["plan_id"]
+        out = json.loads(self.preview(plan_id=pid, overrides=json.dumps([{"kind": "rest", "date": RACE}])))
+        self.assertEqual(out["stored"], {"plan_id": pid, "version": 1, "changed": False})
+        self.assertEqual(out["overrides"]["applied"], [])
+        self.assertEqual([r["rule"] for r in out["overrides"]["refused"]], ["race_day"])
+        self.assertIn("no new version", out["note"])
+        row = self._version_row(pid)
+        self.assertEqual(row["current_version"], 1)
+        self.assertEqual(row["version_row"]["inputs"]["overrides"], [])
+
+    def test_only_the_applied_overrides_are_stored(self):
+        first = json.loads(self.preview())
+        pid = first["stored"]["plan_id"]
+        long_s = next(s for w in first["weeks"] if w["kind"] == "taper" for s in w["sessions"] if s["role"] == "long")
+        edits = [{"kind": "cap_long", "date": long_s["date"], "km": 12.0}, {"kind": "rest", "date": RACE}]
+        out = json.loads(self.preview(plan_id=pid, overrides=json.dumps(edits)))
+        self.assertEqual(out["overrides"]["applied"], [edits[0]])
+        self.assertEqual([r["rule"] for r in out["overrides"]["refused"]], ["race_day"])
+        self.assertEqual(out["stored"], {"plan_id": pid, "version": 2, "changed": True})
+        self.assertEqual(out["inputs"]["overrides"], [edits[0]])
+        row = self._version_row(pid)
+        self.assertEqual(row["version_row"]["inputs"]["overrides"], [edits[0]])
+        self.assertEqual(row["version_row"]["body"]["overrides"]["refused"], [])
+        self.assertEqual(row["version_row"]["content_hash"], out["content_hash"])
+        # the same request again: nothing new to store
+        again = json.loads(self.preview(plan_id=pid, overrides=json.dumps(edits)))
+        self.assertEqual(again["stored"], {"plan_id": pid, "version": 2, "changed": False})
+
+    def test_a_new_draft_never_stores_a_refused_edit(self):
+        out = json.loads(self.preview(overrides=json.dumps([{"kind": "rest", "date": RACE}])))
+        self.assertEqual([r["rule"] for r in out["overrides"]["refused"]], ["race_day"])
+        self.assertEqual(out["inputs"]["overrides"], [])
+        self.assertEqual(out["content_hash"], json.loads(self.preview())["content_hash"])
+        row = self._version_row(out["stored"]["plan_id"])
+        self.assertEqual(row["version_row"]["inputs"]["overrides"], [])
+
+    def test_cap_long_override(self):
+        base = json.loads(self.preview())
+        long_s = next(s for w in base["weeks"] if w["kind"] == "taper" for s in w["sessions"] if s["role"] == "long")
+        out = json.loads(self.preview(overrides=json.dumps([{"kind": "cap_long", "date": long_s["date"], "km": 12}])))
+        self.assertEqual(out["overrides"]["refused"], [])
+        self.assertEqual(next(s for w in out["weeks"] for s in w["sessions"] if s["key"] == long_s["key"])["km"], 12.0)
+        for value in ('[{"kind": "cap_long", "km": 12}]', '[{"kind": "cap_long", "date": "2027-01-08"}]',
+                      '[{"kind": "cap_long", "date": "2027-01-08", "km": "12"}]',
+                      '[{"kind": "cap_long", "date": "soon", "km": 12}]'):
+            with self.subTest(value=value):
+                self.assertTrue(self.preview(overrides=value).startswith("Error: Invalid input: "))
+
     def test_bad_overrides(self):
         for value in ("not json", "{}", '[{"kind": "grow"}]', '[{"kind": "easy", "key": "../x"}]',
                       '[{"kind": "cap_week_km", "week_start": "2026-12-07", "km": -1}]',

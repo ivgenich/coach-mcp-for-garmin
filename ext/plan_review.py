@@ -516,6 +516,13 @@ def _remake(s: Mapping[str, Any], role: str, meters: float, paces: pe.Paces) -> 
     """Session `s` as `role` over `meters`, at the bands `paces` gives (plan_engine's own session builder)."""
     made = pe.make_session(str(s["key"]), dt.date.fromisoformat(str(s["date"])), role, pe.Meters(meters), paces,
                            pe.RULES)
+    # rule 7's fixed notes after a half-distance triathlon: the first run's stays, the first long run's names
+    # its new km (another role drops it)
+    note = s.get("note")
+    if note == pe.NOTE_SORE:
+        made.advice = note
+    elif isinstance(note, str) and note and role == "long":
+        made.advice = pe.first_long_note(made.distance)
     return pe.session_json(made, paces)
 
 

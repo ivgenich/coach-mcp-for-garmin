@@ -172,6 +172,11 @@ def overrides_for(draw: Any, plan: Dict[str, Any]) -> Tuple[pe.Override, ...]:
         elif kind == "cap_week_km":
             out.append(pe.Override("cap_week_km", week_start=draw(st.sampled_from(starts)),
                                    km=draw(st.floats(-5.0, 150.0, allow_nan=False))))
+        elif kind == "cap_long":
+            out.append(draw(st.sampled_from((pe.Override("cap_long", date=day, km=s["km"] - 1.0),
+                                             pe.Override("cap_long", key=s["key"], km=s["km"] + 1.0),
+                                             pe.Override("cap_long", date=day, km=3.0),
+                                             pe.Override("cap_long", date=near, km=s["km"])))))
         else:
             out.append(pe.Override("long_run_day", week_start=draw(st.sampled_from(starts)),
                                    weekday=draw(st.integers(0, 6))))
