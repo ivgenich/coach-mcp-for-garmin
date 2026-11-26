@@ -52,6 +52,24 @@ and so what a MAJOR, MINOR or PATCH release may change:
   stored plan and, with `PLAN_WRITES=on` too, `plan_apply_changes` writes to Garmin with an apply
   token. The server instructions name the tools that change data when these switches are on; with
   every switch off the tools, annotations, instructions and reports are unchanged.
+- Plan session keys are the session's day and slot (`20261206-run`, `-race`, `-b`), no longer a week number
+  counted from today (`w03-long`): a plan rebuilt on a later day keeps the same key for the same planned
+  session, so the commit, the tracking links and feedback, which match stored rows by key, keep naming the same
+  day. Every key is checked for its shape and a real date wherever it comes in.
+- Plan writes: a commit never deletes today's workout because the rebuilt plan (which plans from tomorrow) has
+  no session today; a shorter `commit_days` than an earlier commit's leaves the later days on Garmin; only a
+  session that left the plan or changed is removed or replaced, whatever the window; no token when nothing
+  would be written. Every delete (commit, cancel, `--plan-cleanup` and its `--orphans`) unschedules the
+  workout's calendar entries first, read from the calendar when no entry id is stored, and deletes nothing
+  while the calendar cannot be read; cleanup also takes rows a crash left mid-request. The plan's own workouts
+  are told from the user's by Garmin workout id, not by the name `Coach ...`, for the plan's spacing and for
+  `calendar_changed`.
+- Plan rebuilds: `plan_preview` with a `plan_id` keeps the plan's week grid (week 1 where it first started),
+  so a rebuild mid-week no longer turns the planned week into an easy-only week 0, and with unchanged inputs
+  and history it changes none of the week's remaining days. The new version keeps the stored sessions up to
+  today and the past weeks, so after a morning rebuild today's run is still linked to today's session, and
+  `log_feedback` for today and `plan_review_week` for the current or last week still find them. `plan_get`'s
+  `built_on` is the local date (`REPORT_TZ`), no longer the UTC one.
 - Plan rules v2, B races: a long run 5 to 13 days before a B race and the first one after it are
   held at 0.70 x the peak long run (0.60 after a full-distance triathlon, whose first long run waits
   10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`).

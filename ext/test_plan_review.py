@@ -23,13 +23,17 @@ def _s(key, day, role, km, minutes):
             "hard_or_long": role not in ("easy", "strides")}
 
 
+def _k(start, days):
+    return pe.session_key(start + dt.timedelta(days=days))
+
+
 def _week(n, start, scale=1.0):
     return {"week": n, "start": start.isoformat(), "end": (start + dt.timedelta(days=6)).isoformat(),
             "kind": "normal", "sessions": [
-                _s(f"w{n:02d}-e1", start + dt.timedelta(days=1), "easy", round(10 * scale, 1), 60),
-                _s(f"w{n:02d}-q1", start + dt.timedelta(days=2), "threshold", round(10 * scale, 1), 50),
-                _s(f"w{n:02d}-e2", start + dt.timedelta(days=4), "easy", round(10 * scale, 1), 60),
-                _s(f"w{n:02d}-long", start + dt.timedelta(days=6), "long", round(20 * scale, 1), 120)]}
+                _s(_k(start, 1), start + dt.timedelta(days=1), "easy", round(10 * scale, 1), 60),
+                _s(_k(start, 2), start + dt.timedelta(days=2), "threshold", round(10 * scale, 1), 50),
+                _s(_k(start, 4), start + dt.timedelta(days=4), "easy", round(10 * scale, 1), 60),
+                _s(_k(start, 6), start + dt.timedelta(days=6), "long", round(20 * scale, 1), 120)]}
 
 
 def body():
@@ -70,9 +74,9 @@ class Review(unittest.TestCase):
         self.assertEqual(out["rules_version"], pr.REVIEW_RULES_VERSION)
 
     def test_a1_completion_boundary(self):
-        self.run_km("w02-long", 5.0)          # 35 of 50 km: exactly 70%
+        self.run_km("20261206-run", 5.0)          # 35 of 50 km: exactly 70%
         self.assertEqual(self.kinds(), [])
-        self.run_km("w02-long", 4.9)          # 69.8%
+        self.run_km("20261206-run", 4.9)          # 69.8%
         out = self.review()
         (c,) = out["changes"]
         self.assertEqual((c["rule"], c["kind"]), ("A1", "repeat_volume"))
@@ -82,7 +86,7 @@ class Review(unittest.TestCase):
         self.assertTrue(c["change_id"].startswith("c") and len(c["change_id"]) == 17)
 
     def test_open_sessions_are_not_due(self):
-        self.links["w02-long"] = None          # not settled yet: neither due nor done
+        self.links["20261206-run"] = None          # not settled yet: neither due nor done
         out = self.review()
         self.assertEqual(out["metrics"]["due_km"], 30.0)
         self.assertEqual(out["changes"], [])
@@ -97,13 +101,13 @@ class Review(unittest.TestCase):
 
     def test_acwr_alone_never_triggers(self):
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.9)), [])
-        for key in ("w02-e1", "w02-e2"):
+        for key in ("20261201-run", "20261204-run"):
             self.feedback[key] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.3)), [])        # not above 1.3
         c = self.review(health=pr.Health(acwr=1.31))["changes"][0]           # with easy RPE 6
         self.assertEqual((c["rule"], c["evidence"]["metric"]), ("A2", "acwr"))
         self.assertEqual(c["evidence"]["also"][0]["metric"], "easy_rpe_mean")
-        self.feedback["w02-e2"] = pr.Feedback(5, 0, False)                   # mean 5.5
+        self.feedback["20261204-run"] = pr.Feedback(5, 0, False)                   # mean 5.5
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.31)), [])
 
     def test_acwr_is_cited_beside_hrv(self):
@@ -112,30 +116,30 @@ class Review(unittest.TestCase):
         self.assertEqual(c["evidence"]["also"], [{"metric": "acwr", "value": 1.4, "threshold": 1.3}])
 
     def test_a3_missed_long_run(self):
-        self.links["w02-long"] = "missed"
+        self.links["20261206-run"] = "missed"
         kinds = self.kinds()
         self.assertIn(("A3", "long_run_km"), kinds)
         c = next(c for c in self.review()["changes"] if c["rule"] == "A3")
         self.assertEqual((c["from"]["km"], c["to"]["km"]), (22.0, 20.0))
         self.assertEqual(c["evidence"]["threshold"], 22.0)
-        self.links["w02-long"] = "replaced"
+        self.links["20261206-run"] = "replaced"
         self.assertNotIn(("A3", "long_run_km"), self.kinds())
 
     def test_a4_easy_rpe_two_weeks(self):
-        for key in ("w01-e1", "w01-e2", "w02-e1", "w02-e2"):
+        for key in ("20261124-run", "20261127-run", "20261201-run", "20261204-run"):
             self.feedback[key] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(), [("A4", "cut_week"), ("A4", "easy_band")])
         band = next(c for c in self.review()["changes"] if c["kind"] == "easy_band")
         self.assertEqual(band["to"], {"slowdown": 0.03})
         cut = next(c for c in self.review()["changes"] if c["kind"] == "cut_week")
         self.assertEqual(cut["to"]["km"], 49.5)
-        self.feedback["w01-e2"] = pr.Feedback(5, 0, False)    # last week 5.5
+        self.feedback["20261127-run"] = pr.Feedback(5, 0, False)    # last week 5.5
         self.assertEqual(self.kinds(), [])
 
     def test_a5_quality_above_target(self):
         planned = 10000 / (50 * 60)                            # 3.333 m/s
-        aid = self.linked["w02-q1"]
-        self.feedback["w02-q1"] = pr.Feedback(5, 0, False)
+        aid = self.linked["20261202-run"]
+        self.feedback["20261202-run"] = pr.Feedback(5, 0, False)
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.02 + 1e-6))
         c = self.review()["changes"][0]
         self.assertEqual((c["rule"], c["kind"], c["edits"]), ("A5", "threshold_retest", []))
@@ -143,17 +147,17 @@ class Review(unittest.TestCase):
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.019))
         self.assertEqual(self.kinds(), [])
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.05))
-        self.feedback["w02-q1"] = pr.Feedback(6, 0, False)
+        self.feedback["20261202-run"] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(), [])
 
     def test_a6_pain_or_sharp(self):
-        self.feedback["w02-e1"] = pr.Feedback(4, 3, False)
+        self.feedback["20261201-run"] = pr.Feedback(4, 3, False)
         self.assertEqual(self.kinds(), [])
-        self.feedback["w02-e1"] = pr.Feedback(4, 4, False)
+        self.feedback["20261201-run"] = pr.Feedback(4, 4, False)
         out = self.review()["changes"]
         self.assertEqual(sorted(c["kind"] for c in out), ["drop_quality", "hold_progression"])
         self.assertTrue(all("physiotherapist or doctor" in c["advice"] for c in out))
-        self.feedback["w02-e1"] = pr.Feedback(4, 1, True)
+        self.feedback["20261201-run"] = pr.Feedback(4, 1, True)
         out = self.review()["changes"]
         self.assertEqual((out[0]["evidence"]["metric"], out[0]["evidence"]["threshold"]), ("sharp", True))
 
@@ -164,7 +168,7 @@ class Review(unittest.TestCase):
             if s["role"] == "threshold":
                 s["role"] = "strides"
             s["km"] = round(s["km"] * 0.7, 1)
-        self.feedback["w02-e2"] = pr.Feedback(4, 8, True)
+        self.feedback["20261204-run"] = pr.Feedback(4, 8, True)
         out = pr.review_week(PID, b, W, self.today, self.links, self.linked, self.runs, self.feedback, self.health)
         (c,) = out["changes"]
         self.assertEqual((c["rule"], c["kind"], c["edits"]), ("A6", "pain_advice", []))
@@ -182,11 +186,11 @@ class Review(unittest.TestCase):
         c = next(c for c in self.review()["changes"] if c["rule"] == "A7")
         self.assertEqual(c["to"]["km"], 44.0)                   # 1.10 x 40
         self.assertEqual(c["evidence"], {"metric": "last_done_week_km", "value": 40.0, "threshold": 1.1})
-        self.links["w02-e1"] = "done"                          # not a missed week
+        self.links["20261201-run"] = "done"                          # not a missed week
         self.assertNotIn("A7", {c["rule"] for c in self.review()["changes"]})
 
     def test_a8_red_day_with_quality_today(self):
-        self.today = NEXT + dt.timedelta(days=2)               # w03-q1's day
+        self.today = NEXT + dt.timedelta(days=2)               # 20300508-run's day
         self.assertEqual(self.kinds(health=pr.Health(today_level="yellow")), [])
         c = self.review(health=pr.Health(today_level="red"))["changes"][0]
         self.assertEqual((c["rule"], c["kind"]), ("A8", "easy_today"))
@@ -194,8 +198,8 @@ class Review(unittest.TestCase):
         self.assertEqual(self.kinds(health=pr.Health(today_level="red")), [])
 
     def test_no_change_raises_and_no_change_for_an_ended_next_week(self):
-        self.links["w02-long"] = "missed"
-        self.feedback["w02-e1"] = pr.Feedback(4, 6, True)
+        self.links["20261206-run"] = "missed"
+        self.feedback["20261201-run"] = pr.Feedback(4, 6, True)
         for c in self.review(health=pr.Health(flags=("hrv_down",)))["changes"]:
             if "km" in (c["to"] or {}):
                 self.assertLess(c["to"]["km"], c["from"]["km"])
@@ -205,7 +209,7 @@ class Review(unittest.TestCase):
         self.assertEqual([(c["kind"], c["edits"]) for c in out], [("pain_advice", [])])
 
     def test_change_ids_are_stable(self):
-        self.run_km("w02-long", 1.0)
+        self.run_km("20261206-run", 1.0)
         a, b = self.review()["changes"][0], self.review()["changes"][0]
         self.assertEqual(a["change_id"], b["change_id"])
         self.assertNotEqual(a["change_id"], pr.change_id(PID, PREV, "A1", "repeat_volume"))

@@ -88,7 +88,7 @@ class FailingCallsLogNoValues(unittest.TestCase):
             tools, garmin = register(store, may_write=lambda: True)
             calls = {
                 "plan_get": {"plan_id": ""},
-                "log_feedback": {"workout_key": "w01-long", "rpe": 5, "pain": 0, "pain_location": "none",
+                "log_feedback": {"workout_key": "20300220-run", "rpe": 5, "pain": 0, "pain_location": "none",
                                  "sharp": False, "plan_id": ""},
                 "plan_commit": {"plan_id": HEX32, "commit_token": "ct1." + TOKEN_BODY},
                 "plan_cancel": {"plan_id": HEX32, "cancel_token": "xt1." + TOKEN_BODY},

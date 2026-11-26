@@ -202,7 +202,7 @@ class OverridesRefused(OverrideBase):
             (pe.Override("move", key=e, date=rest_day), "rest_days"),
             (pe.Override("move", key=e, date=_day(other_run["date"])), "one_run_per_day"),
             (pe.Override("move", key=e), "date_required"),
-            (pe.Override("move", key="w99-e1", date=start), "unknown_session"),
+            (pe.Override("move", key="20401105-run", date=start), "unknown_session"),
             (pe.Override("move", key="", date=start), "unknown_session"),
             (pe.Override("move", key=self.key(self.base["weeks"][-1], "race"), date=RACE - dt.timedelta(days=1)),
              "unknown_session"),

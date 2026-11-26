@@ -222,17 +222,19 @@ class World:
             wid = int(workout_id)
             if self.workouts.pop(wid, None) is None:
                 raise WriteRejected(404)
-            for sid in [k for k, v in self.schedules.items() if v["workoutId"] == wid]:
-                del self.schedules[sid]   # deleting a workout removes its calendar entries
+            # Its calendar entries stay: Garmin is not known to remove them with the workout (docs/training-plan.md,
+            # "Garmin facts"), so the server must unschedule first, and an eval sees an entry it left behind.
             return {}
 
     def library(self, start=0, limit=100):
-        """get_workouts: the state's own library ("*") then the workouts the fake's writes created, paged."""
+        """get_workouts, newest first like Garmin's listing (spike S0.2): the workouts the fake's writes created
+        (newest first), then the state's own library ("*"), paged."""
         answer, _ = self.lookup("get_workouts", "*")
-        items = list(decode_answer(answer) or []) if answer is not None else []
+        older = list(decode_answer(answer) or []) if answer is not None else []
         with self._write_lock:
-            items += [{k: copy.deepcopy(v) for k, v in w.items() if k in _LIBRARY_KEYS}
-                      for _, w in sorted(self.workouts.items())]
+            items = [{k: copy.deepcopy(v) for k, v in w.items() if k in _LIBRARY_KEYS}
+                     for _, w in sorted(self.workouts.items(), reverse=True)]
+        items += older
         return items[int(start):int(start) + int(limit)]
 
     def schedule_entries(self):

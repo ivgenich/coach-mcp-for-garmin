@@ -16,12 +16,19 @@ import time
 import unittest
 
 import garmin_paths
+import plan_engine as pe
 import plan_store as ps
 import plan_writes as pw
 import test_deep_writes_base as b
 from test_deep_writes_base import BLOCK, after, before, http
 
-KEYS = ["w01-e1", "w01-q1", "w01-e2"]
+KEYS = ["20261202-run", "20261203-run", "20261205-run"]
+
+
+def days_sessions(n):
+    """Easy runs on the n days after b.TODAY, each keyed by its day."""
+    days = [b.TODAY + dt.timedelta(days=i) for i in range(1, n + 1)]
+    return [b.session(pe.session_key(d), d) for d in days]
 
 
 def wait_for(cond, timeout=10.0):
@@ -39,14 +46,14 @@ class LateLanding(b.DeepBase):
         self.garmin.faults["upload"] = {2: BLOCK}
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "unknown", out)
-        self.assertEqual([w["key"] for w in out["written"]], ["w01-e1"])
+        self.assertEqual([w["key"] for w in out["written"]], ["20261202-run"])
         # The thread still runs: even after the quarantine nothing is decided and nothing re-sent for that row,
         # but the other rows are written.
         self.clock.advance(minutes=5)
         again = self.commit(pid, c["token"])
         self.assertEqual((again["status"], again["retry_after_s"]), ("partial", pw.RETRY_AFTER_UNKNOWN_S), again)
-        self.assertEqual([w["key"] for w in again["written"]], ["w01-e2"])
-        self.assertEqual(self.rows(pid)["w01-q1"]["state"], "unknown")
+        self.assertEqual([w["key"] for w in again["written"]], ["20261205-run"])
+        self.assertEqual(self.rows(pid)["20261203-run"]["state"], "unknown")
         self.assertEqual(len(self.garmin.uploads()), 3)
         self.garmin.blocked.set()
         self.assertTrue(pw.join_write_threads(10))
@@ -68,55 +75,55 @@ class LateLanding(b.DeepBase):
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len([w for w in self.garmin.write_log if w[0] == "schedule"]), 3)
         self.assert_no_double_writes()
-        self.assertTrue(self.rows(pid)["w01-e2"]["garmin_schedule_id"])
+        self.assertTrue(self.rows(pid)["20261205-run"]["garmin_schedule_id"])
 
     def test_quarantine_boundary(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         self.garmin.faults["upload"] = {1: after(b.ReadTimeout("r"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
         self.clock.advance(minutes=2, microseconds=-1)
         self.assertEqual(self.commit(pid, c["token"])["status"], "partial")
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "unknown")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
         self.clock.advance(microseconds=1)
         self.assertEqual(self.commit(pid, c["token"])["status"], "done")
         self.assert_no_double_writes(1)
 
     def test_another_installs_marker_is_never_adopted(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         self.garmin.faults["upload"] = {1: before(b.ReadTimeout("lost"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
-        row = self.rows(pid)["w01-e1"]
+        row = self.rows(pid)["20261202-run"]
         tag = self.store.install_tag()
         other_tag = "0badc0de" if tag != "0badc0de" else "1badc0de"
-        foreign = pw.marker(other_tag, pid, "w01-e1", row["dto_hash"])
-        older = pw.marker(tag, pid, "w01-e1", "f" * 64)     # ours, but another version of the session
+        foreign = pw.marker(other_tag, pid, "20261202-run", row["dto_hash"])
+        older = pw.marker(tag, pid, "20261202-run", "f" * 64)     # ours, but another version of the session
         with self.garmin.lock:
             self.garmin.library[700] = {"workoutId": 700, "workoutName": "Coach Easy", "description": foreign}
             self.garmin.library[701] = {"workoutId": 701, "workoutName": "Coach Easy", "description": older}
             self.garmin.library[702] = {"workoutId": 702, "workoutName": "Coach Easy",
-                                        "description": pw.marker(tag, "0" * 32, "w01-e1", row["dto_hash"])}
+                                        "description": pw.marker(tag, "0" * 32, "20261202-run", row["dto_hash"])}
         self.clock.advance(minutes=3)
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "done", out)
-        wid = self.rows(pid)["w01-e1"]["garmin_workout_id"]
+        wid = self.rows(pid)["20261202-run"]["garmin_workout_id"]
         self.assertNotIn(wid, (700, 701, 702))
         self.assertEqual({700, 701, 702} - set(self.garmin.library), set(), "nobody else's workout is touched")
         self.assertFalse([w for w in self.garmin.write_log if w[1].endswith(("/700", "/701", "/702"))])
 
     def test_adoption_by_the_exact_marker(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         self.garmin.faults["upload"] = {1: after(b.ReadTimeout("landed"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
         landed = next(iter(self.garmin.library))
         self.clock.advance(minutes=3)
         self.assertEqual(self.commit(pid, c["token"])["status"], "done")
-        self.assertEqual(self.rows(pid)["w01-e1"]["garmin_workout_id"], landed)
+        self.assertEqual(self.rows(pid)["20261202-run"]["garmin_workout_id"], landed)
         self.assertEqual(self.garmin.calendar[0]["workoutId"], landed)
 
     def test_a_crash_after_the_post_is_settled_by_the_next_call(self):
         """The process dies between a POST and storing its answer (here: storing fails): the row stays
         `uploading`; the next call turns it unknown and adopts the workout by its marker after the quarantine."""
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         real = self.store.put_workout
 
         def crash(plan_id, row):
@@ -128,7 +135,7 @@ class LateLanding(b.DeepBase):
         with self.assertLogs("garmin_ext.plans", "ERROR"):
             out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "unknown", out)
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "uploading")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "uploading")
         self.store.put_workout = real
         restarted = self.service()       # a new process: no lock, no thread registry entry for this row
         self.assertEqual(self.commit(pid, c["token"], svc=restarted)["status"], "partial")
@@ -255,7 +262,7 @@ class Tokens(b.DeepBase):
         pid, c = self.preview()
         self.clock.advance(minutes=30)
         self.assertEqual(self.commit(pid, c["token"])["status"], "done", "exactly 30 minutes is still valid")
-        pid2, c2 = self.preview(sessions=[b.session("w03-e1", b.TODAY + dt.timedelta(days=9))], content="d")
+        pid2, c2 = self.preview(sessions=[b.session("20300502-run", b.TODAY + dt.timedelta(days=9))], content="d")
         self.store.move_plan(pid, "cancelled")
         self.clock.advance(minutes=30, microseconds=1)
         calls = len(self.garmin.calls)
@@ -321,7 +328,7 @@ class Tokens(b.DeepBase):
 
     def test_another_plan_and_another_account(self):
         pid, c = self.preview()
-        other, _c = self.preview(sessions=[b.session("w05-e1", b.TODAY + dt.timedelta(days=10))], content="e")
+        other, _c = self.preview(sessions=[b.session("20300721-run", b.TODAY + dt.timedelta(days=10))], content="e")
         self.assertEqual(self.commit(other, c["token"])["reason"], "unknown_token")
         self.set_history_account(self.store.account_fp(777))
         self.assertEqual(self.commit(pid, c["token"])["reason"], "unknown_plan")
@@ -341,9 +348,9 @@ class Tokens(b.DeepBase):
 
     def test_ops_run_in_token_order_creates_before_deletes(self):
         pid, _c = self.committed()
-        changed = [b.session("w01-e1", b.TODAY + dt.timedelta(days=1), km=9.0),
-                   b.session("w01-q1", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True),
-                   b.session("w01-e2", b.TODAY + dt.timedelta(days=4), km=7.0)]
+        changed = [b.session("20261202-run", b.TODAY + dt.timedelta(days=1), km=9.0),
+                   b.session("20261203-run", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True),
+                   b.session("20261205-run", b.TODAY + dt.timedelta(days=4), km=7.0)]
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.assertEqual([o["op"] for o in c2["ops"]], ["create"] * 3 + ["delete"] * 3)
         mark = len(self.garmin.write_log)
@@ -359,7 +366,7 @@ class Tokens(b.DeepBase):
         """A token is bound to the ops it was issued with: a later change of the stored rows by another token of
         the same version does not add writes to it."""
         pid, c1 = self.preview(days=2)
-        self.assertEqual([o["key"] for o in c1["ops"]], ["w01-e1"])
+        self.assertEqual([o["key"] for o in c1["ops"]], ["20261202-run"])
         _p, c14 = self.preview(plan_id=pid, days=14)
         self.assertEqual(self.commit(pid, c1["token"])["status"], "done")
         self.assertEqual(len(self.garmin.library), 1)
@@ -370,9 +377,9 @@ class Tokens(b.DeepBase):
 class ReplaceFlow(b.DeepBase):
     def test_a_moved_day_is_written_on_the_new_date_and_removed_from_the_old(self):
         pid, _c = self.committed()
-        old = self.rows(pid)["w01-e2"]
+        old = self.rows(pid)["20261205-run"]
         moved = b.default_sessions()
-        moved[2] = b.session("w01-e2", b.TODAY + dt.timedelta(days=6))
+        moved[2] = b.session("20261205-run", b.TODAY + dt.timedelta(days=6))
         _p, c2 = self.preview(sessions=moved, plan_id=pid, content="b")
         out = self.commit(pid, c2["token"])
         self.assertEqual(out["status"], "done", out)
@@ -384,9 +391,9 @@ class ReplaceFlow(b.DeepBase):
 
     def test_a_replaced_day_linked_to_an_activity_or_in_the_past_is_kept(self):
         pid, _c = self.committed()
-        self.store.workout_rows[(pid, "w01-e1")]["linked_activity_id"] = 5
+        self.store.workout_rows[(pid, "20261202-run")]["linked_activity_id"] = 5
         changed = b.default_sessions()
-        changed[0] = b.session("w01-e1", b.TODAY + dt.timedelta(days=1), km=12.0)
+        changed[0] = b.session("20261202-run", b.TODAY + dt.timedelta(days=1), km=12.0)
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.assertEqual([o["op"] for o in c2["ops"]], ["create"], "no delete of a linked workout")
         out = self.commit(pid, c2["token"])
@@ -398,11 +405,11 @@ class ReplaceFlow(b.DeepBase):
         pid, _c = self.committed()
         _p, c2 = self.preview(sessions=b.default_sessions()[:2], plan_id=pid, content="b")
         self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleted")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
         back = b.default_sessions()
-        back[2] = b.session("w01-e2", b.TODAY + dt.timedelta(days=4), km=10.0)
+        back[2] = b.session("20261205-run", b.TODAY + dt.timedelta(days=4), km=10.0)
         _p, c3 = self.preview(sessions=back, plan_id=pid, content="c")
-        self.assertEqual([(o["op"], o["key"]) for o in c3["ops"]], [("create", "w01-e2")])
+        self.assertEqual([(o["op"], o["key"]) for o in c3["ops"]], [("create", "20261205-run")])
         out = self.commit(pid, c3["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(out["replaced"], [])
@@ -412,7 +419,7 @@ class ReplaceFlow(b.DeepBase):
         pid, _c = self.committed()
         prev = self.cancel(pid)
         changed = b.default_sessions()
-        changed[1] = b.session("w01-q1", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
+        changed[1] = b.session("20261203-run", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
         out = self.cancel(pid, prev["cancel"]["token"])
@@ -446,16 +453,16 @@ class ReplaceFlow(b.DeepBase):
         out = self.cancel(pid, prev["cancel"]["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(self.garmin.library, {})
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleted")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
 
     def test_cancel_with_a_rejected_delete_then_the_retry(self):
         pid, _c = self.committed()
-        wid = self.rows(pid)["w01-q1"]["garmin_workout_id"]
+        wid = self.rows(pid)["20261203-run"]["garmin_workout_id"]
         self.garmin.reject_delete_ids.add(wid)
         prev = self.cancel(pid)
         out = self.cancel(pid, prev["cancel"]["token"])
         self.assertEqual(out["status"], "partial", out)
-        self.assertEqual([f["key"] for f in out["failed"]], ["w01-q1"])
+        self.assertEqual([f["key"] for f in out["failed"]], ["20261203-run"])
         self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "active")
         self.assertEqual(self.token_status(prev["cancel"]["token"]), "partial")
         again = self.cancel(pid, prev["cancel"]["token"])
@@ -470,7 +477,7 @@ class ReplaceFlow(b.DeepBase):
         pid, _c = self.committed()
         with self.garmin.lock:
             for wid, name, desc in ((800, "TP easy", "from TrainingPeaks"), (801, "Coach Easy", None),
-                                    (802, "Coach Easy", "coach-mcp 0badc0de " + pid + " w01-e1 h00000000")):
+                                    (802, "Coach Easy", "coach-mcp 0badc0de " + pid + " 20261202-run h00000000")):
                 self.garmin.library[wid] = {"workoutId": wid, "workoutName": name, "description": desc}
                 self.garmin.calendar.append({"workoutId": wid, "scheduleDate": (b.TODAY + dt.timedelta(
                     days=1)).isoformat(), "workoutName": name, "workoutType": "cycling", "id": wid + 1000})
@@ -485,10 +492,10 @@ class ReplaceFlow(b.DeepBase):
         self.garmin.faults["schedule"] = {2: before(http(400))}
         out = self.commit(pid, c["token"])
         self.assertEqual((out["status"], len(out["failed"])), ("partial", 1))
-        self.assertEqual(self.rows(pid)["w01-q1"]["state"], "uploaded")
+        self.assertEqual(self.rows(pid)["20261203-run"]["state"], "uploaded")
         _p, again = self.preview(plan_id=pid)
         self.assertIsNotNone(again["token"], again)
-        self.assertIn("w01-q1", [o["key"] for o in again["ops"]])
+        self.assertIn("20261203-run", [o["key"] for o in again["ops"]])
 
     def test_an_upload_left_unscheduled_by_an_expired_token_is_offered_again(self):
         pid, c = self.preview()
@@ -498,14 +505,14 @@ class ReplaceFlow(b.DeepBase):
         self.assertEqual(self.commit(pid, c["token"])["reason"], "expired")
         _p, again = self.preview(plan_id=pid)
         self.assertIsNotNone(again["token"], again)
-        self.assertIn("w01-e1", [o["key"] for o in again["ops"]])
+        self.assertIn("20261202-run", [o["key"] for o in again["ops"]])
 
     def test_a_twice_retired_hash_keeps_tracking_the_old_workout(self):
         day = b.TODAY + dt.timedelta(days=1)
-        a = [b.session("w01-e1", day, km=8.0)]
-        bb = [b.session("w01-e1", day, km=10.0)]
+        a = [b.session("20261202-run", day, km=8.0)]
+        bb = [b.session("20261202-run", day, km=10.0)]
         pid, _c = self.committed(sessions=a)
-        wid1 = self.rows(pid)["w01-e1"]["garmin_workout_id"]
+        wid1 = self.rows(pid)["20261202-run"]["garmin_workout_id"]
         self.garmin.reject_delete_ids.add(wid1)           # Garmin refuses unscheduling and deleting it
         for content, sessions in (("b", bb), ("c", a), ("d", bb)):
             _p, cx = self.preview(sessions=sessions, plan_id=pid, content=content)
@@ -523,7 +530,7 @@ class RefusedWrites(b.DeepBase):
         self.garmin.faults["upload"] = {2: before(http(400))}
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "partial", out)
-        self.assertEqual(out["failed"], [{"key": "w01-q1", "date": (b.TODAY + dt.timedelta(days=2)).isoformat()}])
+        self.assertEqual(out["failed"], [{"key": "20261203-run", "date": (b.TODAY + dt.timedelta(days=2)).isoformat()}])
         self.assertIsNone(out["retry_after_s"])
         self.assertNotIn("Every write", out["note"])
         self.assertIn("failed[]", out["note"])
@@ -535,10 +542,10 @@ class RefusedWrites(b.DeepBase):
 
     def test_a_refused_delete_of_a_replaced_workout_is_done_with_its_own_note(self):
         pid, _c = self.committed()
-        old = self.rows(pid)["w01-e1"]["garmin_workout_id"]
+        old = self.rows(pid)["20261202-run"]["garmin_workout_id"]
         self.garmin.reject_delete_ids.add(old)
         changed = b.default_sessions()
-        changed[0] = b.session("w01-e1", b.TODAY + dt.timedelta(days=1), km=12.0)
+        changed[0] = b.session("20261202-run", b.TODAY + dt.timedelta(days=1), km=12.0)
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         out = self.commit(pid, c2["token"])
         self.assertEqual(out["status"], "done", out)
@@ -571,16 +578,16 @@ class DoneSessions(b.DeepBase):
     (no row carries linked_activity_id): never deleted, never written again."""
 
     def sessions(self, km=8.0):
-        return [b.session("w01-e1", b.TODAY, km=km), b.session("w01-e2", b.TODAY + dt.timedelta(days=2))]
+        return [b.session("20261202-run", b.TODAY, km=km), b.session("20261205-run", b.TODAY + dt.timedelta(days=2))]
 
     def done_today(self):
         pid, _c = self.committed(sessions=self.sessions())
-        wid = self.rows(pid)["w01-e1"]["garmin_workout_id"]
+        wid = self.rows(pid)["20261202-run"]["garmin_workout_id"]
         with self.garmin.lock:
             for e in self.garmin.calendar:
                 if e["workoutId"] == wid:
                     e["associatedActivityId"] = 777
-        self.assertIsNone(self.rows(pid)["w01-e1"]["linked_activity_id"])
+        self.assertIsNone(self.rows(pid)["20261202-run"]["linked_activity_id"])
         return pid, wid
 
     def test_cancel_keeps_a_done_workout(self):
@@ -588,10 +595,10 @@ class DoneSessions(b.DeepBase):
         prev = self.cancel(pid)
         out = self.cancel(pid, prev["cancel"]["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual([k["key"] for k in out["kept"]], ["w01-e1"])
+        self.assertEqual([k["key"] for k in out["kept"]], ["20261202-run"])
         self.assertEqual(set(self.garmin.library), {wid})
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleted")
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "scheduled")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "scheduled")
 
     def test_commit_never_writes_a_done_session_again(self):
         pid, wid = self.done_today()
@@ -599,7 +606,7 @@ class DoneSessions(b.DeepBase):
         uploads = len(self.garmin.uploads())
         out = self.commit(pid, c2["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual([k["key"] for k in out["kept"]], ["w01-e1"])
+        self.assertEqual([k["key"] for k in out["kept"]], ["20261202-run"])
         self.assertEqual(len(self.garmin.uploads()), uploads, "no second workout for today's done session")
         self.assertIn(wid, self.garmin.library)
         self.assertEqual(out["replaced"], [])
@@ -613,38 +620,38 @@ class DoneSessions(b.DeepBase):
 
 class Budget(b.DeepBase):
     def test_exactly_eight_writes_finish_in_one_call(self):
-        sessions = [b.session(f"w01-e{i}", b.TODAY + dt.timedelta(days=i)) for i in range(1, 5)]
+        sessions = days_sessions(4)
         pid, c = self.preview(sessions=sessions)
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len(self.garmin.writes()), 8)
 
     def test_nine_writes_stop_at_eight(self):
-        sessions = [b.session(f"w01-e{i}", b.TODAY + dt.timedelta(days=i)) for i in range(1, 6)]
+        sessions = days_sessions(5)
         pid, c = self.preview(sessions=sessions)
         out = self.commit(pid, c["token"])
         self.assertEqual((out["status"], out["retry_after_s"], out["remaining"]), ("partial", 0, 1), out)
         self.assertEqual(len(self.garmin.writes()), 8)
-        self.assertEqual(self.rows(pid)["w01-e5"]["state"], "pending")
+        self.assertEqual(self.rows(pid)["20261206-run"]["state"], "pending")
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len(self.garmin.writes()), 10)
         self.assert_no_double_writes(5)
 
     def test_a_budget_cut_between_upload_and_schedule(self):
-        sessions = [b.session(f"w01-e{i}", b.TODAY + dt.timedelta(days=i)) for i in range(1, 5)]
+        sessions = days_sessions(4)
         pid, c = self.preview(sessions=sessions)
         svc = self.service(max_writes=7)
         out = self.commit(pid, c["token"], svc=svc)
         self.assertEqual(out["status"], "partial", out)
-        self.assertEqual(self.rows(pid)["w01-e4"]["state"], "uploaded")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "uploaded")
         out = self.commit(pid, c["token"], svc=svc)
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len(self.garmin.uploads()), 4)
         self.assert_no_double_writes(4)
 
     def test_the_cancel_budget(self):
-        sessions = [b.session(f"w01-e{i}", b.TODAY + dt.timedelta(days=i)) for i in range(1, 6)]
+        sessions = days_sessions(5)
         pid, c = self.preview(sessions=sessions)
         while self.commit(pid, c["token"])["status"] != "done":
             pass
@@ -709,7 +716,7 @@ class Cleanup(b.DeepBase):
         with self.garmin.lock:
             self.garmin.library[wid] = {"workoutId": wid, "workoutName": "Coach Easy", "description": desc}
             for i, day in enumerate(days):
-                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "id": wid * 10 + i,
+                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "scheduledWorkoutId": wid * 10 + i,
                                              "workoutName": "Coach Easy", "workoutType": "running",
                                              "associatedActivityId": linked})
 
@@ -719,7 +726,7 @@ class Cleanup(b.DeepBase):
     def test_dry_run_writes_nothing_anywhere(self):
         pid, _c = self.committed()
         tag = self.store.install_tag()
-        self.orphan(610, f"coach-mcp {tag} {pid} w09-e1 h12345678", b.TODAY + dt.timedelta(days=3))
+        self.orphan(610, f"coach-mcp {tag} {pid} 20301228-run h12345678", b.TODAY + dt.timedelta(days=3))
         before_ = self.snapshot()
         out = io.StringIO()
         seen = []
@@ -759,36 +766,36 @@ class Cleanup(b.DeepBase):
     def test_only_this_account_future_unlinked(self):
         pid, _c = self.committed()
         rows = self.rows(pid)
-        self.store.workout_rows[(pid, "w01-e1")]["linked_activity_id"] = 9            # linked: kept
-        self.store.workout_rows[(pid, "w01-q1")]["date_local"] = b.TODAY - dt.timedelta(days=1)   # past: kept
-        self.store.workout_rows[(pid, "w01-e2")]["date_local"] = b.TODAY                # today: deleted
+        self.store.workout_rows[(pid, "20261202-run")]["linked_activity_id"] = 9            # linked: kept
+        self.store.workout_rows[(pid, "20261203-run")]["date_local"] = b.TODAY - dt.timedelta(days=1)   # past: kept
+        self.store.workout_rows[(pid, "20261205-run")]["date_local"] = b.TODAY                # today: deleted
         # Another account's plan with a row on Garmin.
         other_fp = self.store.account_fp(4242)
         opid, _v, _ch = self.store.save_preview(other_fp, None, dt.date(2027, 3, 1), 1, {}, {}, "e" * 64)
-        self.store.put_workout(opid, {"workout_key": "w01-e1", "version": 1, "date_local": b.TODAY + dt.timedelta(
+        self.store.put_workout(opid, {"workout_key": "20261202-run", "version": 1, "date_local": b.TODAY + dt.timedelta(
             days=2), "role": "easy", "dto_hash": "d" * 64, "state": "scheduled", "garmin_workout_id": 950,
             "garmin_schedule_id": 951})
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
         self.assertEqual(counts, {"rows": 1, "orphans": 0, "other_account": 1, "deleted": 1, "failed": 0})
-        self.assertEqual(set(self.garmin.library), {rows["w01-e1"]["garmin_workout_id"],
-                                                     rows["w01-q1"]["garmin_workout_id"]})
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleted")
-        self.assertEqual(self.rows(opid)["w01-e1"]["state"], "scheduled")
+        self.assertEqual(set(self.garmin.library), {rows["20261202-run"]["garmin_workout_id"],
+                                                     rows["20261203-run"]["garmin_workout_id"]})
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
+        self.assertEqual(self.rows(opid)["20261202-run"]["state"], "scheduled")
         self.assertFalse([w for w in self.garmin.write_log if w[1].endswith(("/950", "/951"))])
 
     def test_orphan_rules(self):
         pid, _c = self.committed()
         tag = self.store.install_tag()
         later, earlier = b.TODAY + dt.timedelta(days=5), b.TODAY - dt.timedelta(days=2)
-        mine = f"coach-mcp {tag} {pid} w09-e1 h12345678"
+        mine = f"coach-mcp {tag} {pid} 20301228-run h12345678"
         self.orphan(620, mine, later)                         # deleted
         self.orphan(621, mine, b.TODAY)                       # today: deleted
         self.orphan(622, mine, earlier, later)                # also on an earlier day: kept
         self.orphan(623, mine, later, linked=55)              # linked to an activity: kept
         self.orphan(624, mine)                                # not on the calendar: kept
-        self.orphan(625, f"coach-mcp 0badc0de {pid} w09-e1 h12345678", later)    # another install: kept
+        self.orphan(625, f"coach-mcp 0badc0de {pid} 20301228-run h12345678", later)    # another install: kept
         self.orphan(626, "Coach Easy coach-mcp " + tag, later)                  # marker not at the start: kept
-        self.orphan(627, f"coach-mcp {tag}x {pid} w09-e1 h12345678", later)     # another tag sharing a prefix
+        self.orphan(627, f"coach-mcp {tag}x {pid} 20301228-run h12345678", later)     # another tag sharing a prefix
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=True, orphans=True, sleep=lambda s: None)
         self.assertEqual(counts["orphans"], 2, counts)
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=False, orphans=True, sleep=lambda s: None,
@@ -798,7 +805,7 @@ class Cleanup(b.DeepBase):
         self.assertEqual({622, 623, 624, 625, 626, 627} - set(self.garmin.library), set())
 
     def test_an_unknown_upload_is_left_to_the_orphan_pass(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         self.garmin.faults["schedule"] = {1: after(b.ReadTimeout("r"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
@@ -807,7 +814,7 @@ class Cleanup(b.DeepBase):
         self.assertEqual(self.garmin.calendar, [])
 
     def test_a_rate_limit_stops_and_counts(self):
-        sessions = [b.session(f"w01-e{i}", b.TODAY + dt.timedelta(days=i)) for i in range(1, 4)]
+        sessions = days_sessions(3)
         self.committed(sessions=sessions)
         self.garmin.faults["delete"] = {2: before(b.GarminConnectTooManyRequestsError("x"))}
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)

@@ -419,9 +419,10 @@ CASES = {
                       "xt1." + TOKEN_BODY[:31] + "+", "XT1." + TOKEN_BODY)),
     "apply_token": (("at1." + TOKEN_BODY,),
                     ("", "ct1." + TOKEN_BODY, "xt1." + TOKEN_BODY, "at1." + TOKEN_BODY[:31], "at1." + TOKEN_BODY[:31] + ".")),
-    "workout_key": (("w03-long", "w00-a", "w99-abcdefgh", "w12-q1"),
-                    ("w3-long", "w003-long", "w03-", "w03-abcdefghi", "W03-long", "w03-Long", "w03_long", "w03-lo ng",
-                     "w03-long\n", "", "x03-long", 3)),
+    "workout_key": (("20261206-run", "20270226-race", "20270129-b", "20261130-run"),
+                    ("w03-long", "2026126-run", "202612060-run", "20261206-", "20261206-long", "20261206-RUN",
+                     "20261206_run", "20261206-ru n", "20261206-run\n", "20261206-run~0123abcd", "", "x0261206-run",
+                     "2026-12-06-run", 20261206)),
     "rpe": ((1, 5, 10), (0, 11, -1, True, False, 5.0, "5", None, 10 ** 30)),
     "pain": ((0, 5, 10), (-1, 11, True, 0.0, "0", None)),
     "pain_location": (("", "none", "knee", "lower_back", "other"),
@@ -508,9 +509,10 @@ class ArgumentChecks(unittest.TestCase):
                 self.assertTrue(cases_check(check)(minted))
                 for other in {"commit_token", "cancel_token", "apply_token"} - {check}:
                     self.assertFalse(cases_check(other)(minted))
-        # Every session key the argument check admits is one the store admits.
+        # Every session key the argument check admits is one the store admits, and the shapes agree.
+        self.assertEqual(plan_store.SESSION_KEY_RE.pattern, garmin_paths._WORKOUT_KEY_RE.pattern)
         for key in CASES["workout_key"][0]:
-            self.assertTrue(plan_store.WORKOUT_KEY_RE.fullmatch(key))
+            self.assertTrue(plan_store.key_ok(key, retired=False))
 
 
 def cases_check(argument):

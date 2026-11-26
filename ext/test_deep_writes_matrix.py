@@ -15,7 +15,7 @@ import unittest
 import test_deep_writes_base as b
 from test_deep_writes_base import BAD_JSON, after, answer, before, http
 
-KEYS = ["w01-e1", "w01-q1", "w01-e2"]
+KEYS = ["20261202-run", "20261203-run", "20261205-run"]
 
 RATE, NEVER, LANDED, LOST, REJECTED, NO_ID, OK = "rate", "never", "landed", "lost", "rejected", "no_id", "ok"
 
@@ -190,17 +190,17 @@ class ReplaceMatrix(b.DeepBase):
 
     def _case(self, step, make, cls):
         pid, _c = self.committed()
-        old = self.rows(pid)["w01-e2"]
+        old = self.rows(pid)["20261205-run"]
         changed = b.default_sessions()
-        changed[2] = b.session("w01-e2", b.TODAY + dt.timedelta(days=4), km=11.0)
+        changed[2] = b.session("20261205-run", b.TODAY + dt.timedelta(days=4), km=11.0)
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
-        retired = f"w01-e2~{old['dto_hash'][:8]}"
-        self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "w01-e2"), ("delete", retired)])
+        retired = f"20261205-run~{old['dto_hash'][:8]}"
+        self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "20261205-run"), ("delete", retired)])
         self.garmin.faults[step] = {1: make()}
         out = self.commit(pid, c2["token"])
         self.assertNotIn(1, self.garmin.faults[step], "the fault was hit")
         rows = self.rows(pid)
-        self.assertEqual(rows["w01-e2"]["state"], "scheduled", "the new workout is written first")
+        self.assertEqual(rows["20261205-run"]["state"], "scheduled", "the new workout is written first")
         if cls == OK:
             self.assertEqual(out["status"], "done", out)
             self.assertNotIn(old["garmin_workout_id"], self.garmin.library)
@@ -286,7 +286,7 @@ class LibraryFaults(b.DeepBase):
     """The library listing is read only to settle an unknown upload (adopt it by its marker)."""
 
     def unknown_upload(self, landed=True):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         self.garmin.faults["upload"] = {1: after(b.ReadTimeout("read")) if landed else before(b.ReadTimeout("x"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
         self.clock.advance(minutes=3)
@@ -302,15 +302,15 @@ class LibraryFaults(b.DeepBase):
                 out = self.commit(pid, c["token"])
                 self.assertEqual(out["status"], "partial", out)
                 self.assertEqual(out["retry_after_s"], b.pw.RETRY_AFTER_UNKNOWN_S)
-                self.assertEqual(self.rows(pid)["w01-e1"]["state"], "unknown")
+                self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
                 self.assertEqual(len(self.garmin.uploads()), 1)
                 del self.garmin.read_faults["library"]
                 self.assertEqual(self.commit(pid, c["token"])["status"], "done")
                 self.assert_no_double_writes(1)
 
     def test_a_rate_limited_listing_stops_the_call(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1)),
-                                        b.session("w01-e2", b.TODAY + dt.timedelta(days=3))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1)),
+                                        b.session("20261205-run", b.TODAY + dt.timedelta(days=3))])
         self.garmin.faults["upload"] = {1: after(b.ReadTimeout("read"))}
         self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
         self.clock.advance(minutes=3)

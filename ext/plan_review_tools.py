@@ -327,7 +327,8 @@ class ReviewService:
         except (KeyError, ValueError, TypeError):
             return {"token": None, "why": "the stored plan's inputs are from an older release: call plan_preview"}
         try:
-            snap, _pid, _failed = await pt.fetch_snapshot(client, today, inputs.race_date, inputs.course_id)
+            snap, _pid, _failed = await pt.fetch_snapshot(client, today, inputs.race_date, inputs.course_id,
+                                                          await asyncio.to_thread(pt.own_workout_ids, self._store))
         except sc.SystemicFailure:
             return {"token": None, "why": "Garmin did not answer the plan's numbers"}
         stored = {**plan["version_row"]["body"],

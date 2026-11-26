@@ -117,7 +117,7 @@ class PgDeep(b.DeepBase):
         out = self.commit(pid, c["token"])
         self.assertEqual((out["status"], out["retry_after_s"]), ("partial", 900), out)
         self.assertEqual(self.token_status(c["token"]), "partial")
-        self.assertEqual(self.rows(pid)["w01-q1"]["state"], "uploaded")
+        self.assertEqual(self.rows(pid)["20261203-run"]["state"], "uploaded")
         store2 = self.new_store()
         svc2 = self.service(store=store2)
         out = self.commit(pid, c["token"], svc=svc2)
@@ -133,7 +133,7 @@ class PgDeep(b.DeepBase):
         self.assertTrue(pw.join_write_threads(10))
         out = self.commit(pid, c["token"])
         self.assertEqual((out["status"], out["retry_after_s"]), ("partial", pw.RETRY_AFTER_UNKNOWN_S), out)
-        self.assertEqual(self.rows(pid)["w01-q1"]["state"], "unknown")
+        self.assertEqual(self.rows(pid)["20261203-run"]["state"], "unknown")
         self.age_rows(pid)
         out = self.commit(pid, c["token"])
         self.assertEqual(out["status"], "done", out)
@@ -149,10 +149,10 @@ class PgDeep(b.DeepBase):
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len([w for w in self.garmin.write_log if w[0] == "schedule"]), 3)
         self.assert_no_double_writes()
-        self.assertTrue(self.rows(pid)["w01-e1"]["garmin_schedule_id"])
+        self.assertTrue(self.rows(pid)["20261202-run"]["garmin_schedule_id"])
 
     def test_a_crash_mid_request_is_settled_after_a_restart(self):
-        pid, c = self.preview(sessions=[b.session("w01-e1", b.TODAY + dt.timedelta(days=1))])
+        pid, c = self.preview(sessions=[b.session("20261202-run", b.TODAY + dt.timedelta(days=1))])
         real = self.store.put_workout
 
         def crash(plan_id, row):
@@ -163,7 +163,7 @@ class PgDeep(b.DeepBase):
         self.store.put_workout = crash
         with self.assertLogs("garmin_ext.plans", "ERROR"):
             self.assertEqual(self.commit(pid, c["token"])["status"], "unknown")
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "uploading")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "uploading")
         store2 = self.new_store()
         svc2 = self.service(store=store2)
         self.assertEqual(self.commit(pid, c["token"], svc=svc2)["status"], "partial", "quarantine first")
@@ -212,7 +212,7 @@ class PgDeep(b.DeepBase):
 
     def test_tokens_bind_plan_and_action(self):
         pid, c = self.preview()
-        other, _c = self.preview(sessions=[b.session("w05-e1", b.TODAY + dt.timedelta(days=10))], content="e")
+        other, _c = self.preview(sessions=[b.session("20300721-run", b.TODAY + dt.timedelta(days=10))], content="e")
         self.assertEqual(self.commit(other, c["token"])["reason"], "unknown_token")
         self.assertEqual(self.cancel(pid, "xt1." + c["token"][4:])["reason"], "unknown_token")
         self.preview(plan_id=pid, content="b")
@@ -221,17 +221,17 @@ class PgDeep(b.DeepBase):
 
     def test_replace_then_cancel_with_a_refused_delete(self):
         pid, _c = self.committed()
-        old = self.rows(pid)["w01-e2"]
+        old = self.rows(pid)["20261205-run"]
         changed = b.default_sessions()
-        changed[2] = b.session("w01-e2", b.TODAY + dt.timedelta(days=4), km=12.0)
+        changed[2] = b.session("20261205-run", b.TODAY + dt.timedelta(days=4), km=12.0)
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         out = self.commit(pid, c2["token"])
-        self.assertEqual((out["status"], out["replaced"]), ("done", [{"key": "w01-e2",
+        self.assertEqual((out["status"], out["replaced"]), ("done", [{"key": "20261205-run",
                                                                       "date": old["date_local"].isoformat()}]))
-        retired = f"w01-e2~{old['dto_hash'][:8]}"
+        retired = f"20261205-run~{old['dto_hash'][:8]}"
         self.assertEqual(self.rows(pid)[retired]["state"], "deleted")
         self.assert_no_double_writes()
-        wid = self.rows(pid)["w01-q1"]["garmin_workout_id"]
+        wid = self.rows(pid)["20261203-run"]["garmin_workout_id"]
         self.garmin.reject_delete_ids.add(wid)
         prev = self.cancel(pid)
         out = self.cancel(pid, prev["cancel"]["token"])
@@ -266,7 +266,7 @@ class PgDeep(b.DeepBase):
         other_fp = self.store.account_fp(self.profile + 1)
         opid, _v, _ch = self.store.save_preview(other_fp, None, dt.date(2027, 3, 1), 1, {}, {}, "e" * 64)
         self.plan_ids.append(opid)
-        self.store.put_workout(opid, {"workout_key": "w01-e1", "version": 1, "date_local": b.TODAY + dt.timedelta(
+        self.store.put_workout(opid, {"workout_key": "20261202-run", "version": 1, "date_local": b.TODAY + dt.timedelta(
             days=2), "role": "easy", "dto_hash": "d" * 64, "state": "scheduled", "garmin_workout_id": 950,
             "garmin_schedule_id": 951})
         before_rows = {k: (r["state"], r["state_changed_at"]) for k, r in self.rows(pid).items()}
@@ -281,7 +281,7 @@ class PgDeep(b.DeepBase):
         counts = pw.cleanup(self.store, self.garmin, b.TODAY, dry_run=False, sleep=lambda s: None, join_s=2)
         self.assertEqual(counts["failed"], 0, counts)
         self.assertEqual({r["state"] for r in self.rows(pid).values()}, {"deleted"})
-        self.assertEqual(self.rows(opid)["w01-e1"]["state"], "scheduled")
+        self.assertEqual(self.rows(opid)["20261202-run"]["state"], "scheduled")
         self.assertFalse(mine & set(self.garmin.library))
         self.assertFalse([w for w in self.garmin.write_log if w[1].endswith(("/950", "/951"))])
 

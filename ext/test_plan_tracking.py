@@ -32,12 +32,12 @@ def session(key, day, role, km, minutes):
 def body():
     d = lambda week, n: week + dt.timedelta(days=n)  # noqa: E731
     weeks = [
-        (WEEK1, [session("w01-e1", d(WEEK1, 1), "easy", 8.0, 48), session("w01-q1", d(WEEK1, 2), "threshold", 10.0, 55),
-                 session("w01-e2", d(WEEK1, 5), "easy", 6.0, 36), session("w01-long", d(WEEK1, 6), "long", 20.0, 120)]),
-        (WEEK2, [session("w02-e1", d(WEEK2, 1), "easy", 8.0, 48), session("w02-q1", d(WEEK2, 2), "threshold", 10.0, 55),
-                 session("w02-e2", d(WEEK2, 4), "easy", 5.0, 30), session("w02-long", d(WEEK2, 6), "long", 18.0, 110)]),
-        (WEEK3, [session("w03-e1", d(WEEK3, 1), "easy", 8.0, 48),
-                 {"key": "w03-b", "date": d(WEEK3, 4).isoformat(), "role": "b_race", "km": 0.0, "minutes": None}]),
+        (WEEK1, [session("20261202-run", d(WEEK1, 1), "easy", 8.0, 48), session("20261203-run", d(WEEK1, 2), "threshold", 10.0, 55),
+                 session("20261205-run", d(WEEK1, 5), "easy", 6.0, 36), session("20300220-run", d(WEEK1, 6), "long", 20.0, 120)]),
+        (WEEK2, [session("20300323-run", d(WEEK2, 1), "easy", 8.0, 48), session("20300329-run", d(WEEK2, 2), "threshold", 10.0, 55),
+                 session("20300324-run", d(WEEK2, 4), "easy", 5.0, 30), session("20300401-run", d(WEEK2, 6), "long", 18.0, 110)]),
+        (WEEK3, [session("20300502-run", d(WEEK3, 1), "easy", 8.0, 48),
+                 {"key": "20300515-b", "date": d(WEEK3, 4).isoformat(), "role": "b_race", "km": 0.0, "minutes": None}]),
     ]
     return {"weeks": [{"week": i + 1, "start": s.isoformat(), "end": (s + dt.timedelta(days=6)).isoformat(),
                        "sessions": ss} for i, (s, ss) in enumerate(weeks)], "content_hash": "x"}
@@ -56,15 +56,15 @@ def act(aid, day, hour, sport, km=None, minutes=None):
 def activities():
     d = lambda week, n: week + dt.timedelta(days=n)  # noqa: E731
     return [
-        act(101, d(WEEK1, 1), 7, "running", 8.2, 47),       # w01-e1 on its day: done
-        act(102, d(WEEK1, 3), 7, "running", 10.3, 54),      # w01-q1 (Wed) run on Thu: done_late
-        act(103, d(WEEK1, 4), 7, "running", 6.0, 35),       # w01-e2 (Sat) run on Fri: done_early
-        act(104, d(WEEK1, 6), 7, "trail_running", 14.0, 90),  # w01-long 20 km: partial
-        act(201, d(WEEK2, 1), 7, "cycling", 40.0, 50),      # w02-e1 easy 48 min: replaced by a 50 min ride
-        act(202, d(WEEK2, 2), 7, "running", 10.0, 54),      # w02-q1 on its day (also a candidate for Fri)
-        act(203, d(WEEK2, 3), 7, "running", 5.0, 29),       # Thu: a candidate for Wed, goes to w02-e2 (Fri) early
-        # w02-long (Sun): nothing: missed
-        act(301, d(WEEK3, 3), 7, "running", 8.0, 47),       # Thu: Garmin linked it to w03-e1 (Tue)
+        act(101, d(WEEK1, 1), 7, "running", 8.2, 47),       # 20261202-run on its day: done
+        act(102, d(WEEK1, 3), 7, "running", 10.3, 54),      # 20261203-run (Wed) run on Thu: done_late
+        act(103, d(WEEK1, 4), 7, "running", 6.0, 35),       # 20261205-run (Sat) run on Fri: done_early
+        act(104, d(WEEK1, 6), 7, "trail_running", 14.0, 90),  # 20300220-run 20 km: partial
+        act(201, d(WEEK2, 1), 7, "cycling", 40.0, 50),      # 20300323-run easy 48 min: replaced by a 50 min ride
+        act(202, d(WEEK2, 2), 7, "running", 10.0, 54),      # 20300329-run on its day (also a candidate for Fri)
+        act(203, d(WEEK2, 3), 7, "running", 5.0, 29),       # Thu: a candidate for Wed, goes to 20300324-run (Fri) early
+        # 20300401-run (Sun): nothing: missed
+        act(301, d(WEEK3, 3), 7, "running", 8.0, 47),       # Thu: Garmin linked it to 20300502-run (Tue)
     ]
 
 
@@ -82,11 +82,11 @@ def make_plan(store, fp, content="a"):
     return pid, version
 
 
-EXPECTED = {"w01-e1": "done", "w01-q1": "done_late", "w01-e2": "done_early", "w01-long": "partial",
-            "w02-e1": "replaced", "w02-q1": "done", "w02-e2": "done_early", "w02-long": "missed",
-            "w03-e1": "done"}
-LINKED = {"w01-e1": 101, "w01-q1": 102, "w01-e2": 103, "w01-long": 104, "w02-e1": 201, "w02-q1": 202,
-          "w02-e2": 203, "w02-long": None, "w03-e1": 301}
+EXPECTED = {"20261202-run": "done", "20261203-run": "done_late", "20261205-run": "done_early", "20300220-run": "partial",
+            "20300323-run": "replaced", "20300329-run": "done", "20300324-run": "done_early", "20300401-run": "missed",
+            "20300502-run": "done"}
+LINKED = {"20261202-run": 101, "20261203-run": 102, "20261205-run": 103, "20300220-run": 104, "20300323-run": 201, "20300329-run": 202,
+          "20300324-run": 203, "20300401-run": None, "20300502-run": 301}
 
 
 class Base(unittest.TestCase):
@@ -96,9 +96,9 @@ class Base(unittest.TestCase):
         self.fp = self.store.account_fp("123456")
         self.pid, self.version = make_plan(self.store, self.fp)
         self.clock.now = dt.datetime(2026, 12, 20, 6, 0, tzinfo=UTC)
-        # w03-e1 was written to Garmin (Stage 2) and Garmin linked activity 301 to it, two days late.
-        self.store.workout_rows[(self.pid, "w03-e1")] = {
-            "plan_id": self.pid, "workout_key": "w03-e1", "version": 1, "date_local": WEEK3 + dt.timedelta(days=1),
+        # 20300502-run was written to Garmin (Stage 2) and Garmin linked activity 301 to it, two days late.
+        self.store.workout_rows[(self.pid, "20300502-run")] = {
+            "plan_id": self.pid, "workout_key": "20300502-run", "version": 1, "date_local": WEEK3 + dt.timedelta(days=1),
             "role": "easy", "dto_hash": "0" * 64, "state": "scheduled", "garmin_workout_id": 9001,
             "garmin_schedule_id": 77, "state_changed_at": self.clock.now, "linked_activity_id": None,
             "link_status": None, "link_checked_at": None}
@@ -162,11 +162,11 @@ class RealWeek(Base):
     def test_local_rows_and_garmin_rows(self):
         self.all_reports()
         rows = {r["workout_key"]: r for r in self.store.links(self.pid)}
-        self.assertEqual(rows["w01-e1"]["state"], ps.LOCAL_STATE)
-        self.assertIsNone(rows["w01-e1"]["garmin_workout_id"])
-        self.assertEqual(rows["w03-e1"]["state"], "scheduled")       # a Garmin row keeps its state and date
-        self.assertEqual(rows["w03-e1"]["garmin_schedule_id"], 77)
-        self.assertNotIn("w03-b", rows)                              # a B race is not tracked
+        self.assertEqual(rows["20261202-run"]["state"], ps.LOCAL_STATE)
+        self.assertIsNone(rows["20261202-run"]["garmin_workout_id"])
+        self.assertEqual(rows["20300502-run"]["state"], "scheduled")       # a Garmin row keeps its state and date
+        self.assertEqual(rows["20300502-run"]["garmin_schedule_id"], 77)
+        self.assertNotIn("20300515-b", rows)                              # a B race is not tracked
         self.assertEqual(self.store.live_workouts(), 1)              # local rows are not on the calendar
 
     def test_week_counts(self):
@@ -179,44 +179,44 @@ class RealWeek(Base):
 
     def test_open_sessions_before_their_late_day(self):
         self.daily(WEEK2, WEEK2 + dt.timedelta(days=1))   # Tuesday: the ride, but Wednesday may still bring a run
-        self.assertNotIn("w02-e1", self.statuses())
+        self.assertNotIn("20300323-run", self.statuses())
         counts = tr.week_counts(self.store, self.fp, WEEK2)
         self.assertEqual(counts["open"], 4)
         self.daily(WEEK2 + dt.timedelta(days=2), WEEK2 + dt.timedelta(days=3))
-        self.assertNotIn("w02-e1", self.statuses())   # two days of data never cover Monday..Wednesday
+        self.assertNotIn("20300323-run", self.statuses())   # two days of data never cover Monday..Wednesday
         self.weekly(WEEK2 + dt.timedelta(days=3))       # Thursday's weekly report: 14 days, Wednesday is over
-        self.assertEqual(self.statuses()["w02-e1"], "replaced")
+        self.assertEqual(self.statuses()["20300323-run"], "replaced")
 
     def test_a_short_ride_does_not_replace(self):
         acts = [a for a in activities() if a["activityId"] != 201] + [act(299, WEEK2 + dt.timedelta(days=1), 7,
                                                                          "cycling", 20.0, 30)]
         self.daily(WEEK2, WEEK2 + dt.timedelta(days=3), acts)
         self.weekly(WEEK2 + dt.timedelta(days=3), acts)
-        self.assertEqual(self.statuses()["w02-e1"], "missed")
+        self.assertEqual(self.statuses()["20300323-run"], "missed")
 
     def test_a_later_run_upgrades_missed_and_a_shorter_window_never_undoes_done(self):
         self.daily(WEEK2, WEEK3)
         self.weekly(WEEK3)
-        self.assertEqual(self.statuses()["w02-long"], "missed")
+        self.assertEqual(self.statuses()["20300401-run"], "missed")
         late = [act(250, WEEK2 + dt.timedelta(days=7), 9, "running", 18.0, 110)]   # Monday: a day late
         tr.refresh_links(self.store, self.fp, WEEK3, late, [], first=WEEK2 + dt.timedelta(days=5), last=WEEK3, tz=UTC)
-        self.assertEqual(self.statuses()["w02-long"], "done_late")
+        self.assertEqual(self.statuses()["20300401-run"], "done_late")
         tr.refresh_links(self.store, self.fp, WEEK3 + dt.timedelta(days=1), [], [], tz=UTC)
-        self.assertEqual(self.statuses()["w02-long"], "done_late")
+        self.assertEqual(self.statuses()["20300401-run"], "done_late")
 
     def test_an_activity_before_the_plan_never_counts(self):
         self.store.plans[self.pid]["created_at"] = dt.datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=2))
         self.weekly(WEEK1 + dt.timedelta(days=2))
-        self.assertEqual(self.statuses().get("w01-e1"), "missed")    # its run was at 07:00, before the plan
+        self.assertEqual(self.statuses().get("20261202-run"), "missed")    # its run was at 07:00, before the plan
 
     def test_activation_wins_over_creation(self):
         row = self.store.plans[self.pid]
         row.update(status="active", activated_at=dt.datetime(2026, 12, 3, 8, 0, tzinfo=UTC))
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=4))
         self.weekly(WEEK1 + dt.timedelta(days=4))
-        self.assertEqual(self.statuses()["w01-q1"], "missed")
-        self.assertEqual(self.statuses()["w01-e2"], "done_early")
+        self.assertEqual(self.statuses()["20261203-run"], "missed")
+        self.assertEqual(self.statuses()["20261205-run"], "done_early")
 
 
 
@@ -250,16 +250,16 @@ class ReviewCases(unittest.TestCase):
         return {r["workout_key"]: (r["link_status"], r["linked_activity_id"]) for r in self.store.links(self.pid)}
 
     def test_activation_keeps_what_the_draft_counted(self):
-        self.plan([session("w01-e1", self.day(0), "easy", 8.0, 45)])
+        self.plan([session("20261202-run", self.day(0), "easy", 8.0, 45)])
         acts = [act(5, self.day(0), 10, "running", 8.0, 45)]               # Monday 10:00, after the draft
         self.daily(0, acts)
-        self.assertEqual(self.statuses(), {"w01-e1": ("done", 5)})
+        self.assertEqual(self.statuses(), {"20261202-run": ("done", 5)})
         self.clock.now = dt.datetime(2026, 11, 24, 7, 0, tzinfo=UTC)       # plan_commit activates: Tuesday 07:00
         self.store.move_plan(self.pid, "active")
         self.daily(1, acts)
-        self.assertEqual(self.statuses(), {"w01-e1": ("done", 5)})
+        self.assertEqual(self.statuses(), {"20261202-run": ("done", 5)})
         # Not counted before: a run before the activation still counts for nothing.
-        fresh = [session("w01-e2", self.day(1), "easy", 6.0, 36)]
+        fresh = [session("20261205-run", self.day(1), "easy", 6.0, 36)]
         other = ps.MemoryPlanStore(clock=self.clock)
         other.save_preview(self.fp, None, RACE, 1, {}, {"weeks": [{"week": 1, "start": self.MON.isoformat(),
                                                                    "end": self.day(6).isoformat(),
@@ -272,52 +272,52 @@ class ReviewCases(unittest.TestCase):
         self.assertEqual(other.links(pid), [])
 
     def test_a_run_the_day_before_is_not_missed_by_a_later_daily(self):
-        self.plan([session("w01-e1", self.day(2), "easy", 8.0, 45)])      # Wednesday
+        self.plan([session("20261202-run", self.day(2), "easy", 8.0, 45)])      # Wednesday
         acts = [act(7, self.day(1), 18, "running", 8.0, 45)]               # Tuesday evening
         self.daily(3, acts)                                                # the first daily report: Thursday
         self.assertEqual(self.statuses(), {})
         first, last = self.day(3) - dt.timedelta(days=13), self.day(3)
         tr.refresh_links(self.store, self.fp, last, acts, [], first=first, last=last, tz=UTC, today=self.day(4))
-        self.assertEqual(self.statuses(), {"w01-e1": ("done_early", 7)})
+        self.assertEqual(self.statuses(), {"20261202-run": ("done_early", 7)})
 
     def test_missed_waits_until_the_late_day_is_over(self):
-        self.plan([session("w01-e1", self.day(2), "easy", 8.0, 45)])
+        self.plan([session("20261202-run", self.day(2), "easy", 8.0, 45)])
         first = self.day(0) - dt.timedelta(days=13)
         tr.refresh_links(self.store, self.fp, self.day(3), [], [], first=first, last=self.day(3), tz=UTC,
                          today=self.day(3))
         self.assertEqual(self.statuses(), {})                               # Thursday is not over yet
         tr.refresh_links(self.store, self.fp, self.day(3), [], [], first=first, last=self.day(3), tz=UTC,
                          today=self.day(4))
-        self.assertEqual(self.statuses(), {"w01-e1": ("missed", None)})
+        self.assertEqual(self.statuses(), {"20261202-run": ("missed", None)})
 
     def test_a_warm_up_jog_does_not_make_the_long_run_partial(self):
-        self.plan([session("w01-long", self.day(6), "long", 16.0, 90)])
+        self.plan([session("20300220-run", self.day(6), "long", 16.0, 90)])
         acts = [act(1, self.day(6), 7, "running", 1.5, 10), act(2, self.day(6), 8, "running", 16.0, 90)]
         self.daily(6, acts)
-        self.assertEqual(self.statuses(), {"w01-long": ("done", 2)})
+        self.assertEqual(self.statuses(), {"20300220-run": ("done", 2)})
 
     def test_two_sessions_one_run_goes_where_it_fits(self):
-        self.plan([session("w01-e1", self.day(1), "easy", 5.0, 30),
-                   session("w01-q1", self.day(1), "threshold", 10.0, 55)])
+        self.plan([session("20261202-run", self.day(1), "easy", 5.0, 30),
+                   session("20261203-run", self.day(1), "threshold", 10.0, 55)])
         self.daily(1, [act(3, self.day(1), 7, "running", 10.0, 55)])
-        self.assertEqual(self.statuses(), {"w01-q1": ("done", 3)})        # the quality session first
+        self.assertEqual(self.statuses(), {"20261203-run": ("done", 3)})        # the quality session first
         self.setUp()
-        self.plan([session("w01-e1", self.day(1), "easy", 5.0, 30),
-                   session("w01-q1", self.day(1), "threshold", 10.0, 55)])
+        self.plan([session("20261202-run", self.day(1), "easy", 5.0, 30),
+                   session("20261203-run", self.day(1), "threshold", 10.0, 55)])
         self.daily(1, [act(4, self.day(1), 7, "running", 5.0, 30)])
-        self.assertEqual(self.statuses(), {"w01-e1": ("done", 4)})        # too short for it: the easy one
+        self.assertEqual(self.statuses(), {"20261202-run": ("done", 4)})        # too short for it: the easy one
 
     def test_a_retired_row_is_not_ours(self):
-        self.plan([session("w01-e1", self.day(1), "easy", 5.0, 30)])
-        for key, wid, state in (("w01-e1", 11, "scheduled"), ("w01-e1~abcdef01", 10, "deleted")):
+        self.plan([session("20261202-run", self.day(1), "easy", 5.0, 30)])
+        for key, wid, state in (("20261202-run", 11, "scheduled"), ("20261202-run~abcdef01", 10, "deleted")):
             self.store.put_workout(self.pid, {"workout_key": key, "version": 1, "date_local": self.day(1),
                                               "role": "easy", "dto_hash": "d" * 64, "state": state,
                                               "garmin_workout_id": wid})
         self.assertEqual(tr.ours_by_garmin_id(self.store, self.fp, [10, 11]),
-                         {11: {"workout_key": "w01-e1", "role": "easy"}})
+                         {11: {"workout_key": "20261202-run", "role": "easy"}})
 
     def test_one_read_of_the_plan_per_report(self):
-        self.plan([session("w01-e1", self.day(0), "easy", 8.0, 45)])
+        self.plan([session("20261202-run", self.day(0), "easy", 8.0, 45)])
         calls = []
         store = self.store
 
@@ -347,12 +347,12 @@ class Readers(Base):
     def test_today_plan(self):
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=1))
         tue = tr.today_plan(self.store, self.fp, WEEK1 + dt.timedelta(days=1))
-        self.assertEqual(tue, {"workout_key": "w01-e1", "date": "2026-12-01", "role": "easy", "sport": "run",
+        self.assertEqual(tue, {"workout_key": "20261202-run", "date": "2026-12-01", "role": "easy", "sport": "run",
                                "planned_km": 8.0, "planned_min": 48, "link_status": "done", "feedback_due": True,
-                               "feedback_for": "w01-e1"})
-        self.store.save_feedback(self.pid, "w01-e1", 3, 0, "none", False)
+                               "feedback_for": "20261202-run"})
+        self.store.save_feedback(self.pid, "20261202-run", 3, 0, "none", False)
         wed = tr.today_plan(self.store, self.fp, WEEK1 + dt.timedelta(days=2))
-        self.assertEqual((wed["workout_key"], wed["link_status"], wed["feedback_due"]), ("w01-q1", None, False))
+        self.assertEqual((wed["workout_key"], wed["link_status"], wed["feedback_due"]), ("20261203-run", None, False))
         rest = tr.today_plan(self.store, self.fp, WEEK1)
         self.assertEqual((rest["role"], rest["workout_key"], rest["sport"]), ("rest", None, None))
         self.assertIsNone(tr.today_plan(self.store, self.fp, dt.date(2026, 11, 1)))
@@ -361,17 +361,17 @@ class Readers(Base):
 
     def test_ours_by_garmin_id(self):
         self.assertEqual(tr.ours_by_garmin_id(self.store, self.fp, [9001, 5555, "x", True]),
-                         {9001: {"workout_key": "w03-e1", "role": "easy"}})
+                         {9001: {"workout_key": "20300502-run", "role": "easy"}})
         self.assertEqual(tr.ours_by_garmin_id(self.store, self.fp, []), {})
         self.assertEqual(tr.ours_by_garmin_id(self.store, self.store.account_fp("999"), [9001]), {})
 
     def test_stored_links_for_plan_get(self):
         self.daily(WEEK1, WEEK1 + dt.timedelta(days=1))
-        self.store.save_feedback(self.pid, "w01-e1", 4, 2, "calf", False)
+        self.store.save_feedback(self.pid, "20261202-run", 4, 2, "calf", False)
         view = tr.stored_links(self.store, self.pid, UTC)
-        self.assertEqual(view["links"], [{"key": "w01-e1", "date": "2026-12-01", "status": "done",
+        self.assertEqual(view["links"], [{"key": "20261202-run", "date": "2026-12-01", "status": "done",
                                           "as_of": "2026-12-20T06:00"}])
-        self.assertEqual(view["feedback"], [{"key": "w01-e1", "rpe": 4, "pain": 2, "pain_location": "calf",
+        self.assertEqual(view["feedback"], [{"key": "20261202-run", "rpe": 4, "pain": 2, "pain_location": "calf",
                                              "sharp": False}])
         pid2, _ = make_plan(self.store, self.fp, "b")
         self.assertEqual(tr.stored_links(self.store, pid2), {})
@@ -415,8 +415,8 @@ class Readers(Base):
         self.assertEqual(tr.plan_sessions(None), [])
         self.assertEqual(tr.plan_sessions({"weeks": [{"sessions": [{"key": "bad", "date": "2026-12-01",
                                                                      "role": "easy"},
-                                                                    {"key": "w01-x", "date": "nope"},
-                                                                    {"key": "w01-y", "date": "2026-12-01",
+                                                                    {"key": "20300302-run", "date": "nope"},
+                                                                    {"key": "20300303-run", "date": "2026-12-01",
                                                                      "role": 5}, "junk"]}, "junk"]}), [])
         acts = tr.normalize_activities([{"activityId": "12"}, {"activityId": True}, "junk",
                                         act("77", WEEK1, 6, "running", 5, 30)], UTC)
@@ -439,14 +439,14 @@ class Feedback(unittest.TestCase):
         self.svc = pt.PlanService(lambda: None, lambda: self.store, lambda: self.today)
 
     def log(self, **kw):
-        args = {"workout_key": "w01-e1", "rpe": 4, "pain": 0, "pain_location": "none", "sharp": False, **kw}
+        args = {"workout_key": "20261202-run", "rpe": 4, "pain": 0, "pain_location": "none", "sharp": False, **kw}
         return self.svc.feedback(**args)
 
     def test_stored_then_replaced(self):
         out = json.loads(self.log())
         self.assertEqual({k: out[k] for k in ("stored", "updated", "workout_key", "date", "role", "rpe", "pain",
                                               "pain_location", "sharp", "progression_hold")},
-                         {"stored": True, "updated": False, "workout_key": "w01-e1", "date": "2026-12-01",
+                         {"stored": True, "updated": False, "workout_key": "20261202-run", "date": "2026-12-01",
                           "role": "easy", "rpe": 4, "pain": 0, "pain_location": "none", "sharp": False,
                           "progression_hold": False})
         out = json.loads(self.log(rpe=6, pain=2, pain_location="Calf"))
@@ -465,7 +465,7 @@ class Feedback(unittest.TestCase):
         cases = [dict(workout_key="../x"), dict(rpe=0), dict(rpe=11), dict(rpe=True), dict(rpe="5"),
                  dict(pain=-1), dict(pain=11), dict(pain_location="left knee, it hurts"),
                  dict(pain=0, pain_location="knee"), dict(pain=0, sharp=True), dict(pain=3, pain_location="none"),
-                 dict(sharp="yes"), dict(workout_key="w09-zz"), dict(workout_key="w02-long"),
+                 dict(sharp="yes"), dict(workout_key="20310118-run"), dict(workout_key="20300401-run"),
                  dict(plan_id="nothex")]
         for kw in cases:
             with self.subTest(kw=kw):
@@ -475,14 +475,14 @@ class Feedback(unittest.TestCase):
         self.assertEqual(self.store.feedback(self.pid), [])
 
     def test_tomorrow_is_allowed(self):
-        self.assertTrue(json.loads(self.log(workout_key="w01-q1"))["stored"])
+        self.assertTrue(json.loads(self.log(workout_key="20261203-run"))["stored"])
 
     def test_no_plan_and_database_texts(self):
         fresh = ps.MemoryPlanStore()
         empty = pt.PlanService(lambda: None, lambda: fresh, lambda: self.today)
-        self.assertEqual(empty.feedback("w01-e1", 3, 0, "none", False), pt.TEXT_NO_ACCOUNT)
+        self.assertEqual(empty.feedback("20261202-run", 3, 0, "none", False), pt.TEXT_NO_ACCOUNT)
         fresh.meta[ps.META_ACCOUNT] = fresh.account_fp("123456")
-        self.assertEqual(empty.feedback("w01-e1", 3, 0, "none", False), pt.TEXT_NO_PLAN)
+        self.assertEqual(empty.feedback("20261202-run", 3, 0, "none", False), pt.TEXT_NO_PLAN)
         # Another account's plan is never touched, not even by its plan_id.
         other = self.store.account_fp("999")
         foreign, _ = make_plan(self.store, other, "foreign")
@@ -503,7 +503,7 @@ class Feedback(unittest.TestCase):
 
         down = pt.PlanService(lambda: None, lambda: Down(), lambda: self.today)
         with self.assertLogs("garmin_ext.plans", "WARNING") as logs:
-            self.assertEqual(down.feedback("w01-e1", 3, 0, "none", False), pt.TEXT_STARTING)
+            self.assertEqual(down.feedback("20261202-run", 3, 0, "none", False), pt.TEXT_STARTING)
         self.assertEqual(logs.output, ["WARNING:garmin_ext.plans:plans: log_feedback failed (StoreError)"])
 
     def test_plan_get_shows_links_and_feedback(self):
@@ -530,7 +530,7 @@ class Feedback(unittest.TestCase):
         text = added["log_feedback"][1]
         self.assertTrue(text.isascii() and len(text) < 2048)
         self.assertIn("never Garmin", text)
-        out = json.loads(run(added["log_feedback"][0](workout_key="w01-e1", rpe=5)))
+        out = json.loads(run(added["log_feedback"][0](workout_key="20261202-run", rpe=5)))
         self.assertTrue(out["stored"])
         added.clear()
         pt.register(adder, None, lambda: None, store=self.store, today=lambda: self.today)
@@ -540,7 +540,7 @@ class Feedback(unittest.TestCase):
 
 class ArgumentChecks(unittest.TestCase):
     def test_log_feedback_row(self):
-        ok = {"workout_key": "w03-long", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False,
+        ok = {"workout_key": "20300511-run", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False,
               "plan_id": ""}
         self.assertIsNone(garmin_paths.refused_argument("log_feedback", ok))
         for name, bad in (("workout_key", "x/y"), ("rpe", 11), ("rpe", True), ("pain", "3"),

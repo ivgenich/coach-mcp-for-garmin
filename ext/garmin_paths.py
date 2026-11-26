@@ -86,14 +86,14 @@ def _course_id_ok(value):
     if isinstance(value, int):
         return 0 <= value < 10 ** 15
     return isinstance(value, str) and (value in ("", "0") or _COURSE_ID_RE.fullmatch(value) is not None)
-_WORKOUT_KEY_RE = re.compile(r"w[0-9]{2}-[a-z0-9]{1,8}", re.ASCII)
+_WORKOUT_KEY_RE = re.compile(r"[0-9]{8}-(run|race|b)", re.ASCII)
 # plan_store.PAIN_LOCATIONS (test_plan_tracking checks they agree); "" means none.
 PAIN_LOCATIONS = frozenset({"", "none", "foot", "ankle", "achilles", "calf", "shin", "knee", "hamstring", "quad",
                             "hip", "glute", "lower_back", "other"})
 
 
 def _workout_key_ok(value):
-    """A plan session key such as w03-long (plan_store.WORKOUT_KEY_RE)."""
+    """A plan session key such as 20261206-run (plan_store.SESSION_KEY_RE)."""
     return isinstance(value, str) and _WORKOUT_KEY_RE.fullmatch(value) is not None
 
 

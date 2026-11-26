@@ -257,13 +257,12 @@ def schedule_id_of(payload: Any) -> Optional[int]:
 
 def _hard_dates(entries: Optional[Sequence[Mapping[str, Any]]], our_ids: Set[int],
                 lt_speed: Optional[float]) -> List[str]:
-    """Dates of calendar sessions that are not ours (by id, and not named like ours) and that
-    daily_status.classify_workout calls hard or long."""
+    """Dates of calendar sessions that are not ours (by Garmin workout id: a session of the user's named "Coach ..."
+    counts) and that daily_status.classify_workout calls hard or long."""
     athlete = {"lt_speed_mps": lt_speed, "lt_hr": None, "ftp_w": None}
     out = set()
     for e in entries or []:
-        if _pos_int(e.get("workoutId")) in our_ids or str(e.get("workoutName") or "").startswith(
-                plan_dto.NAME_PREFIX + " "):
+        if _pos_int(e.get("workoutId")) in our_ids:
             continue
         day = str(e.get("scheduleDate") or "")[:10]
         c = ds.classify_workout(dict(e), None, athlete=athlete)
@@ -274,22 +273,34 @@ def _hard_dates(entries: Optional[Sequence[Mapping[str, Any]]], our_ids: Set[int
 
 def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, today: dt.date, days: int, tag: str,
                plan_id: str, fixed_hard: Sequence[str], lt_speed: Optional[float]) -> Dict[str, Any]:
-    """The ops of a commit token: create the window's runs not on Garmin yet (or changed), then delete the
-    plan's own days that changed or left the window. Deletes only rows on Garmin, unlinked, from today on."""
+    """The ops of a commit token. Rows are matched to sessions by key, which names the same planned session in
+    every version (plan_engine.session_key: its day, not a week number counted from today).
+
+    Create: the runs of the window (today to today + days - 1) not on Garmin yet, and, whatever the window, every
+    later session whose workout this plan already has on Garmin and that changed (it is replaced: the new workout
+    first, then the old one deleted). Delete: those replaced workouts, and the plan's own workouts after today
+    whose session left the plan. A rebuilt plan never plans today (plan_engine plans from tomorrow on), so a
+    workout of today is replaced only when the plan still has its session today (a patched version, rule A8) and
+    never deleted for being absent. Deletes only rows on Garmin, unlinked, from today on."""
     last = today + dt.timedelta(days=days - 1)
     by_key = {str(r["workout_key"]): r for r in rows}
     creates: List[Dict[str, Any]] = []
     deletes: List[Dict[str, Any]] = []
-    wanted: Set[str] = set()
+    planned: Set[str] = set()
     for s, dto in plan_dto.session_dtos(plan):
         day = dt.date.fromisoformat(s["date"])
-        if not today <= day <= last:
+        if day < today:
             continue
         key = str(s["key"])
-        wanted.add(key)
+        planned.add(key)
         digest = plan_dto.dto_hash(dto)
         row = by_key.get(key)
         same = row is not None and row["dto_hash"] == digest and row["date_local"] == day
+        ours = row is not None and row["state"] in ON_GARMIN + ("unknown", "uploading", "scheduling")
+        half_deleted = row is not None and row["state"] in ("unscheduling", "unscheduled", "deleting")
+        if day > last and not (ours and (not same or half_deleted)):
+            continue   # outside the window: only a session already on Garmin that changed (or whose earlier delete
+            # is unfinished) is written again
         # An `uploaded` row (its schedule refused, rate limited or left by an expired token) is offered again: the
         # executor schedules the workout it has, without a second upload.
         if same and row is not None and row["state"] in ("scheduled", "unknown", "uploading", "scheduling"):
@@ -303,12 +314,15 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
                 and not row.get("linked_activity_id") and row["date_local"] >= today:
             deletes.append(_delete_op(row, retired_key(by_key, key, row["dto_hash"]), "replaced"))
     for key, row in sorted(by_key.items()):
-        if key in wanted or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id"):
+        if key in planned or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id"):
             continue
         if row.get("linked_activity_id") or row["date_local"] < today:
             continue
+        retired = "~" in key
+        if row["date_local"] == today and not retired:
+            continue   # the plan has no session today (it plans from tomorrow): today's workout stays
         # A retired row (key~hash: replaced by a new workout) still on Garmin is deleted by any later commit.
-        deletes.append(_delete_op(row, key, "replaced" if "~" in key else "removed"))
+        deletes.append(_delete_op(row, key, "replaced" if retired else "removed"))
     return {"kind": "commit", "days": days, "ops": creates + deletes, "fixed_hard": list(fixed_hard),
             "lt_speed_mps": lt_speed}
 
@@ -387,6 +401,7 @@ class Executor:
         self.stop: Optional[str] = None     # rate_limited, budget, network, unknown
         self.rows: Dict[str, Dict[str, Any]] = {}
         self.entries: List[Dict[str, Any]] = []
+        self.read_days: List[Tuple[dt.date, dt.date]] = []   # the calendar ranges read into self.entries
         self.our_ids: Set[int] = set()
         self.tag = ""
         self.out: Dict[str, Any] = {"written": [], "replaced": [], "conflicts": [], "deleted": [], "kept": [],
@@ -429,6 +444,7 @@ class Executor:
         if entries is None:
             raise ReadFailed("calendar_unreadable", None)
         self.entries = entries
+        self.read_days = [(dt.date.fromisoformat(start), dt.date.fromisoformat(end))]
         self._mark_done()
 
     def _mark_done(self) -> None:
@@ -449,6 +465,29 @@ class Executor:
             if _pos_int(e.get("workoutId")) == workout_id and str(e.get("scheduleDate") or "")[:10] == day:
                 return e
         return None
+
+    def _entries_of(self, workout_id: int, day: dt.date) -> Optional[List[Dict[str, Any]]]:
+        """The calendar entries of `workout_id` on `day`: from the calendar prepare() read when `day` is in its
+        range, else from a read of the days around it (kept for the rest of the call). None when that read failed:
+        the workout must not be deleted then (deleting a workout is not known to remove its calendar entries)."""
+        if not any(a <= day <= b for a, b in self.read_days):
+            start, end = day - dt.timedelta(days=1), day + dt.timedelta(days=1)
+            try:
+                payload = self._read("calendar_unreadable", lambda: self.client.query_garmin_graphql(
+                    ds.schedule_query(start.isoformat(), end.isoformat())))
+            except ReadFailed as exc:
+                if exc.group == tool_errors.RATE_LIMITED:
+                    self.stop = "rate_limited"
+                return None
+            entries = ds.schedule_entries(payload)
+            if entries is None:
+                return None
+            # The new range's entries replace what an earlier read saw of those days.
+            self.entries = [e for e in self.entries if not start.isoformat() <= str(e.get("scheduleDate") or "")[:10]
+                            <= end.isoformat()] + entries
+            self.read_days.append((start, end))
+        return [e for e in self.entries if _pos_int(e.get("workoutId")) == workout_id
+                and str(e.get("scheduleDate") or "")[:10] == day.isoformat()]
 
     def _save(self, key: str, **changes: Any) -> Dict[str, Any]:
         row = {**self.rows[key], **changes}
@@ -672,20 +711,29 @@ class Executor:
         if wid is None:
             self._save(key, state="deleted")
             return
-        if row["state"] in ("scheduled", "unscheduling"):
-            sid = _pos_int(row.get("garmin_schedule_id"))
-            if sid is None:
-                entry = self._on_calendar(wid, item["date"])
-                sid = schedule_id_of(entry) if entry is not None else None
-            if sid is not None:
+        if row["state"] in ("uploaded", "scheduled", "unscheduling"):
+            # Unschedule every calendar entry of the workout first (its stored entry id and what the calendar shows
+            # on its day; the calendar is read around that day when prepare() did not cover it): whether deleting
+            # a workout also removes its entries is not verified. Calendar unreadable: no delete, the next call.
+            entries = self._entries_of(wid, row["date_local"])
+            if entries is None:
+                self.remaining += 1
+                return
+            if any(schedule_id_of(e) is None for e in entries):
+                self.out["failed"].append(item)   # an entry without its id cannot be unscheduled: keep the workout
+                return
+            sids = sorted({n for n in [_pos_int(row.get("garmin_schedule_id"))] + [schedule_id_of(e) for e in entries]
+                           if n is not None})
+            for sid in sids:
                 if not self._may_write():
                     self.remaining += 1
                     return
-                self._save(key, state="unscheduling")
+                self._save(key, state="unscheduling", garmin_schedule_id=sid)
                 outcome, _ = self._write(key, "DELETE", f"workout-service/schedule/{sid}")
                 if outcome not in ("ok", GONE):
                     self._delete_failed(key, item, outcome)
                     return
+                self.entries = [e for e in self.entries if schedule_id_of(e) != sid]
             row = self._save(key, state="unscheduled")
         if not self._may_write():
             self.remaining += 1
@@ -1357,23 +1405,36 @@ def _context_class() -> Any:
 ORPHAN_RANGE_DAYS = 366   # the calendar range --orphans reads around today (a plan is at most a year long)
 
 
-def _orphans(client: Any, tag: str, owned: Set[int], today: dt.date) -> List[int]:
-    """Library workouts (the logged-in account's own) with this install's marker that no row owns, each on the
-    calendar today or later, never on an earlier day, never linked to an activity. Unscheduled ones are kept."""
-    head = f"{MARKER_HEAD} {tag} "
-    library = client.get_workouts(0, LIBRARY_LIMIT)
-    start = (today - dt.timedelta(days=ORPHAN_RANGE_DAYS)).isoformat()
-    end = (today + dt.timedelta(days=ORPHAN_RANGE_DAYS)).isoformat()
-    entries = ds.schedule_entries(client.query_garmin_graphql(ds.schedule_query(start, end)))
+def _calendar(client: Any, start: dt.date, end: dt.date) -> List[Dict[str, Any]]:
+    """The calendar entries from `start` to `end`; ReadFailed when the calendar cannot be read (nothing is deleted
+    then: a workout is unscheduled before it is deleted, and only an entry read from the calendar can be)."""
+    entries = ds.schedule_entries(client.query_garmin_graphql(ds.schedule_query(start.isoformat(), end.isoformat())))
     if entries is None:
         raise ReadFailed("calendar_unreadable", None)
-    days: Dict[int, List[Mapping[str, Any]]] = {}
+    return entries
+
+
+def _entries_by_workout(entries: Iterable[Mapping[str, Any]]) -> Dict[int, List[Mapping[str, Any]]]:
+    out: Dict[int, List[Mapping[str, Any]]] = {}
     for e in entries:
         wid = _pos_int(e.get("workoutId"))
         if wid is not None:
-            days.setdefault(wid, []).append(e)
+            out.setdefault(wid, []).append(e)
+    return out
+
+
+def _orphans(client: Any, tag: str, owned: Set[int], today: dt.date) -> List[Tuple[int, List[int]]]:
+    """(workout id, its calendar entry ids) of the library workouts (the logged-in account's own) with this
+    install's marker that no row owns, each on the calendar today or later, never on an earlier day, never linked
+    to an activity. Unscheduled ones are kept. ReadFailed when the library or the calendar cannot be read."""
+    head = f"{MARKER_HEAD} {tag} "
+    library = client.get_workouts(0, LIBRARY_LIMIT)
+    if not isinstance(library, list):
+        raise ReadFailed("garmin_unreadable", None)
+    days = _entries_by_workout(_calendar(client, today - dt.timedelta(days=ORPHAN_RANGE_DAYS),
+                                         today + dt.timedelta(days=ORPHAN_RANGE_DAYS)))
     out = []
-    for w in library if isinstance(library, list) else []:
+    for w in library:
         wid = _pos_int(w.get("workoutId")) if isinstance(w, dict) else None
         text = str(w.get("description") or "") if isinstance(w, dict) else ""
         if wid is None or wid in owned or not text.startswith(head):
@@ -1382,30 +1443,17 @@ def _orphans(client: Any, tag: str, owned: Set[int], today: dt.date) -> List[int
         if not on or any(str(e.get("scheduleDate") or "")[:10] < today.isoformat() or e.get("associatedActivityId")
                          for e in on):
             continue
-        out.append(wid)
+        out.append((wid, [schedule_id_of(e) or 0 for e in on]))
     return out
-
-
-def _without_done_today(client: Any, rows: List[Dict[str, Any]], today: dt.date) -> List[Dict[str, Any]]:
-    """`rows` without today's workouts Garmin linked to an activity (the calendar's associatedActivityId): a
-    done session is kept also when PLAN_TRACKING is off and no row carries the link. Reads today's calendar
-    only when a row is on today (ReadFailed when it cannot be read: nothing is deleted then)."""
-    if not any(r["date_local"] == today for r in rows):
-        return rows
-    day = today.isoformat()
-    entries = ds.schedule_entries(client.query_garmin_graphql(ds.schedule_query(day, day)))
-    if entries is None:
-        raise ReadFailed("calendar_unreadable", None)
-    done = {(_pos_int(e.get("workoutId")), str(e.get("scheduleDate") or "")[:10]) for e in entries
-            if _pos_int(e.get("associatedActivityId")) is not None}
-    return [r for r in rows if (_pos_int(r.get("garmin_workout_id")), r["date_local"].isoformat()) not in done]
 
 
 def cleanup(store: Any, client: Any, today: dt.date, *, dry_run: bool, orphans: bool = False,
             sleep: Callable[[float], None] = time.sleep, join_s: float = REQUEST_JOIN_S) -> Dict[str, int]:
     """Delete this install's own workouts from today on, of the plans of the Garmin account logged in (linked
     ones kept); with `orphans`, also library workouts with this install's marker that no row owns (see
-    _orphans()). Counts only. Stops at a rate limit."""
+    _orphans()). Each workout's calendar entries are unscheduled first (read from the calendar, the stored entry
+    id too); a workout whose entries could not all be unscheduled is not deleted. Counts only. Stops at a rate
+    limit; nothing is deleted when the calendar cannot be read (ReadFailed)."""
     tag = store.install_tag()
     stats = client.get_stats(today.isoformat())
     profile = sc.dig(stats, "userProfileId")
@@ -1421,11 +1469,19 @@ def cleanup(store: Any, client: Any, today: dt.date, *, dry_run: bool, orphans: 
         return mine[pid]
 
     owned = {int(r["garmin_workout_id"]) for r in rows if r.get("garmin_workout_id") and r["state"] != "deleted"}
-    candidates = [r for r in rows if r["state"] in ON_GARMIN + ("unknown",) and r.get("garmin_workout_id")
-                  and not r.get("linked_activity_id") and r["date_local"] >= today]
+    # Rows a crash left mid-request (uploading, scheduling) with a workout id are on Garmin too.
+    candidates = [r for r in rows if r["state"] in ON_GARMIN + ("unknown", "uploading", "scheduling")
+                  and r.get("garmin_workout_id") and not r.get("linked_activity_id") and r["date_local"] >= today]
     todo = [r for r in candidates if of_this_account(str(r["plan_id"]))]
     other_account = len(candidates) - len(todo)
-    todo = _without_done_today(client, todo, today)
+    by_workout: Dict[int, List[Mapping[str, Any]]] = {}
+    if todo:
+        first_day = min(r["date_local"] for r in todo) - dt.timedelta(days=1)
+        last_day = max(r["date_local"] for r in todo) + dt.timedelta(days=1)
+        by_workout = _entries_by_workout(_calendar(client, first_day, last_day))
+        # A workout Garmin linked to an activity (associatedActivityId) is done: kept, also with PLAN_TRACKING off.
+        todo = [r for r in todo if not any(_pos_int(e.get("associatedActivityId")) is not None
+                                           for e in by_workout.get(int(r["garmin_workout_id"])) or [])]
     counts = {"rows": len(todo), "orphans": 0, "other_account": other_account, "deleted": 0, "failed": 0}
     orphan_ids = _orphans(client, tag, owned, today) if orphans else []
     counts["orphans"] = len(orphan_ids)
@@ -1444,25 +1500,38 @@ def cleanup(store: Any, client: Any, today: dt.date, *, dry_run: bool, orphans: 
             return "ok"
         return MAYBE if status == "running" else classify(value)
 
-    for r in todo:
-        sid = _pos_int(r.get("garmin_schedule_id"))
-        if sid is not None:
+    def unschedule_then_delete(wid: int, sids: Sequence[int], row: Optional[Dict[str, Any]]) -> Optional[str]:
+        """The outcome of the workout's delete; None when an unschedule failed (the workout stays); RATE stops."""
+        if any(not sid for sid in sids):
+            return None   # an entry without its id cannot be unscheduled
+        for sid in sorted(set(sids)):
             outcome = send(f"workout-service/schedule/{sid}")
             if outcome == RATE:
-                counts["failed"] += 1
-                break
-        outcome = send(f"workout-service/workout/{int(r['garmin_workout_id'])}")
+                return RATE
+            if outcome not in ("ok", GONE):
+                return None
+        if row is not None and row["state"] != "unscheduled":
+            store.put_workout(row["plan_id"], {**row, "state": "unscheduled"})
+        return send(f"workout-service/workout/{wid}")
+
+    stopped = False
+    for r in todo:
+        wid = int(r["garmin_workout_id"])
+        sids = [schedule_id_of(e) or 0 for e in by_workout.get(wid) or []]
+        stored = _pos_int(r.get("garmin_schedule_id"))
+        outcome = unschedule_then_delete(wid, sids + ([stored] if stored else []), r)
         if outcome == RATE:
             counts["failed"] += 1
+            stopped = True
             break
         if outcome in ("ok", GONE):
             store.put_workout(r["plan_id"], {**r, "state": "deleted"})
             counts["deleted"] += 1
         else:
             counts["failed"] += 1
-    else:
-        for wid in orphan_ids:
-            outcome = send(f"workout-service/workout/{wid}")
+    if not stopped:
+        for wid, sids in orphan_ids:
+            outcome = unschedule_then_delete(wid, sids, None)
             if outcome == RATE:
                 counts["failed"] += 1
                 break

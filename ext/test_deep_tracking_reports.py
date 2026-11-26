@@ -263,25 +263,25 @@ class DailySwitch(Quiet):
 class DailyPlan(Quiet):
     def setUp(self):
         super().setUp()
-        self.store, self.fp, self.pid = plan_store([session("w01-e0", day(0)), session("w01-e1", day(1)),
-                                                    session("w01-q1", day(2), role="threshold", km=10.0,
+        self.store, self.fp, self.pid = plan_store([session("20300210-run", day(0)), session("20261202-run", day(1)),
+                                                    session("20261203-run", day(2), role="threshold", km=10.0,
                                                             minutes=55)])
         self.use(self.store)
 
     def test_todays_session_done_and_feedback_due(self):
-        self.store.put_workout(self.pid, {"workout_key": "w01-e1", "version": 1, "date_local": day(1), "role": "easy",
+        self.store.put_workout(self.pid, {"workout_key": "20261202-run", "version": 1, "date_local": day(1), "role": "easy",
                                           "dto_hash": "0" * 64, "state": "scheduled", "garmin_workout_id": 7001})
-        self.store.put_workout(self.pid, {"workout_key": "w01-e1~abcdef01", "version": 1, "date_local": day(1),
+        self.store.put_workout(self.pid, {"workout_key": "20261202-run~abcdef01", "version": 1, "date_local": day(1),
                                           "role": "easy", "dto_hash": "1" * 64, "state": "deleted",
                                           "garmin_workout_id": 7003})
         data = daily_data(day(1), acts_today=[run(1, day(1))],
                           entries=[entry(7001, day(1)), entry(7002, day(1), "Other"), entry(7003, day(1), "Old")])
         out = build_daily(data, text_format="markdown")
-        self.assertEqual(out["plan"], {"workout_key": "w01-e1", "date": "2026-12-01", "role": "easy", "sport": "run",
+        self.assertEqual(out["plan"], {"workout_key": "20261202-run", "date": "2026-12-01", "role": "easy", "sport": "run",
                                        "planned_km": 8.0, "planned_min": 48, "link_status": "done",
-                                       "feedback_due": True, "feedback_for": "w01-e1"})
+                                       "feedback_due": True, "feedback_for": "20261202-run"})
         plans = [w.get("plan") for w in out["today"]]
-        self.assertEqual(plans, [{"workout_key": "w01-e1", "role": "easy"}, None, None])
+        self.assertEqual(plans, [{"workout_key": "20261202-run", "role": "easy"}, None, None])
         self.assertIn("Plan: easy run 8 km 48 min (done); feedback due (effort and pain)", out["text"])
         golden = golden_daily(data)
         for key in ("level", "flags", "recommendation", "missing", "rules_version"):
@@ -290,11 +290,11 @@ class DailyPlan(Quiet):
 
     def test_feedback_for_prefers_today_then_yesterday(self):
         data = daily_data(day(1), acts_prev=[run(1, day(0))], acts_today=[run(2, day(1))])
-        self.assertEqual(build_daily(data)["plan"]["feedback_for"], "w01-e1")
-        self.store.save_feedback(self.pid, "w01-e1", 4, 0, "none", False)
+        self.assertEqual(build_daily(data)["plan"]["feedback_for"], "20261202-run")
+        self.store.save_feedback(self.pid, "20261202-run", 4, 0, "none", False)
         out = build_daily(data)["plan"]
-        self.assertEqual((out["feedback_due"], out["feedback_for"]), (True, "w01-e0"))
-        self.store.save_feedback(self.pid, "w01-e0", 4, 0, "none", False)
+        self.assertEqual((out["feedback_due"], out["feedback_for"]), (True, "20300210-run"))
+        self.store.save_feedback(self.pid, "20300210-run", 4, 0, "none", False)
         out = build_daily(data, text_format="markdown")
         self.assertEqual((out["plan"]["feedback_due"], out["plan"]["feedback_for"]), (False, None))
         self.assertNotIn("feedback due", out["text"])
@@ -302,12 +302,12 @@ class DailyPlan(Quiet):
     def test_partial_is_due_replaced_and_missed_are_not(self):
         for status, due in (("partial_late", True), ("done_early", True), ("replaced", False), ("missed", False)):
             with self.subTest(status=status):
-                self.store.save_links(self.pid, 1, [{"workout_key": "w01-e0", "date_local": day(0), "role": "easy",
+                self.store.save_links(self.pid, 1, [{"workout_key": "20300210-run", "date_local": day(0), "role": "easy",
                                                      "dto_hash": "0" * 64, "linked_activity_id": None,
                                                      "link_status": status}])
                 out = build_daily(daily_data(day(1)))["plan"]
                 self.assertEqual(out["feedback_due"], due)
-                self.assertEqual(out["feedback_for"], "w01-e0" if due else None)
+                self.assertEqual(out["feedback_for"], "20300210-run" if due else None)
 
     def test_a_gmt_only_run_is_dated_by_the_day_it_was_listed_under(self):
         # Garmin lists a run under Tuesday (the watch abroad, 20:00 in New York) with startTimeGMT only:
@@ -327,7 +327,7 @@ class DailyPlan(Quiet):
 
     def test_two_days_back_is_not_due(self):
         data = daily_data(day(2), acts_prev=[], acts_today=[])
-        self.store.save_links(self.pid, 1, [{"workout_key": "w01-e0", "date_local": day(0), "role": "easy",
+        self.store.save_links(self.pid, 1, [{"workout_key": "20300210-run", "date_local": day(0), "role": "easy",
                                              "dto_hash": "0" * 64, "linked_activity_id": 5, "link_status": "done"}])
         self.assertFalse(build_daily(data, when=day(2))["plan"]["feedback_due"])
 
@@ -337,9 +337,9 @@ class DailyPlan(Quiet):
         out = build_daily(data, when=when, text_format="markdown")
         self.assertEqual(out["plan"], {"workout_key": None, "date": "2026-12-03", "role": "rest", "sport": None,
                                        "planned_km": None, "planned_min": None, "link_status": None,
-                                       "feedback_due": True, "feedback_for": "w01-q1"})
+                                       "feedback_due": True, "feedback_for": "20261203-run"})
         self.assertIn("Plan: rest day; feedback due (effort and pain)", out["text"])
-        self.store.save_feedback(self.pid, "w01-q1", 6, 0, "none", False)
+        self.store.save_feedback(self.pid, "20261203-run", 6, 0, "none", False)
         out = build_daily(data, when=when, text_format="markdown")
         lines = [line for line in out["text"].splitlines() if "Plan:" in line]
         self.assertEqual(len(lines), 1)
@@ -397,7 +397,7 @@ class DailyPlan(Quiet):
 class DailyStoreFailures(Quiet):
     def setUp(self):
         super().setUp()
-        self.store, self.fp, self.pid = plan_store([session("w01-e1", day(1))])
+        self.store, self.fp, self.pid = plan_store([session("20261202-run", day(1))])
         self.data = daily_data(day(1), acts_today=[run(1, day(1))])
         self.golden = stable(golden_daily(self.data))
 
@@ -423,7 +423,7 @@ class DailyStoreFailures(Quiet):
         self.use(Spy(self.store, raise_in=("save_links",)))
         with self.assertLogs("garmin_ext.plans", "WARNING"):
             out = build_daily(self.data)
-        self.assertEqual((out["plan"]["workout_key"], out["plan"]["link_status"]), ("w01-e1", None))
+        self.assertEqual((out["plan"]["workout_key"], out["plan"]["link_status"]), ("20261202-run", None))
 
     def test_feedback_read_failing_is_null(self):
         self.use(Spy(self.store, raise_in=("feedback",)))
@@ -457,7 +457,7 @@ class DailyClock(Quiet):
             for local, expected_day in ((dt.datetime(2026, 12, 2, 0, 5), day(2)),
                                         (dt.datetime(2026, 12, 1, 23, 55), day(1))):
                 with self.subTest(tz=tz_name, local=local):
-                    store, fp, pid = plan_store([session("w01-e1", day(1)), session("w01-q1", day(2),
+                    store, fp, pid = plan_store([session("20261202-run", day(1)), session("20261203-run", day(2),
                                                                                     role="threshold")])
                     self.use(store)
                     now = local.replace(tzinfo=zone).astimezone(UTC)        # the server clock in UTC
@@ -465,10 +465,10 @@ class DailyClock(Quiet):
                                       [run(1, day(1), hour=23)])
                     out = asyncio.run(ds.build_daily_status(DailyClient(data), "", tz=tz_name, now=now))
                     self.assertEqual(out["plan"]["date"], expected_day.isoformat())
-                    self.assertEqual(out["plan"]["workout_key"], "w01-q1" if expected_day == day(2) else "w01-e1")
+                    self.assertEqual(out["plan"]["workout_key"], "20261203-run" if expected_day == day(2) else "20261202-run")
                     if expected_day == day(2):
                         # Yesterday's 23:00 run completed yesterday's session: feedback due for it.
-                        self.assertEqual(out["plan"]["feedback_for"], "w01-e1")
+                        self.assertEqual(out["plan"]["feedback_for"], "20261202-run")
                     else:
                         # Monday's run, the day before Tuesday's session: done_early.
                         self.assertEqual(out["plan"]["link_status"], "done_early")
@@ -476,7 +476,7 @@ class DailyClock(Quiet):
     def test_dst_end_weekend_in_jerusalem(self):
         # Israel leaves DST on Sunday 25 Oct 2026; a GMT-only run at 21:30 GMT on Saturday is 00:30 Sunday local.
         sunday = dt.date(2026, 10, 25)
-        store, fp, pid = plan_store([session("w01-e1", sunday)], weeks=1, start=dt.date(2026, 10, 19),
+        store, fp, pid = plan_store([session("20261202-run", sunday)], weeks=1, start=dt.date(2026, 10, 19),
                                     created=dt.datetime(2026, 10, 1, tzinfo=UTC))
         self.use(store)
         act = {"activityId": 3, "activityType": {"typeKey": "running"}, "startTimeGMT": "2026-10-24 21:30:00",
@@ -514,8 +514,8 @@ def golden_weekly(fx, **kw):
 
 # The week Mon 30 Nov .. Sun 6 Dec, reported on Mon 7 Dec: Monday missed, Wednesday run on Thursday, Friday a
 # ride, Saturday a short long run, Sunday not settled yet (its late day is today).
-WEEK = [session("w01-e1", day(0)), session("w01-e2", day(2)), session("w01-e3", day(4), minutes=36),
-        session("w01-l", day(5), role="long", km=20.0, minutes=120), session("w01-e4", day(6), km=6.0, minutes=36)]
+WEEK = [session("20261202-run", day(0)), session("20261205-run", day(2)), session("20300213-run", day(4), minutes=36),
+        session("20300221-run", day(5), role="long", km=20.0, minutes=120), session("20300214-run", day(6), km=6.0, minutes=36)]
 WEEK_ACTS = [run(11, day(3)), run(12, day(4), type_key="road_biking", km=21.0, minutes=45.0),
              run(13, day(5), km=12.0, minutes=75.0)]
 WEEK_COUNTS = {"planned": 5, "done": 1, "partial": 1, "missed": 1, "replaced": 1, "moved": 1, "open": 1}
@@ -558,8 +558,8 @@ class WeeklyCounts(Quiet):
         self.assertIn("Training plan: 1 of 5 sessions done, 1 partly done, 1 moved, 1 replaced, 1 missed, "
                       "1 still open", out["text"])
         links = {r["workout_key"]: (r["link_status"], r["linked_activity_id"]) for r in self.store.links(self.pid)}
-        self.assertEqual(links, {"w01-e1": ("missed", None), "w01-e2": ("done_late", 11), "w01-e3": ("replaced", 12),
-                                 "w01-l": ("partial", 13)})
+        self.assertEqual(links, {"20261202-run": ("missed", None), "20261205-run": ("done_late", 11), "20300213-run": ("replaced", 12),
+                                 "20300221-run": ("partial", 13)})
         golden = golden_weekly(weekly_fx(WEEK_ACTS))
         for key in ("level", "flags", "missing", "plan", "rules_version"):
             self.assertEqual(out[key], golden[key])
@@ -600,7 +600,7 @@ class WeeklyCounts(Quiet):
         self.assertNotIn("Training plan:", out["text"])
 
     def test_garmin_link_in_the_weeks_calendar(self):
-        self.store.put_workout(self.pid, {"workout_key": "w01-e1", "version": 1, "date_local": day(0), "role": "easy",
+        self.store.put_workout(self.pid, {"workout_key": "20261202-run", "version": 1, "date_local": day(0), "role": "easy",
                                           "dto_hash": "0" * 64, "state": "scheduled", "garmin_workout_id": 8001})
         items = [{"workoutId": 8001, "scheduleDate": day(0).isoformat(), "workoutType": "running",
                   "associatedActivityId": 555, "isRestDay": False}]

@@ -29,12 +29,16 @@ def _s(key: str, day: dt.date, role: str, km: float, minutes: Optional[float]) -
             "hard_or_long": role in pe.HARD_ROLES}
 
 
+def _k(start, days):
+    return pe.session_key(start + dt.timedelta(days=days))
+
+
 def _week(n: int, start: dt.date, scale: float = 1.0, quality: bool = True) -> Dict[str, Any]:
-    sessions = [_s(f"w{n:02d}-e1", start + dt.timedelta(days=1), "easy", round(10 * scale, 1), 60),
-                _s(f"w{n:02d}-e2", start + dt.timedelta(days=4), "easy", round(10 * scale, 1), 60),
-                _s(f"w{n:02d}-long", start + dt.timedelta(days=6), "long", round(20 * scale, 1), 120)]
+    sessions = [_s(_k(start, 1), start + dt.timedelta(days=1), "easy", round(10 * scale, 1), 60),
+                _s(_k(start, 4), start + dt.timedelta(days=4), "easy", round(10 * scale, 1), 60),
+                _s(_k(start, 6), start + dt.timedelta(days=6), "long", round(20 * scale, 1), 120)]
     if quality:
-        sessions.insert(1, _s(f"w{n:02d}-q1", start + dt.timedelta(days=2), "threshold", round(10 * scale, 1), 50))
+        sessions.insert(1, _s(_k(start, 2), start + dt.timedelta(days=2), "threshold", round(10 * scale, 1), 50))
     return {"week": n, "start": start.isoformat(), "end": (start + dt.timedelta(days=6)).isoformat(),
             "kind": "normal", "sessions": sessions}
 
@@ -110,7 +114,7 @@ class Thresholds(ReviewBase):
         for long_km, expect in ((5.0, []), (4.95, [("A1", "repeat_volume")]), (4.9, [("A1", "repeat_volume")]),
                                 (0.0, [("A1", "repeat_volume")])):
             with self.subTest(long_km=long_km):
-                self.run_km("w02-long", long_km)
+                self.run_km("20261206-run", long_km)
                 out = self.review()
                 self.assertEqual(sorted((c["rule"], c["kind"]) for c in out["changes"]), expect,
                                  out["metrics"]["completion_pct"])
@@ -119,25 +123,25 @@ class Thresholds(ReviewBase):
                     self.assertEqual((c["from"]["km"], c["to"]["km"]), (55.0, 50.0))
                     self.assertEqual(c["evidence"]["threshold"], 70)
         # a run longer than planned counts up to its planned km; open sessions are not due
-        self.run_km("w02-long", 40.0)
+        self.run_km("20261206-run", 40.0)
         self.assertEqual(self.review()["metrics"]["done_km"], 50.0)
-        self.links["w02-long"] = None
+        self.links["20261206-run"] = None
         out = self.review()
         self.assertEqual((out["metrics"]["due_km"], out["metrics"]["sessions"]["open"]), (30.0, 1))
 
     def test_a1_partial_missed_replaced(self):
-        self.links["w02-long"] = "partial"
-        self.run_km("w02-long", None)          # partial without a distance counts nothing: 30 of 50
+        self.links["20261206-run"] = "partial"
+        self.run_km("20261206-run", None)          # partial without a distance counts nothing: 30 of 50
         self.assertEqual(self.kinds(), [("A1", "repeat_volume")])
-        self.links["w02-long"] = "done_late"   # done without a distance counts the planned km
+        self.links["20261206-run"] = "done_late"   # done without a distance counts the planned km
         self.assertEqual(self.kinds(), [])
-        self.links["w02-long"] = "replaced"    # replaced: due, nothing done
+        self.links["20261206-run"] = "replaced"    # replaced: due, nothing done
         self.assertEqual(self.review()["metrics"]["completion_pct"], 60.0)
         self.assertEqual(self.kinds(), [("A1", "repeat_volume")])
 
     def test_a1_only_when_lower(self):
         b = body(next_scale=0.9)                # next week 45 km < this week's 50
-        self.run_km("w02-long", 0.0)
+        self.run_km("20261206-run", 0.0)
         self.assertEqual(self.kinds(b=b), [])
 
     def test_a2_from_weekly_status_flags(self):
@@ -171,7 +175,7 @@ class Thresholds(ReviewBase):
                     self.assertEqual(a2[0]["evidence"]["also"][0]["metric"], "easy_rpe_mean")
         # mean easy RPE 5.5 (5 and 6) is under 6
         self.setUp()
-        self.feedback["w02-e1"], self.feedback["w02-e2"] = pr.Feedback(5, 0, False), pr.Feedback(6, 0, False)
+        self.feedback["20261201-run"], self.feedback["20261204-run"] = pr.Feedback(5, 0, False), pr.Feedback(6, 0, False)
         self.assertFalse([c for c in self.review(pr.Health(acwr=1.5))["changes"] if c["rule"] == "A2"])
         # beside HRV, ACWR is cited in evidence.also
         out = self.review(pr.Health(flags=("hrv_down",), hrv_7d=50, hrv_28d=60, acwr=1.4))
@@ -180,14 +184,14 @@ class Thresholds(ReviewBase):
         self.assertEqual(a2["evidence"]["value"], 10.0)
 
     def test_a3_missed_long_run(self):
-        self.links["w02-long"] = "missed"
+        self.links["20261206-run"] = "missed"
         out = self.review()
         a3 = [c for c in out["changes"] if c["rule"] == "A3"]
         self.assertEqual(len(a3), 1)
         self.assertEqual((a3[0]["from"]["km"], a3[0]["to"]["km"]), (22.0, 20.0))
-        self.links["w02-long"] = "partial"
+        self.links["20261206-run"] = "partial"
         self.assertFalse([c for c in self.review()["changes"] if c["rule"] == "A3"])
-        self.links["w02-long"] = "missed"
+        self.links["20261206-run"] = "missed"
         self.assertFalse([c for c in self.review(b=body(next_scale=1.0))["changes"] if c["rule"] == "A3"])
 
     def test_a4_easy_rpe_6_in_both_weeks(self):
@@ -218,16 +222,16 @@ class Thresholds(ReviewBase):
         for factor, rpe, expect in ((1.02, 5, True), (1.019, 5, False), (1.05, 6, False), (1.05, 1, True)):
             with self.subTest(factor=factor, rpe=rpe):
                 self.setUp()
-                self.run_speed("w02-q1", factor)
-                self.feedback["w02-q1"] = pr.Feedback(rpe, 0, False)
+                self.run_speed("20261202-run", factor)
+                self.feedback["20261202-run"] = pr.Feedback(rpe, 0, False)
                 a5 = [c for c in self.review()["changes"] if c["rule"] == "A5"]
                 self.assertEqual(bool(a5), expect)
                 if a5:
                     self.assertEqual((a5[0]["edits"], a5[0]["advice"]), ([], pr.ADVICE_RETEST))
         self.setUp()
-        self.run_speed("w02-q1", 1.1)
-        self.feedback["w02-q1"] = pr.Feedback(4, 0, False)
-        self.links["w02-q1"] = "missed"
+        self.run_speed("20261202-run", 1.1)
+        self.feedback["20261202-run"] = pr.Feedback(4, 0, False)
+        self.links["20261202-run"] = "missed"
         self.assertFalse([c for c in self.review()["changes"] if c["rule"] == "A5"])
 
     def test_a6_pain_4_or_sharp_always_with_advice(self):
@@ -238,7 +242,7 @@ class Thresholds(ReviewBase):
             for pain, sharp, expect in ((3, False, False), (4, False, True), (0, True, True), (10, True, True)):
                 with self.subTest(scenario=name, pain=pain, sharp=sharp):
                     self.setUp()
-                    self.feedback["w02-e1"] = pr.Feedback(4, pain, sharp)
+                    self.feedback["20261201-run"] = pr.Feedback(4, pain, sharp)
                     out = self.review(b=b)
                     a6 = [c for c in out["changes"] if c["rule"] == "A6"]
                     self.assertEqual(bool(a6), expect)
@@ -250,7 +254,7 @@ class Thresholds(ReviewBase):
                         self.assertEqual(metric, "sharp" if pain < 4 else "pain")
         # an ended next week: advice only
         self.setUp()
-        self.feedback["w02-e1"] = pr.Feedback(4, 5, False)
+        self.feedback["20261201-run"] = pr.Feedback(4, 5, False)
         out = self.review(today=NEXT + dt.timedelta(days=7))
         self.assertEqual([(c["rule"], c["kind"]) for c in out["changes"]], [("A6", "pain_advice")])
 
@@ -283,8 +287,8 @@ class Thresholds(ReviewBase):
     def test_change_ids_are_stable_and_distinct(self):
         self.rpe_easy(1, 7)
         self.rpe_easy(2, 7)
-        self.links["w02-long"] = "missed"
-        self.feedback["w02-e2"] = pr.Feedback(7, 6, True)
+        self.links["20261206-run"] = "missed"
+        self.feedback["20261204-run"] = pr.Feedback(7, 6, True)
         h = pr.Health(flags=("hrv_down",), hrv_7d=40, hrv_28d=50)
         a, b = self.review(h), self.review(h)
         self.assertEqual(a, b)

@@ -91,6 +91,13 @@ class FakeGarminWrites(unittest.TestCase):
         self.assertEqual([c["method"] for c in gw.write_calls(log.calls)],
                          ["upload_workout", "schedule_workout", "unschedule_workout", "delete_workout"])
 
+    def test_the_library_lists_the_newest_workout_first(self):
+        client, _world, _log = self.client()
+        ids = [client.upload_workout({"workoutName": f"Coach {n}", "sportType": {"sportTypeKey": "running"}})
+               ["workoutId"] for n in range(3)]
+        listed = [w["workoutId"] for w in client.get_workouts(0, 100) if w["workoutId"] in ids]
+        self.assertEqual(listed, sorted(ids, reverse=True))
+
     def test_raw_client_paths_answer_like_garminconnect(self):
         from garminconnect import GarminConnectConnectionError
 
@@ -102,7 +109,8 @@ class FakeGarminWrites(unittest.TestCase):
         self.assertEqual(resp.json()["calendarDate"], "2026-11-25")
         gone = client.client.delete("connectapi", f"/workout-service/workout/{made['workoutId']}")
         self.assertEqual(gone.status_code, 204)
-        self.assertEqual(self.calendar(client, "2026-11-25"), [], "deleting a workout removes its entries")
+        # Garmin is not known to remove a deleted workout's calendar entries: the fake keeps them.
+        self.assertEqual([e["workoutId"] for e in self.calendar(client, "2026-11-25")], [made["workoutId"]])
         with self.assertRaisesRegex(GarminConnectConnectionError, "API Error 404"):
             client.client.delete("connectapi", "/workout-service/workout/91000099", api=True)
         with self.assertRaises(ValueError):

@@ -71,7 +71,7 @@ def default_data():
             {"scheduleDate": "2026-12-16", "workoutName": "VO2 intervals", "workoutType": "running",
              "estimatedDurationInSecs": 3600, "isRestDay": False},
             {"scheduleDate": "2026-12-19", "workoutName": "Coach Long run", "workoutType": "running",
-             "estimatedDistanceInMeters": 20000},
+             "estimatedDistanceInMeters": 20000, "workoutId": 8801},
         ]}},
     }
 
@@ -236,10 +236,20 @@ class Preview(Base):
         out = json.loads(self.preview())
         hard = {s["date"] for w in out["weeks"] for s in w["sessions"] if s["hard_or_long"]}
         self.assertFalse({"2026-12-15", "2026-12-16", "2026-12-17"} & hard)
-        # "Coach Long run" on 2026-12-19 is the plan's own name: not a fixed session.
-        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26)))[0]
+        # "Coach Long run" on 2026-12-19 is ours only by its workout id in the plan store; by name only while the
+        # store cannot be read. A user's own workout named "Coach ..." is a fixed session.
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26), own_ids={8801}))[0]
         self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16"])
         self.assertTrue(snap.fixed[0].hard)
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26), own_ids=set()))[0]
+        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16", "2026-12-19"])
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26)))[0]
+        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16"])
+        # plan_preview reads the ids from the store: no row owns 8801, so the long run on 12-19 is fixed.
+        self.assertEqual(pt.own_workout_ids(lambda: self.store), set())
+        self.assertIsNone(pt.own_workout_ids(lambda: BrokenStore()))
+        moved = {s["date"] for w in out["weeks"] for s in w["sessions"] if s["role"] == "long"}
+        self.assertNotIn("2026-12-19", moved)
 
     def test_overrides_and_refusals(self):
         base = json.loads(self.preview())
@@ -252,7 +262,7 @@ class Preview(Base):
     def test_bad_overrides(self):
         for value in ("not json", "{}", '[{"kind": "grow"}]', '[{"kind": "easy", "key": "../x"}]',
                       '[{"kind": "cap_week_km", "week_start": "2026-12-07", "km": -1}]',
-                      '[{"kind": "easy", "key": "w01-long", "extra": 1}]',
+                      '[{"kind": "easy", "key": "20300220-run", "extra": 1}]',
                       json.dumps([{"kind": "rest", "date": "2026-12-01"}] * 21)):
             with self.subTest(value=value[:40]):
                 self.assertTrue(self.preview(overrides=value).startswith("Error: Invalid input: "))

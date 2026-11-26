@@ -5,16 +5,16 @@
  "plan": {
   "weeks": [
    {"week": 1, "start": "2026-11-30", "end": "2026-12-06", "sessions": [
-    {"key": "w01-e1", "date": "2026-12-01", "role": "easy", "km": 8.0, "minutes": 48},
-    {"key": "w01-q1", "date": "2026-12-02", "role": "threshold", "km": 10.0, "minutes": 55},
-    {"key": "w01-e2", "date": "2026-12-04", "role": "easy", "km": 6.0, "minutes": 36},
-    {"key": "w01-l", "date": "2026-12-06", "role": "long", "km": 20.0, "minutes": 120}]},
+    {"key": "20261202-run", "date": "2026-12-01", "role": "easy", "km": 8.0, "minutes": 48},
+    {"key": "20261203-run", "date": "2026-12-02", "role": "threshold", "km": 10.0, "minutes": 55},
+    {"key": "20261205-run", "date": "2026-12-04", "role": "easy", "km": 6.0, "minutes": 36},
+    {"key": "20300221-run", "date": "2026-12-06", "role": "long", "km": 20.0, "minutes": 120}]},
    {"week": 2, "start": "2026-12-07", "end": "2026-12-13", "sessions": [
-    {"key": "w02-e1", "date": "2026-12-08", "role": "easy", "km": 8.0, "minutes": 48},
-    {"key": "w02-am", "date": "2026-12-09", "role": "easy", "km": 6.0, "minutes": 36},
-    {"key": "w02-q1", "date": "2026-12-09", "role": "intervals", "km": 10.0, "minutes": 60},
-    {"key": "w02-e2", "date": "2026-12-11", "role": "easy", "km": 6.0, "minutes": 36},
-    {"key": "w02-l", "date": "2026-12-13", "role": "long", "km": 22.0, "minutes": 130}]}
+    {"key": "20300323-run", "date": "2026-12-08", "role": "easy", "km": 8.0, "minutes": 48},
+    {"key": "20300409-run", "date": "2026-12-09", "role": "easy", "km": 6.0, "minutes": 36},
+    {"key": "20300329-run", "date": "2026-12-09", "role": "intervals", "km": 10.0, "minutes": 60},
+    {"key": "20300324-run", "date": "2026-12-11", "role": "easy", "km": 6.0, "minutes": 36},
+    {"key": "20300402-run", "date": "2026-12-13", "role": "long", "km": 22.0, "minutes": 130}]}
   ]
  },
  "activities": [
@@ -29,14 +29,14 @@
   {"activityId": 9100009, "activityType": {"typeKey": "running"}, "startTimeLocal": "2026-12-13 06:00:00", "distance": 22000.0, "duration": 7680.0}
  ],
  "expected": {
-  "w01-e1": ["done", 9100001],
-  "w01-q1": ["done_late", 9100002],
-  "w01-e2": ["replaced", 9100003],
-  "w01-l": ["partial", 9100005],
-  "w02-e1": ["missed", null],
-  "w02-am": ["done", 9100006],
-  "w02-q1": ["done", 9100007],
-  "w02-e2": ["done_late", 9100008],
-  "w02-l": ["done", 9100009]
+  "20261202-run": ["done", 9100001],
+  "20261203-run": ["done_late", 9100002],
+  "20261205-run": ["replaced", 9100003],
+  "20300221-run": ["partial", 9100005],
+  "20300323-run": ["missed", null],
+  "20300409-run": ["done", 9100006],
+  "20300329-run": ["done", 9100007],
+  "20300324-run": ["done_late", 9100008],
+  "20300402-run": ["done", 9100009]
  }
 }

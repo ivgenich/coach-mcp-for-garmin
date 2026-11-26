@@ -164,7 +164,7 @@ class DeepRaw:
                 if n not in self.g.library:
                     raise http(404)
                 del self.g.library[n]
-                self.g.calendar = [e for e in self.g.calendar if e.get("workoutId") != n]
+                # its calendar entries stay: Garmin is not known to remove them with the workout
         return self._finish(fault, {}, n)
 
 

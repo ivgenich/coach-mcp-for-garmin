@@ -64,9 +64,9 @@ def plan_answer(sessions, content="a"):
 
 def default_sessions():
     d = TODAY
-    return [session("w01-e1", d + dt.timedelta(days=1)),
-            session("w01-q1", d + dt.timedelta(days=2), role="threshold", km=10.0, hard=True),
-            session("w01-e2", d + dt.timedelta(days=4))]
+    return [session("20261202-run", d + dt.timedelta(days=1)),
+            session("20261203-run", d + dt.timedelta(days=2), role="threshold", km=10.0, hard=True),
+            session("20261205-run", d + dt.timedelta(days=4))]
 
 
 class FakeRaw:
@@ -125,7 +125,7 @@ class FakeRaw:
                 if n not in self.g.library:
                     raise ConnectionError("API Error 404 - Not Found")
                 del self.g.library[n]
-                self.g.calendar = [e for e in self.g.calendar if e.get("workoutId") != n]
+                # its calendar entries stay: Garmin is not known to remove them with the workout
         return Resp({})
 
 
@@ -161,8 +161,10 @@ class FakeGarmin:
     def query_garmin_graphql(self, query):
         self._read("calendar")
         assert query["query"].startswith("query{workoutScheduleSummariesScalar")
-        with self.lock:
-            return {"data": {"workoutScheduleSummariesScalar": copy.deepcopy(self.calendar)}}
+        start, end = re.search(r'startDate:"([0-9-]+)", endDate:"([0-9-]+)"', query["query"]).groups()
+        with self.lock:   # only the asked days, as Garmin answers
+            return {"data": {"workoutScheduleSummariesScalar": copy.deepcopy(
+                [e for e in self.calendar if start <= str(e.get("scheduleDate"))[:10] <= end])}}
 
     def get_workouts(self, start, limit):
         self._read("library")
@@ -249,7 +251,7 @@ class Commit(Base):
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(out["confirmed_by"], "token")
-        self.assertEqual([w["key"] for w in out["written"]], ["w01-e1", "w01-q1", "w01-e2"])
+        self.assertEqual([w["key"] for w in out["written"]], ["20261202-run", "20261203-run", "20261205-run"])
         self.assertEqual(len(self.garmin.library), 3)
         self.assertEqual(len(self.garmin.calendar), 3)
         self.assertEqual(len(self.garmin.writes()), 6)
@@ -259,7 +261,7 @@ class Commit(Base):
         self.assertEqual(self.store.get_plan(self.fp, pid)["status"], "active")
         tag = self.store.install_tag()
         for w in self.garmin.library.values():
-            self.assertTrue(w["description"].startswith(f"coach-mcp {tag} {pid} w01-"))
+            self.assertTrue(w["description"].startswith(f"coach-mcp {tag} {pid} 2026120"))
             self.assertTrue(w["workoutName"].startswith("Coach "))
 
     def test_same_token_twice_calls_garmin_no_more(self):
@@ -291,7 +293,7 @@ class Commit(Base):
 
     def test_commit_days_limit_the_window(self):
         pid, commit = self.preview(days=2)
-        self.assertEqual([o["key"] for o in commit["ops"]], ["w01-e1"])
+        self.assertEqual([o["key"] for o in commit["ops"]], ["20261202-run"])
         for bad in (0, 22, "x", True):
             with self.assertRaises(pw.BadInput):
                 pw.parse_commit_days(bad)
@@ -306,8 +308,8 @@ class Commit(Base):
         self.assertIn("15 minutes", out["note"])
         self.assertEqual(out["remaining"], 2)
         rows = self.rows(pid)
-        self.assertEqual(rows["w01-e1"]["state"], "scheduled")
-        self.assertEqual(rows["w01-q1"]["state"], "pending")
+        self.assertEqual(rows["20261202-run"]["state"], "scheduled")
+        self.assertEqual(rows["20261203-run"]["state"], "pending")
         self.assertEqual(self.store.tokens[ps.token_hash(commit["token"])]["status"], "partial")
         again = self.commit(pid, commit["token"])
         self.assertEqual(again["status"], "done", again)
@@ -319,12 +321,12 @@ class Commit(Base):
         self.garmin.faults["schedule"] = [ConnectionError("API Error 429 - Too Many Requests")]
         out = self.commit(pid, commit["token"])
         self.assertEqual((out["status"], out["retry_after_s"]), ("partial", 900))
-        row = self.rows(pid)["w01-e1"]
+        row = self.rows(pid)["20261202-run"]
         self.assertEqual(row["state"], "uploaded")
         wid = row["garmin_workout_id"]
         again = self.commit(pid, commit["token"])
         self.assertEqual(again["status"], "done")
-        self.assertEqual(self.rows(pid)["w01-e1"]["garmin_workout_id"], wid)
+        self.assertEqual(self.rows(pid)["20261202-run"]["garmin_workout_id"], wid)
         self.assertEqual(len(self.garmin.library), 3)
         self.assertEqual(len(self.garmin.calendar), 3)
 
@@ -333,22 +335,22 @@ class Commit(Base):
         self.garmin.faults["create"] = [ConnectTimeout("connect")]
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "partial", out)
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "pending")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "pending")
         self.garmin.faults["create"] = [ReadTimeout("read")]
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "unknown", out)
         self.assertEqual(out["retry_after_s"], pw.RETRY_AFTER_UNKNOWN_S)
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "unknown")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
         self.assertEqual(len(self.garmin.library), 0)
 
     def test_a_late_post_after_the_timeout_leaves_one_workout(self):
         """The first upload hangs past the helper's wait and lands afterwards; the retry adopts it by its marker
         instead of uploading again: one workout and one calendar entry."""
-        pid, commit = self.preview(sessions=[session("w01-e1", TODAY + dt.timedelta(days=1))])
+        pid, commit = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
         self.garmin.faults["create"] = ["block"]
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "unknown", out)
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "unknown")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "unknown")
         # Called again while the thread still runs: nothing is written, the row waits.
         again = self.commit(pid, commit["token"])
         self.assertEqual(again["status"], "partial", again)
@@ -367,7 +369,7 @@ class Commit(Base):
                          [("POST", "workout-service/workout")])
 
     def test_an_unknown_upload_that_never_landed_is_sent_again(self):
-        pid, commit = self.preview(sessions=[session("w01-e1", TODAY + dt.timedelta(days=1))])
+        pid, commit = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
         self.garmin.faults["create"] = [ReadTimeout("read")]
         self.assertEqual(self.commit(pid, commit["token"])["status"], "unknown")
         self.clock.advance(minutes=3)
@@ -375,7 +377,7 @@ class Commit(Base):
         self.assertEqual(len(self.garmin.library), 1)
 
     def test_an_unknown_schedule_is_settled_from_the_calendar(self):
-        pid, commit = self.preview(sessions=[session("w01-e1", TODAY + dt.timedelta(days=1))])
+        pid, commit = self.preview(sessions=[session("20261202-run", TODAY + dt.timedelta(days=1))])
         self.garmin.faults["schedule"] = ["block"]
         self.assertEqual(self.commit(pid, commit["token"])["status"], "unknown")
         self.garmin.blocked.set()
@@ -384,7 +386,7 @@ class Commit(Base):
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertEqual(len(self.garmin.calendar), 1)
-        self.assertEqual(self.rows(pid)["w01-e1"]["state"], "scheduled")
+        self.assertEqual(self.rows(pid)["20261202-run"]["state"], "scheduled")
 
     def test_a_5xx_is_unknown_and_a_4xx_is_failed(self):
         pid, commit = self.preview()
@@ -393,7 +395,7 @@ class Commit(Base):
         self.assertEqual(out["status"], "unknown", out)
         self.assertEqual(out["written"], [])
         rows = self.rows(pid)
-        self.assertEqual((rows["w01-e1"]["state"], rows["w01-q1"]["state"]), ("failed", "unknown"))
+        self.assertEqual((rows["20261202-run"]["state"], rows["20261203-run"]["state"]), ("failed", "unknown"))
 
     def test_calendar_read_fails_nothing_is_scheduled(self):
         pid, commit = self.preview()
@@ -440,8 +442,8 @@ class Commit(Base):
         pid, commit = self.preview()
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual(out["conflicts"], [{"key": "w01-e2", "date": day}])
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "conflict")
+        self.assertEqual(out["conflicts"], [{"key": "20261205-run", "date": day}])
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "conflict")
         self.assertEqual(len(self.garmin.library), 2)
 
     def test_calendar_changed_refuses(self):
@@ -462,7 +464,7 @@ class Commit(Base):
 
     def test_budget_stops_at_eight_writes_then_continues(self):
         days = [TODAY + dt.timedelta(days=i) for i in range(1, 6)]
-        pid, commit = self.preview(sessions=[session(f"w01-e{i}", d) for i, d in enumerate(days, 1)])
+        pid, commit = self.preview(sessions=[session(pe.session_key(d), d) for d in days])
         out = self.commit(pid, commit["token"])
         self.assertEqual(out["status"], "partial", out)
         self.assertEqual(out["retry_after_s"], 0)
@@ -501,7 +503,7 @@ class Commit(Base):
         self.commit(pid, commit["token"])
         self.clock.advance(hours=23)
         self.assertEqual(self.commit(pid, commit["token"])["status"], "done")
-        pid2, commit2 = self.preview(sessions=[session("w02-e1", TODAY + dt.timedelta(days=8))], content="c")
+        pid2, commit2 = self.preview(sessions=[session("20300323-run", TODAY + dt.timedelta(days=8))], content="c")
         self.garmin.faults["create"] = [GarminConnectTooManyRequestsError("x")]
         self.store.move_plan(pid, "cancelled")
         self.commit(pid2, commit2["token"])
@@ -530,7 +532,7 @@ class Commit(Base):
     def test_another_active_plan_is_refused(self):
         pid, commit = self.preview()
         self.commit(pid, commit["token"])
-        pid2, commit2 = self.preview(sessions=[session("w02-e1", TODAY + dt.timedelta(days=8))], content="c")
+        pid2, commit2 = self.preview(sessions=[session("20300323-run", TODAY + dt.timedelta(days=8))], content="c")
         out = self.commit(pid2, commit2["token"])
         self.assertEqual(out["reason"], "another_plan_active")
         self.assertEqual(len(self.garmin.library), 3)
@@ -557,7 +559,7 @@ class Commit(Base):
             raise RuntimeError("TEST-ONLY")
 
         self.store.claim_token = boom
-        pid2 = self.preview(sessions=[session("w02-e1", TODAY + dt.timedelta(days=8))], content="c")[0]
+        pid2 = self.preview(sessions=[session("20300323-run", TODAY + dt.timedelta(days=8))], content="c")[0]
         del pid2
         with self.assertLogs("garmin_ext.plans", "ERROR") as logs:
             out = self.commit(pid, commit["token"])
@@ -578,30 +580,30 @@ class Replace(Base):
     def test_a_changed_day_is_replaced_new_first(self):
         pid, commit = self.preview()
         self.commit(pid, commit["token"])
-        old = self.rows(pid)["w01-e2"]
+        old = self.rows(pid)["20261205-run"]
         changed = default_sessions()
-        changed[2] = session("w01-e2", TODAY + dt.timedelta(days=5), km=9.0)
+        changed[2] = session("20261205-run", TODAY + dt.timedelta(days=5), km=9.0)
         _pid, commit2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.assertEqual([(o["op"], o["key"]) for o in commit2["ops"]],
-                         [("create", "w01-e2"), ("delete", f"w01-e2~{old['dto_hash'][:8]}")])
+                         [("create", "20261205-run"), ("delete", f"20261205-run~{old['dto_hash'][:8]}")])
         mark = len(self.garmin.calls)
         out = self.commit(pid, commit2["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual(out["replaced"], [{"key": "w01-e2", "date": old["date_local"].isoformat()}])
+        self.assertEqual(out["replaced"], [{"key": "20261205-run", "date": old["date_local"].isoformat()}])
         writes = [c for c in self.garmin.calls[mark:] if c[0] != "READ"]
         self.assertEqual([c[0] for c in writes], ["POST", "POST", "DELETE", "DELETE"])
         self.assertNotIn(old["garmin_workout_id"], self.garmin.library)
         self.assertEqual(len(self.garmin.calendar), 3)
         rows = self.rows(pid)
-        self.assertEqual(rows[f"w01-e2~{old['dto_hash'][:8]}"]["state"], "deleted")
-        self.assertEqual(rows["w01-e2"]["state"], "scheduled")
+        self.assertEqual(rows[f"20261205-run~{old['dto_hash'][:8]}"]["state"], "deleted")
+        self.assertEqual(rows["20261205-run"]["state"], "scheduled")
 
     def test_a_day_that_left_the_plan_is_deleted_and_a_linked_one_kept(self):
         pid, commit = self.preview()
         self.commit(pid, commit["token"])
-        self.store.workout_rows[(pid, "w01-e1")]["linked_activity_id"] = 42
+        self.store.workout_rows[(pid, "20261202-run")]["linked_activity_id"] = 42
         _pid, commit2 = self.preview(sessions=default_sessions()[1:2], plan_id=pid, content="b")
-        self.assertEqual([(o["op"], o["key"]) for o in commit2["ops"]], [("delete", "w01-e2")])
+        self.assertEqual([(o["op"], o["key"]) for o in commit2["ops"]], [("delete", "20261205-run")])
         self.assertEqual(self.commit(pid, commit2["token"])["status"], "done")
         self.assertEqual(len(self.garmin.calendar), 2)
 
@@ -610,7 +612,7 @@ class Cancel(Base):
     def other_workouts(self):
         with self.garmin.lock:
             for wid, name, desc, days, sport in (
-                    (501, "Coach Easy", "coach-mcp ffffffff " + "0" * 32 + " w01-e1 h00000000", 6, "running"),
+                    (501, "Coach Easy", "coach-mcp ffffffff " + "0" * 32 + " 20261202-run h00000000", 6, "running"),
                     (502, "TP Ride", "from TrainingPeaks", 4, "cycling")):
                 self.garmin.library[wid] = {"workoutId": wid, "workoutName": name, "description": desc}
                 self.garmin.calendar.append({"workoutId": wid, "workoutName": name, "workoutType": sport,
@@ -639,11 +641,11 @@ class Cancel(Base):
     def test_cancel_keeps_linked_and_past_workouts(self):
         pid, commit = self.preview()
         self.commit(pid, commit["token"])
-        self.store.workout_rows[(pid, "w01-e1")]["linked_activity_id"] = 42
-        self.store.workout_rows[(pid, "w01-q1")]["date_local"] = TODAY - dt.timedelta(days=1)
+        self.store.workout_rows[(pid, "20261202-run")]["linked_activity_id"] = 42
+        self.store.workout_rows[(pid, "20261203-run")]["date_local"] = TODAY - dt.timedelta(days=1)
         prev = self.cancel(pid)
         self.assertEqual({k["reason"] for k in prev["kept"]}, {"linked to an activity", "in the past"})
-        self.assertEqual([o["key"] for o in prev["cancel"]["ops"]], ["w01-e2"])
+        self.assertEqual([o["key"] for o in prev["cancel"]["ops"]], ["20261205-run"])
         self.assertEqual(self.cancel(pid, prev["cancel"]["token"])["status"], "done")
         self.assertEqual(len(self.garmin.library), 2)
 
@@ -686,7 +688,7 @@ class Confirmation(Base):
         pid, commit = self.preview()
         self.commit(pid, commit["token"])
         changed = default_sessions()[:2]
-        changed[1] = session("w01-q1", TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
+        changed[1] = session("20261203-run", TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
         _p, commit2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.confirm_answer = "declined"
         self.assertEqual(self.commit(pid, commit2["token"])["status"], "declined")
@@ -760,12 +762,12 @@ class Lifecycle(Base):
         self.assertEqual(self.commit(pid, c1["token"])["status"], "done")
         _p, c2 = self.preview(sessions=default_sessions()[:2], plan_id=pid, content="b")
         self.assertEqual(self.commit(pid, c2["token"])["status"], "done")
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleted")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleted")
         _p, c3 = self.preview(plan_id=pid, content="c")
-        self.assertEqual([(o["op"], o["key"]) for o in c3["ops"]], [("create", "w01-e2")])
+        self.assertEqual([(o["op"], o["key"]) for o in c3["ops"]], [("create", "20261205-run")])
         out = self.commit(pid, c3["token"])
-        self.assertEqual((out["status"], [w["key"] for w in out["written"]]), ("done", ["w01-e2"]))
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "scheduled")
+        self.assertEqual((out["status"], [w["key"] for w in out["written"]]), ("done", ["20261205-run"]))
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "scheduled")
         self.assertEqual((len(self.garmin.library), len(self.garmin.calendar)), (3, 3))
         self.assertIsNone(self.preview(plan_id=pid, content="d")[1]["token"])
 
@@ -775,36 +777,36 @@ class Lifecycle(Base):
         _p, c2 = self.preview(sessions=default_sessions()[:2], plan_id=pid, content="b")
         self.garmin.faults["delete"] = [None, ConnectionError("API Error 503 - Service Unavailable")]
         self.assertEqual(self.commit(pid, c2["token"])["status"], "partial")
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "deleting")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "deleting")
         _p, c3 = self.preview(plan_id=pid, content="c")
         out = self.commit(pid, c3["token"])
         self.assertEqual(out["status"], "done", out)
-        self.assertEqual(self.rows(pid)["w01-e2"]["state"], "scheduled")
+        self.assertEqual(self.rows(pid)["20261205-run"]["state"], "scheduled")
         self.assertEqual((len(self.garmin.library), len(self.garmin.calendar)), (3, 3))
 
     def test_a_replacement_of_an_unknown_workout_deletes_the_old_one(self):
         day = TODAY + dt.timedelta(days=1)
-        pid, c1 = self.preview(sessions=[session("w01-e1", day)])
+        pid, c1 = self.preview(sessions=[session("20261202-run", day)])
         self.garmin.faults["schedule"] = ["block"]
         self.assertEqual(self.commit(pid, c1["token"])["status"], "unknown")
         self.garmin.blocked.set()
         self.assertTrue(pw.join_write_threads(10))
-        old = self.rows(pid)["w01-e1"]["garmin_workout_id"]
-        _p, c2 = self.preview(sessions=[session("w01-e1", day, km=10.0)], plan_id=pid, content="b")
-        self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "w01-e1")])
+        old = self.rows(pid)["20261202-run"]["garmin_workout_id"]
+        _p, c2 = self.preview(sessions=[session("20261202-run", day, km=10.0)], plan_id=pid, content="b")
+        self.assertEqual([(o["op"], o["key"]) for o in c2["ops"]], [("create", "20261202-run")])
         self.clock.advance(minutes=3)
         out = self.commit(pid, c2["token"])
         self.assertEqual(out["status"], "done", out)
         self.assertNotIn(old, self.garmin.library)
         self.assertEqual(len(self.garmin.library), 1)
         self.assertEqual([e["workoutId"] for e in self.garmin.calendar], list(self.garmin.library))
-        self.assertEqual(out["replaced"], [{"key": "w01-e1", "date": day.isoformat()}])
+        self.assertEqual(out["replaced"], [{"key": "20261202-run", "date": day.isoformat()}])
 
     def test_a_retired_row_left_on_garmin_is_deleted_by_the_next_commit(self):
         pid, c1 = self.preview()
         self.commit(pid, c1["token"])
-        row = dict(self.rows(pid)["w01-e2"])
-        retired = "w01-e2~" + row["dto_hash"][:8]
+        row = dict(self.rows(pid)["20261205-run"])
+        retired = "20261205-run~" + row["dto_hash"][:8]
         self.store.put_workout(pid, {**row, "workout_key": retired})
         self.store.put_workout(pid, {**row, "state": "pending", "garmin_workout_id": None,
                                      "garmin_schedule_id": None})
@@ -924,7 +926,7 @@ class ServedWithContext(unittest.TestCase):
         self.assertEqual(set(tools["plan_cancel"].input_schema["properties"]), {"plan_id", "cancel_token"})
         pid, version, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 2, 26), 1, {}, {}, "a" * 64)
         token, _ = store.issue_token(pid, version, "commit", {"ops": [
-            {"op": "create", "key": "w01-e1", "date": "2026-12-02", "role": "easy"}]})
+            {"op": "create", "key": "20261202-run", "date": "2026-12-02", "role": "easy"}]})
         result = asyncio.run(app.call_tool("plan_commit", {"plan_id": pid, "commit_token": token}))
         self.assertEqual(json.loads(result.content[0].text)["status"], "declined")
         self.assertEqual(seen, ["Context"])
@@ -1000,7 +1002,7 @@ class Tokens(unittest.TestCase):
     def test_workout_rows_are_checked(self):
         store = ps.MemoryPlanStore()
         pid, _, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 2, 26), 1, {}, {}, "a" * 64)
-        good = {"workout_key": "w01-e1", "version": 1, "date_local": TODAY, "role": "easy", "dto_hash": "b" * 64,
+        good = {"workout_key": "20261202-run", "version": 1, "date_local": TODAY, "role": "easy", "dto_hash": "b" * 64,
                 "state": "pending"}
         store.put_workout(pid, good)
         for field, value in (("workout_key", "x"), ("version", 0), ("date_local", "2026-12-01"), ("role", "Bad!"),
@@ -1111,13 +1113,13 @@ class Cleanup(Base):
         self.commit(pid, commit["token"])
         tag = self.store.install_tag()
         later, earlier = TODAY + dt.timedelta(days=9), TODAY - dt.timedelta(days=3)
-        self.orphan(601, f"coach-mcp {tag} {pid} w09-e1 h12345678", later)
-        self.orphan(602, f"coach-mcp 0badc0de {pid} w01-e1 h12345678", later)    # another install
+        self.orphan(601, f"coach-mcp {tag} {pid} 20301228-run h12345678", later)
+        self.orphan(602, f"coach-mcp 0badc0de {pid} 20261202-run h12345678", later)    # another install
         self.orphan(603, None, later)
-        self.orphan(604, f"coach-mcp {tag} {pid} w00-e1 h12345678", earlier)      # in the past
-        self.orphan(605, f"coach-mcp {tag} {pid} w09-e2 h12345678", later, linked=77)
-        self.orphan(606, f"coach-mcp {tag} {pid} w09-e3 h12345678")               # not on the calendar
-        self.store.workout_rows[(pid, "w01-e1")]["linked_activity_id"] = 9
+        self.orphan(604, f"coach-mcp {tag} {pid} 20300102-run h12345678", earlier)      # in the past
+        self.orphan(605, f"coach-mcp {tag} {pid} 20301229-run h12345678", later, linked=77)
+        self.orphan(606, f"coach-mcp {tag} {pid} 20301230-run h12345678")               # not on the calendar
+        self.store.workout_rows[(pid, "20261202-run")]["linked_activity_id"] = 9
         before = list(self.garmin.calls)
         counts = pw.cleanup(self.store, self.garmin, TODAY, dry_run=True, sleep=lambda s: None)
         self.assertEqual(counts, {"rows": 2, "orphans": 0, "other_account": 0, "deleted": 0, "failed": 0})
@@ -1128,7 +1130,7 @@ class Cleanup(Base):
                             join_s=2)
         self.assertEqual(counts["deleted"], 3)
         self.assertEqual(set(self.garmin.library),
-                         {602, 603, 604, 605, 606, self.rows(pid)["w01-e1"]["garmin_workout_id"]})
+                         {602, 603, 604, 605, 606, self.rows(pid)["20261202-run"]["garmin_workout_id"]})
 
     def test_rows_of_another_garmin_account_are_kept(self):
         pid, commit = self.preview()
@@ -1180,9 +1182,9 @@ class Cleanup(Base):
 
 class Marker(unittest.TestCase):
     def test_marker_and_dto(self):
-        s = session("w01-e1", TODAY)
-        dto = plan_dto.workout_dto(s, marker=pw.marker("abcd1234", "0" * 32, "w01-e1", "f" * 64))
-        self.assertEqual(dto["description"], "coach-mcp abcd1234 " + "0" * 32 + " w01-e1 hffffffff")
+        s = session("20261202-run", TODAY)
+        dto = plan_dto.workout_dto(s, marker=pw.marker("abcd1234", "0" * 32, "20261202-run", "f" * 64))
+        self.assertEqual(dto["description"], "coach-mcp abcd1234 " + "0" * 32 + " 20261202-run hffffffff")
         self.assertEqual(dto["workoutName"], "Coach Easy")
 
 

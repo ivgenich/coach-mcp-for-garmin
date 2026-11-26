@@ -139,8 +139,8 @@ class RealConfirm(b.DeepBase):
     def test_a_replacement_names_adds_and_removes_apart(self):
         pid, _c = self.committed()
         changed = b.default_sessions()
-        changed[1] = b.session("w01-q1", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
-        changed = changed[:2]                    # and w01-e2 leaves the plan
+        changed[1] = b.session("20261203-run", b.TODAY + dt.timedelta(days=2), role="threshold", km=12.0, hard=True)
+        changed = changed[:2]                    # and 20261205-run leaves the plan
         _p, c2 = self.preview(sessions=changed, plan_id=pid, content="b")
         self.garmin_text_everywhere()
         ctx, session = self.ctx(tpc.result("decline"))

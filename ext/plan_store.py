@@ -175,10 +175,22 @@ def _activity_id(value: Any) -> Optional[int]:
     return value
 
 
+def key_ok(value: Any, *, retired: bool = True) -> bool:
+    """True for a session key (SESSION_KEY_RE, its eight digits a real date) or, with `retired`, a retired row's
+    key (WORKOUT_KEY_RE: "<session key>~<hash8>" or "~<hash8>-<n>")."""
+    if not isinstance(value, str) or not (WORKOUT_KEY_RE if retired else SESSION_KEY_RE).fullmatch(value):
+        return False
+    try:
+        dt.datetime.strptime(value[:8], "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
 def check_workout_key(value: Any) -> str:
-    if not isinstance(value, str) or not WORKOUT_KEY_RE.fullmatch(value):
-        raise ValueError("plans: a workout key is a session key such as w03-long")
-    return value
+    if not key_ok(value):
+        raise ValueError("plans: a workout key is a session key such as 20261206-run")
+    return str(value)
 
 
 def check_link(link: Any) -> Dict[str, Any]:
@@ -310,7 +322,10 @@ TOKEN_PREFIXES = {"commit": "ct1", "apply": "at1", "cancel": "xt1"}
 TOKEN_STATUSES = ("issued", "running", "partial", "done", "expired")
 TOKEN_FIRST_USE = dt.timedelta(minutes=30)
 TOKEN_RESUME = dt.timedelta(hours=24)
-WORKOUT_KEY_RE = re.compile(r"w[0-9]{2}-[a-z0-9]{1,8}(~[0-9a-f]{8}(-[1-9][0-9]{0,2})?)?", re.ASCII)
+# A session key is the day the plan placed the session and its slot (plan_engine.session_key): it does not move
+# when the plan is rebuilt on a later day. A retired row (replaced by a new workout) keeps "~<hash8>[-<n>]" after it.
+SESSION_KEY_RE = re.compile(r"[0-9]{8}-(run|race|b)", re.ASCII)
+WORKOUT_KEY_RE = re.compile(r"[0-9]{8}-(run|race|b)(~[0-9a-f]{8}(-[1-9][0-9]{0,2})?)?", re.ASCII)
 ROLE_RE = re.compile(r"[a-z_]{1,16}", re.ASCII)
 MAX_GARMIN_ID = 10 ** 19 - 1
 
@@ -390,8 +405,8 @@ def _garmin_id(value: Any) -> Optional[int]:
 def _workout_args(row: Mapping[str, Any]) -> Dict[str, Any]:
     """The columns of one plan_workouts row, each checked (never the value in the error)."""
     key = row.get("workout_key")
-    if not isinstance(key, str) or not WORKOUT_KEY_RE.fullmatch(key):
-        raise ValueError("plans: a workout key looks like w03-long")
+    if not key_ok(key):
+        raise ValueError("plans: a workout key looks like 20261206-run")
     version = row.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ValueError("plans: a workout needs its plan version")

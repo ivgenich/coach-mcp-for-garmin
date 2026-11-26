@@ -33,11 +33,11 @@ def day(n):
 
 
 def body():
-    sessions = [{"key": "w01-e1", "date": day(1).isoformat(), "role": "easy", "km": 8.0, "minutes": 48},
-                {"key": "w01-q1", "date": day(2).isoformat(), "role": "threshold", "km": 10.0, "minutes": 55},
-                {"key": "w01-e2", "date": day(4).isoformat(), "role": "easy", "km": 6.0, "minutes": 36},
-                {"key": "w01-b", "date": day(5).isoformat(), "role": "b_race", "km": 0.0, "minutes": None},
-                {"key": "w01-long", "date": day(6).isoformat(), "role": "long", "km": 20.0, "minutes": 120}]
+    sessions = [{"key": "20261202-run", "date": day(1).isoformat(), "role": "easy", "km": 8.0, "minutes": 48},
+                {"key": "20261203-run", "date": day(2).isoformat(), "role": "threshold", "km": 10.0, "minutes": 55},
+                {"key": "20261205-run", "date": day(4).isoformat(), "role": "easy", "km": 6.0, "minutes": 36},
+                {"key": "20300224-b", "date": day(5).isoformat(), "role": "b_race", "km": 0.0, "minutes": None},
+                {"key": "20300220-run", "date": day(6).isoformat(), "role": "long", "km": 20.0, "minutes": 120}]
     return {"weeks": [{"week": 1, "start": MON.isoformat(), "end": day(6).isoformat(), "sessions": sessions}],
             "content_hash": "f"}
 
@@ -65,7 +65,7 @@ class Base(unittest.TestCase):
         self.addCleanup(lambda: setattr(logger, "handlers", saved[0]) or setattr(logger, "propagate", saved[1]))
 
     def log(self, **kw):
-        args = {"workout_key": "w01-e1", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False, **kw}
+        args = {"workout_key": "20261202-run", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False, **kw}
         return self.svc.feedback(**args)
 
     def ok(self, **kw):
@@ -133,9 +133,10 @@ class Bounds(Base):
                 self.assertEqual("physiotherapist" in out["note"], hold)
 
     def test_bad_keys_and_plan_ids(self):
-        for key in ("", "w1-e1", "W01-E1", "w01-", "w01-toolongkey", "../w01", FREE_TEXT, "w01-e1 ", None, 5):
+        for key in ("", "w1-e1", "W01-E1", "w01-", "w01-toolongkey", "../w01", FREE_TEXT, "20261202-run ", None, 5,
+                    "20261202-run~abcdef01", "20261302-run", "20261202-long", "2026-12-02-run", "w01-e1"):
             with self.subTest(key=key):
-                if key == "w01-e1 ":
+                if key == "20261202-run ":
                     self.assertTrue(self.ok(workout_key=key)["stored"])   # stripped, like every text argument
                     continue
                 self.assertNotIn("SECRET", self.refused(workout_key=key))
@@ -144,7 +145,7 @@ class Bounds(Base):
                 self.assertNotIn("SECRET", self.refused(plan_id=plan_id))
 
     def test_the_server_guard_agrees(self):
-        ok = {"workout_key": "w01-e1", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False, "plan_id": ""}
+        ok = {"workout_key": "20261202-run", "rpe": 5, "pain": 0, "pain_location": "none", "sharp": False, "plan_id": ""}
         self.assertIsNone(garmin_paths.refused_argument("log_feedback", ok))
         for name, value in (("rpe", 0), ("rpe", 11), ("pain", -1), ("pain", 11), ("pain_location", "elbow"),
                             ("sharp", 1), ("sharp", "true"), ("workout_key", FREE_TEXT), ("plan_id", FREE_TEXT)):
@@ -168,7 +169,7 @@ class Storage(Base):
         rows = self.store.feedback(self.pid)
         self.assertEqual(len(rows), 1)
         self.assertEqual({k: rows[0][k] for k in ("workout_key", "rpe", "pain", "pain_location", "sharp")},
-                         {"workout_key": "w01-e1", "rpe": 7, "pain": 3, "pain_location": "calf", "sharp": True})
+                         {"workout_key": "20261202-run", "rpe": 7, "pain": 3, "pain_location": "calf", "sharp": True})
         self.assertEqual(rows[0]["created_at"], created)
         self.assertGreater(rows[0]["updated_at"], created)
 
@@ -179,15 +180,14 @@ class Storage(Base):
         self.assertEqual((out["plan_id"], out["date"], out["role"]), (self.pid, "2026-12-01", "easy"))
 
     def test_unknown_key_and_session_dates(self):
-        self.assertIn("not a session of the plan", self.refused(workout_key="w09-zz"))
-        self.assertIn("not a session of the plan", self.refused(workout_key="w01-e1~abcdef01"))
-        self.assertTrue(self.ok(workout_key="w01-q1")["stored"])                # tomorrow
-        self.assertIn("after tomorrow", self.refused(workout_key="w01-e2"))    # Friday, today Tuesday
+        self.assertIn("not a session of the plan", self.refused(workout_key="20310118-run"))
+        self.assertTrue(self.ok(workout_key="20261203-run")["stored"])                # tomorrow
+        self.assertIn("after tomorrow", self.refused(workout_key="20261205-run"))    # Friday, today Tuesday
         self.today = day(4)
-        self.assertTrue(self.ok(workout_key="w01-e2")["stored"])               # on its day
-        self.assertTrue(self.ok(workout_key="w01-b")["stored"])                # tomorrow's B race (not tracked)
+        self.assertTrue(self.ok(workout_key="20261205-run")["stored"])               # on its day
+        self.assertTrue(self.ok(workout_key="20300224-b")["stored"])                # tomorrow's B race (not tracked)
         self.today = day(30)
-        self.assertTrue(self.ok(workout_key="w01-long")["stored"])             # long after
+        self.assertTrue(self.ok(workout_key="20300220-run")["stored"])             # long after
         self.assertEqual(len(self.store.feedback(self.pid)), 4)
 
     def test_other_account_and_no_account(self):
@@ -229,18 +229,18 @@ class Storage(Base):
         broken.plans, broken.versions = self.store.plans, self.store.versions
         svc = pt.PlanService(lambda: None, lambda: broken, lambda: self.today)
         with self.assertLogs("garmin_ext.plans", "WARNING") as logs:
-            text = svc.feedback("w01-e1", 5, 0, "none", False)
+            text = svc.feedback("20261202-run", 5, 0, "none", False)
         self.assertEqual(text, pt.TEXT_DB)
         self.assertEqual(logs.output, ["WARNING:garmin_ext.plans:plans: log_feedback failed (StoreError)"])
         broken.is_ready = False
         with self.assertLogs("garmin_ext.plans", "WARNING"):
-            self.assertEqual(svc.feedback("w01-e1", 5, 0, "none", False), pt.TEXT_STARTING)
+            self.assertEqual(svc.feedback("20261202-run", 5, 0, "none", False), pt.TEXT_STARTING)
 
         def no_store():
             raise ps.StoreError("plans: cannot connect to the database")
         svc = pt.PlanService(lambda: None, no_store, lambda: self.today)
         with self.assertLogs("garmin_ext.plans", "WARNING"):
-            self.assertEqual(svc.feedback("w01-e1", 5, 0, "none", False), pt.TEXT_DB)
+            self.assertEqual(svc.feedback("20261202-run", 5, 0, "none", False), pt.TEXT_DB)
 
 
 class NoFreeText(Base):
@@ -262,7 +262,7 @@ class NoFreeText(Base):
         answers = []
         for kw in (dict(workout_key=FREE_TEXT), dict(pain=2, pain_location=FREE_TEXT), dict(rpe=FREE_TEXT),
                    dict(pain=FREE_TEXT), dict(sharp=FREE_TEXT), dict(plan_id=FREE_TEXT),
-                   dict(workout_key="w01-e1", pain=2, pain_location="calf")):
+                   dict(workout_key="20261202-run", pain=2, pain_location="calf")):
             answers.append(self.log(**kw))
         self.assertTrue(all("SECRET" not in a and "knee hurts" not in a for a in answers), answers)
         self.assertFalse(any("SECRET" in r for r in records), records)
@@ -273,9 +273,9 @@ class NoFreeText(Base):
             self.assertIn(row["pain_location"], ps.PAIN_LOCATIONS)
 
     def test_the_store_refuses_free_text_too(self):
-        for args in (("w01-e1", 5, 2, FREE_TEXT, False), ("w01-e1", 5, 2, "Calf", False),
-                     (FREE_TEXT, 5, 0, "none", False), ("w01-e1", 11, 0, "none", False),
-                     ("w01-e1", 5, 0, "none", "yes")):
+        for args in (("20261202-run", 5, 2, FREE_TEXT, False), ("20261202-run", 5, 2, "Calf", False),
+                     (FREE_TEXT, 5, 0, "none", False), ("20261202-run", 11, 0, "none", False),
+                     ("20261202-run", 5, 0, "none", "yes")):
             with self.subTest(args=args):
                 with self.assertRaises(ValueError) as cm:
                     self.store.save_feedback(self.pid, *args)
@@ -295,9 +295,9 @@ class NoFreeText(Base):
         self.addCleanup(tr.configure, None)
         pt.register(adder, Cfg(), lambda: None, store=self.store, today=lambda: self.today)
         tool = added["log_feedback"]
-        out = json.loads(asyncio.run(tool(workout_key="w01-e1", rpe=3)))
+        out = json.loads(asyncio.run(tool(workout_key="20261202-run", rpe=3)))
         self.assertEqual((out["rpe"], out["pain"], out["pain_location"], out["sharp"]), (3, 0, "none", False))
-        self.assertTrue(asyncio.run(tool(workout_key="w01-e1")).startswith("Error: Invalid input: rpe"))
+        self.assertTrue(asyncio.run(tool(workout_key="20261202-run")).startswith("Error: Invalid input: rpe"))
 
 
 class PlanGet(Base):
@@ -309,9 +309,9 @@ class PlanGet(Base):
         self.ok(rpe=4, pain=1, pain_location="foot")
         with mock.patch.dict(os.environ, {"REPORT_TZ": "Asia/Jerusalem"}):
             got = json.loads(self.svc.get(""))
-        self.assertEqual(got["tracking"]["links"], [{"key": "w01-e1", "date": "2026-12-01", "status": "done",
+        self.assertEqual(got["tracking"]["links"], [{"key": "20261202-run", "date": "2026-12-01", "status": "done",
                                                      "as_of": "2026-12-01T23:30"}])
-        self.assertEqual(got["tracking"]["feedback"], [{"key": "w01-e1", "rpe": 4, "pain": 1, "pain_location": "foot",
+        self.assertEqual(got["tracking"]["feedback"], [{"key": "20261202-run", "rpe": 4, "pain": 1, "pain_location": "foot",
                                                         "sharp": False}])
         self.assertIn(pt.NOTE_LINKS, got["note"])
         with mock.patch.dict(os.environ, {"REPORT_TZ": "Europe/London"}):
@@ -319,7 +319,7 @@ class PlanGet(Base):
         self.assertEqual(got["tracking"]["links"][0]["as_of"], "2026-12-01T21:30")
 
     def test_rows_never_checked_are_not_shown(self):
-        self.store.put_workout(self.pid, {"workout_key": "w01-e1", "version": 1, "date_local": day(1), "role": "easy",
+        self.store.put_workout(self.pid, {"workout_key": "20261202-run", "version": 1, "date_local": day(1), "role": "easy",
                                           "dto_hash": "0" * 64, "state": "scheduled", "garmin_workout_id": 7001})
         got = json.loads(self.svc.get(""))
         self.assertNotIn("tracking", got)
@@ -327,7 +327,7 @@ class PlanGet(Base):
     def test_only_this_accounts_plans(self):
         other = self.store.account_fp("999999")
         foreign, _, _ = self.store.save_preview(other, None, RACE, 1, {}, body(), hashlib.sha256(b"b").hexdigest())
-        self.store.save_feedback(foreign, "w01-e1", 5, 0, "none", False)
+        self.store.save_feedback(foreign, "20261202-run", 5, 0, "none", False)
         self.assertEqual(self.svc.get(foreign), pt.TEXT_NOT_FOUND)
         self.assertNotIn("tracking", json.loads(self.svc.get("")))
 
