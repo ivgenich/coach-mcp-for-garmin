@@ -493,7 +493,9 @@ class Sim:
             self.check_window(window)
             self.check_all()
             return None
-        outside = [o["date"] for o in c.get("ops") or [] if o["op"] == "create"
+        # A create outside the window only replaces a day already on Garmin whose workout changed.
+        replaced = {o["date"] for o in c.get("ops") or [] if o["op"] == "delete"}
+        outside = [o["date"] for o in c.get("ops") or [] if o["op"] == "create" and o["date"] not in replaced
                    and not out["_today"].isoformat() <= o["date"] <= window[1].isoformat()]
         if outside:
             self.fail("commit ops", f"creates outside the window {out['_today']}..{window[1]}: {outside}")
@@ -760,11 +762,13 @@ class Sim:
                                                          f"deleted {got_rm[0]} on {got_rm[1]}")
 
     def check_writes(self, executed: List[Dict[str, Any]], action: str = "cleanup") -> None:
-        """Past and done sessions never deleted or rewritten; today's never removed by a commit or apply (a new
-        version never plans today, so nothing can replace it); non-ours never written."""
+        """Past and done sessions never deleted or rewritten; today's never removed by a commit or apply unless it
+        schedules today's new workout (a token issued yesterday); non-ours never written."""
+        rescheduled = {x["date"] for x in executed if x["op"] == "schedule"}
         for x in executed:
             today = x["today"].isoformat()
-            if action in ("commit", "apply") and x["op"] in ("unschedule", "delete") and str(x.get("date")) == today:
+            if action in ("commit", "apply") and x["op"] in ("unschedule", "delete") and str(x.get("date")) == today \
+                    and today not in rescheduled:
                 self.fail("today's session removed", f"{action}: {x['op']} of today's ({today}) workout "
                                                      f"{x['workout']}; the athlete has nothing to run today")
             if x["op"] in ("unschedule", "delete") and not x.get("ours"):
@@ -829,8 +833,9 @@ class Sim:
                           f"{len(same)} time(s) with its content (our workouts that day: {others}); window "
                           f"{first}..{last}")
         planned_days = {s["date"] for s in sessions}
-        for e in ours:
-            if first <= e["scheduleDate"] <= last and e["scheduleDate"] not in planned_days \
+        today = self.today().isoformat()
+        for e in ours:   # today stays: a new version never plans today, so nothing replaces its workout
+            if first <= e["scheduleDate"] <= last and e["scheduleDate"] != today and e["scheduleDate"] not in planned_days \
                     and e["scheduleDate"] not in linked:
                 self.fail("dropped session left on Garmin",
                           f"our {e['workoutName']} (workout {e['workoutId']}) on {e['scheduleDate']}: the plan has "
