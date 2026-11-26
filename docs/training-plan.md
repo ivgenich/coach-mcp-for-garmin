@@ -375,12 +375,22 @@ Still unverified, and coded to these assumptions behind `PLAN_WRITES` (default o
 - Garmin's write rate limits under load, and the client's tool-call timeout: the budget (8 writes, 15 s
   to start them, 1 s apart, 8 s read timeout) is a guess.
 - The workout reaches the watch (Fenix) after a sync with its pace targets (it showed in Garmin Connect).
-- claude.ai prompts the user before a tool whose hints say it writes, shows MCP elicitation forms
-  (web, desktop, mobile) and waits for the answer (the confirmation times out after 180 s). Known: the
-  image serves stateless HTTP (`GARMIN_MCP_STATELESS_HTTP=true`), where mcp 2.x has no channel for a
-  server-to-client request, and the 2026 protocol has none either; there the form cannot be sent and
-  the token alone confirms (plan_confirm answers "unsupported"). S0.5 decides whether to serve writes
-  statefully or move the confirmation to the 2026 protocol's input-required round.
+- claude.ai (web, mobile) and Claude Desktop with a connector were not tested for the confirmation form
+  (spike S0.5 ran from Claude Code); nor whether they prompt before a tool whose hints say it writes.
+
+Verified by spike S0.5 (2026-11-26, a throwaway server behind a temporary custom connector, called from
+Claude Code 2.1.332, protocol 2026-07-28):
+
+- The client declares form and URL elicitation, but on the 2026 protocol the SDK's
+  `can_send_request` is False: a server-to-client `elicitation/create` during a tool call cannot be
+  sent, so `plan_confirm.confirm` (which uses `session.elicit_form`) answers "unsupported".
+- The 2026 protocol's input-required round works: the tool returns an `InputRequiredResult` whose
+  `input_requests` hold a form `ElicitRequest`; the client shows the form, then calls the tool again with
+  the answer in `input_responses` (read with `Context.input_responses`). The user saw the form and
+  answered within 20 to 30 s.
+- A boolean checkbox comes back `false` even when the user ticked it, so it cannot carry consent. A
+  required string `enum` ("Add them" / "Don't add") comes back exactly as chosen. Declining the form
+  answers `action: "decline"` with no content.
 
 ## How plan writes behave
 
