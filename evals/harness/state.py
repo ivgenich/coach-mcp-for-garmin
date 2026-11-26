@@ -9,7 +9,12 @@ A state file (evals/fixtures/base/<name>.json, evals/fixtures/overlays/**, evals
 Merge order: the base, then each overlay in order. responses[method][arg] is merged deeply: a JSON object in an
 overlay is merged key by key into the one before it (a nested object too), anything else (a list, a number, a
 string, null) replaces it. {"$replace": <answer>} replaces an object whole instead. faults replace by name; the
-`faults` argument of load_state() comes last. Standard library only.
+`faults` argument of load_state() comes last.
+
+A fault on a Garmin write (evals/garmin_writes.WRITE_METHODS: upload_workout, schedule_workout,
+unschedule_workout, delete_workout) takes a write group (WRITE_FAULT_GROUPS), optionally "@N": the first N such
+writes succeed and every later one fails ("upload_workout": "rate_limited@1"). See fake_garmin.write_exception for
+what each group raises. Standard library only.
 """
 
 from __future__ import annotations
@@ -17,6 +22,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+
+from ..garmin_writes import WRITE_METHODS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVALS = os.path.dirname(HERE)
@@ -26,6 +33,9 @@ BASE_DIR = os.path.join(FIXTURES, "base")
 OVERLAY_DIRS = (os.path.join(FIXTURES, "overlays"), os.path.join(FIXTURES, "variants"))
 
 FAULT_GROUPS = ("login", "rate_limited", "no_data", "unavailable", "internal", "bad_input")
+# Faults on a Garmin write: 429, a 5xx that did not land, a connect timeout (never sent), a read timeout after
+# the write landed, a lost login, a bug.
+WRITE_FAULT_GROUPS = ("rate_limited", "server_error", "connect_timeout", "read_timeout", "login", "internal")
 REPLACE = "$replace"
 FAULT_KEY = "$fault"
 BYTES_KEY = "$base64"
@@ -90,10 +100,25 @@ def check_responses(responses, label):
                                  f"{answer[FAULT_KEY]!r}; one of {', '.join(FAULT_GROUPS)}")
 
 
+def parse_write_fault(value):
+    """(group, after) of a write fault "<group>" or "<group>@<N>"; StateError when it is neither."""
+    text = value if isinstance(value, str) else ""
+    group, at, after = text.partition("@")
+    if group not in WRITE_FAULT_GROUPS or (at and not (after.isdigit() and after.isascii())):
+        raise StateError(f"write fault {value!r}: one of {', '.join(WRITE_FAULT_GROUPS)}, optionally @N")
+    return group, int(after or 0)
+
+
 def check_faults(faults, label):
     if not isinstance(faults, dict):
         raise StateError(f"{label}: faults must be an object")
     for name, group in faults.items():
+        if name in WRITE_METHODS:
+            try:
+                parse_write_fault(group)
+            except StateError as exc:
+                raise StateError(f"{label}: fault {name!r}: {exc}") from None
+            continue
         if group not in FAULT_GROUPS:
             raise StateError(f"{label}: fault {name!r} -> {group!r} is no group; one of {', '.join(FAULT_GROUPS)}")
 

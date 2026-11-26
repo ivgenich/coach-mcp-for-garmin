@@ -340,6 +340,40 @@ class Payloads(unittest.TestCase):
         self.assertEqual(sc.match_completion_shifts([{"date": "2026-11-17", "sport": None, "activity_id": None}],
                                                     [{"date": "2026-11-17", "sport": None, "id": 1}], **window), [None])
 
+    def test_match_completion_pairs(self):
+        def run(day, link=None):
+            return {"date": day, "sport": "run", "activity_id": link}
+
+        acts = [{"date": "2026-11-16", "start": "2026-11-16 18:00:00", "sport": "run", "id": 1},
+                {"date": "2026-11-18", "start": dt.datetime(2026, 11, 18, 7, 0), "sport": "run", "id": 2},
+                {"date": "2026-11-19", "sport": "run", "id": 3}]
+        window = {"max_early_days": 1, "max_late_days": 2}
+        # Signed gaps (negative = early): Tue <- Mon's run (-1), Wed <- Wed's (0), Thu <- Thu's (0).
+        self.assertEqual(sc.match_completion_pairs([run("2026-11-17"), run("2026-11-18"), run("2026-11-19")], acts,
+                                                   **window), [(0, -1), (1, 0), (2, 0)])
+        self.assertEqual(sc.match_completion_pairs([run("2026-11-16")], acts[1:], **window), [(0, 2)])
+        # A Garmin link names its activity with the real gap; a link to an activity not in the list is (None, 0).
+        self.assertEqual(sc.match_completion_pairs([run("2026-11-17", 2), run("2026-11-17", 99)], acts, **window),
+                         [(1, 1), (None, 0)])
+        # not_before drops the activities that started earlier (a datetime, a date or text); links still count.
+        for floor in (dt.datetime(2026, 11, 16, 19, 0), dt.date(2026, 11, 17), "2026-11-16 19:00:00"):
+            self.assertEqual(sc.match_completion_pairs([run("2026-11-17")], acts, **window, not_before=floor),
+                             [(1, 1)], floor)
+        self.assertEqual(sc.match_completion_pairs([run("2026-11-17", 1)], acts, **window,
+                                                   not_before=dt.date(2026, 11, 18)), [(0, -1)])
+        self.assertEqual(sc.match_completion_pairs([run("2026-11-17")], acts, **window,
+                                                   not_before="2026-11-16 17:59:59"), [(0, -1)])
+        # The shifts wrapper keeps its behaviour: absolute gaps, 0 for a link.
+        self.assertEqual(sc.match_completion_shifts([run("2026-11-17", 2), run("2026-11-17")], acts, **window),
+                         [0, 1])
+
+    def test_completion_sport(self):
+        self.assertEqual([sc.completion_sport(k) for k in ("treadmill_running", "virtual_ride", "lap_swimming")],
+                         ["run", "bike", "swim"])
+        self.assertEqual(sc.completion_sport(" Strength_Training "), "strength_training")
+        for nothing in (None, "", "  ", 7):
+            self.assertEqual(sc.completion_sport(nothing), "other")
+
     def test_compact_json_keeps_hebrew(self):
         word = "\u05e9\u05d9\u05e0\u05d4"  # a Hebrew word, written as escapes
         self.assertEqual(sc.compact_json({"a": word}), '{"a":"' + word + '"}')

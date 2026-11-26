@@ -710,8 +710,8 @@ class Sleep(unittest.TestCase):
         self.assertTrue(all(v is None for v in ds.extract_sleep(fixture("sleep_shell"), DAY, TZ).values()))
 
     def test_one_digit_fraction_timestamp(self):
-        self.assertEqual(ds._parse_local_ts("2026-03-18T05:58:41.0"), dt.datetime(2026, 3, 18, 5, 58, 41))
-        self.assertIsNone(ds._parse_local_ts("not a time"))
+        self.assertEqual(sc.parse_garmin_time("2026-03-18T05:58:41.0"), dt.datetime(2026, 3, 18, 5, 58, 41))
+        self.assertIsNone(sc.parse_garmin_time("not a time"))
 
 
 class OtherExtraction(unittest.TestCase):
@@ -801,8 +801,36 @@ class OtherExtraction(unittest.TestCase):
         self.assertTrue(done("cycling", "virtual_ride"))
         self.assertTrue(done("swimming", "open_water_swimming"))
         self.assertFalse(done("running", "walking"))
-        self.assertEqual(ds.completion_sport(None), "other")
-        self.assertEqual(ds.completion_sport("lap_swimming"), "swim")
+        self.assertEqual(sc.completion_sport(None), "other")
+        self.assertEqual(sc.completion_sport("lap_swimming"), "swim")
+
+    def test_gmt_only_activity_falls_on_the_queried_day(self):
+        # No startTimeLocal: the list was asked for DAY, so the activity is DAY's even when its GMT time read in
+        # the report zone is the next day (23:30 GMT = 01:30 in Athens). It completes DAY's workout.
+        late = {"startTimeGMT": f"{DAY} 23:30:00", "activityId": 8880010, "activityType": {"typeKey": "running"}}
+        acts = ds.completion_activities([late], TZ, dt.date.fromisoformat(DAY))
+        self.assertEqual(acts, [{"date": DAY, "sport": "run", "id": 8880010}])
+        workouts = [ds.classify_workout(entry("Run"), None)]
+        ds.mark_completed(workouts, [entry("Run")], acts)
+        self.assertTrue(workouts[0]["completed"])
+        # Without the queried day the GMT time is read in the zone; startTimeLocal always wins.
+        self.assertEqual(ds.completion_activities([late], TZ)[0]["date"], NEXT)
+        local = dict(late, startTimeLocal=f"{DAY} 22:00:00")
+        self.assertEqual(ds.completion_activities([local], TZ, dt.date.fromisoformat(NEXT))[0]["date"], DAY)
+
+    def test_yard_pool_steps_count_in_meters(self):
+        # Spike S0.3: a distance step's value is meters in a yard pool too.
+        steps = [step("interval", "distance", 100.0)] * 40
+
+        def swim(unit):
+            cur = curated(*steps, sport="swimming")
+            if unit:
+                cur["pool_length"], cur["pool_length_unit"] = 25.0, unit
+            return ds.classify_workout(entry("Swim", "swimming"), cur)["km"]
+
+        self.assertEqual(swim(None), 4.0)
+        self.assertEqual(swim("meter"), 4.0)
+        self.assertEqual(swim("yard"), 4.0)
 
     def test_training_device_choice(self):
         latest = {"1": {"acuteTrainingLoadDTO": {"acwrStatus": "LOW"}},
@@ -2533,6 +2561,239 @@ class KeyMode(unittest.TestCase):
         with mock.patch.dict(os.environ, {"REPORT_TZ": TZ_NAME}):
             out = json.loads(run(tools["get_daily_status"](date=DAY)))
         self.assertEqual(out["key_mode_note"], sc.KEY_MODE_NOTE)
+
+
+# --- training plan (PLAN_TRACKING=on) -------------------------------------------
+
+PROFILE = 71000001
+SESSION = {"workout_key": "wk-1", "date": DAY, "role": "easy", "sport": "run", "planned_km": 8.0,
+           "planned_min": 50, "link_status": None, "feedback_due": False, "feedback_for": None,
+           "extra": "dropped"}
+
+
+def fake_tracking(store="store", session=SESSION, ours=None, counts=None, raise_in=None, gate=None,
+                  account="fp-1"):
+    """A stand-in for plan_tracking (the lead's module): records its calls."""
+    import types
+
+    mod = types.ModuleType("plan_tracking")
+    mod.calls = []
+
+    def step(name, *args):
+        mod.calls.append((name,) + args)
+        if gate is not None and name == "refresh_links":
+            gate.wait(5)   # a stuck database until the test releases it
+        if raise_in == name:
+            raise RuntimeError("db down: secret row value")
+
+    def configured_store():
+        step("configured_store")
+        return store
+
+    def account_fp(st, pid):
+        step("account_fp", st, pid)
+        return account
+
+    def refresh_links(st, fp, day, activities, scheduled, *, tz=None, today=None):
+        step("refresh_links", st, fp, day, activities, scheduled, tz)
+        mod.refresh_today = today
+        return "state-1"
+
+    def today_plan(st, fp, day, *, state="unset"):
+        step("today_plan", st, fp, day)
+        assert state == "state-1", state   # the lookup hands refresh_links' state over
+        return copy.deepcopy(session)
+
+    def ours_by_garmin_id(st, fp, ids, *, state="unset"):
+        step("ours_by_garmin_id", st, fp, list(ids))
+        assert state == "state-1", state
+        return {i: row for i, row in (ours or {}).items() if i in ids}
+
+    def week_counts(st, fp, week_start, *, state="unset"):
+        step("week_counts", st, fp, week_start)
+        return copy.deepcopy(counts)
+
+    for fn in (configured_store, account_fp, refresh_links, today_plan, ours_by_garmin_id, week_counts):
+        setattr(mod, fn.__name__, fn)
+    return mod
+
+
+def join_plan_threads(gate):
+    """Release a held fake lookup and wait for the plan-status threads (the CI isolation check)."""
+    gate.set()
+    for thread in threading.enumerate():
+        if thread.name == "plan-status":
+            thread.join(5)
+
+
+def plan_client():
+    data = default_data()
+    data[f"stats:{DAY}"]["userProfileId"] = PROFILE
+    data[f"activities:{DAY}"] = with_activity_ids(fixture("activities_today"))
+    return FakeClient(data)
+
+
+class PlanSection(unittest.TestCase):
+    def setUp(self):
+        self._log = (ds.log.handlers[:], ds.log.propagate)
+        ds.log.handlers, ds.log.propagate = [logging.NullHandler()], False
+
+    def tearDown(self):
+        join_plan_threads(threading.Event())   # a finished lookup's thread may still be ending
+        ds.log.handlers, ds.log.propagate = self._log
+
+    @staticmethod
+    def stable(status):
+        status = dict(status)
+        status.pop("sources", None)   # call timings
+        return sc.compact_json(status)
+
+    def build_with(self, module, client=None, **kw):
+        with mock.patch.dict("sys.modules", {"plan_tracking": module}):
+            return build(client or plan_client(), **kw)
+
+    def without_plans(self, **kw):
+        # The answer as before plans: the plan step itself replaced by nothing.
+        async def nothing(*a, **k):
+            return None
+
+        with mock.patch.object(ds, "add_plan", nothing):
+            return build(plan_client(), **kw)
+
+    def test_switch_off_is_byte_identical(self):
+        golden = self.stable(self.without_plans(text_format="markdown"))
+        for module in (None, fake_tracking(store=None), fake_tracking(raise_in="configured_store")):
+            out = self.build_with(module, text_format="markdown")
+            self.assertEqual(self.stable(out), golden)
+            self.assertNotIn("plan", out)
+            self.assertFalse(any("plan" in w for w in out["today"]))
+
+    def test_a_draft_is_not_shown_only_the_active_plan(self):
+        # The owner's live finding: with only a draft stored the report said "Plan: rest day". The status
+        # reports follow the active plan only (plan_store.tracked_plan); a draft stays out until activated.
+        import plan_store as ps
+        import plan_tracking
+
+        store = ps.MemoryPlanStore()
+        fp = store.account_fp(str(PROFILE))
+        body = {"weeks": [{"week": 1, "start": "2026-03-16", "end": "2026-03-22", "sessions": [
+            {"key": "20260317-run", "date": "2026-03-17", "role": "easy", "km": 8.0, "minutes": 50}]}]}
+        pid, _, _ = store.save_preview(fp, None, dt.date(2026, 4, 26), 1, {}, body, "d" * 64)
+        plan_tracking.configure(lambda: store)
+        self.addCleanup(plan_tracking.configure, None)
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertIsNone(out.get("plan"))
+        self.assertNotIn("Plan:", out["text"])
+        self.assertEqual(store.links(pid), [])                      # nothing tracked for a draft
+        store.move_plan(pid, "active")
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertEqual((out["plan"]["role"], out["plan"]["date"]), ("rest", DAY))
+        self.assertIn("Plan: rest day", out["text"])
+
+    def test_switch_off_makes_no_database_call(self):
+        mod = fake_tracking(store=None)
+        self.build_with(mod)
+        self.assertEqual([c[0] for c in mod.calls], ["configured_store"])
+
+    def test_plan_and_today_plan_with_the_switch_on(self):
+        mod = fake_tracking(ours={EASY_ID: {"workout_key": "wk-1", "role": "easy", "other": 1}})
+        out = self.build_with(mod, text_format="markdown")
+        expected = {k: v for k, v in SESSION.items() if k != "extra"}
+        self.assertEqual(out["plan"], expected)
+        self.assertEqual(out["today"][0]["plan"], {"workout_key": "wk-1", "role": "easy"})
+        self.assertNotIn("plan", out["tomorrow"][0])
+        names = [c[0] for c in mod.calls]
+        self.assertEqual(names, ["configured_store", "account_fp", "refresh_links", "today_plan",
+                                 "ours_by_garmin_id"])
+        self.assertEqual(mod.calls[1][2], str(PROFILE))
+        _, _, fp, day, activities, scheduled, tz = mod.calls[2]
+        self.assertEqual(tz, TZ)
+        self.assertEqual((fp, day), ("fp-1", dt.date(2026, 3, 18)))
+        self.assertEqual(mod.refresh_today, dt.date(2026, 3, 18))   # the report clock's date, for settling
+        self.assertTrue(activities and all(isinstance(a, dict) for a in activities))
+        self.assertEqual(len(activities), len(fixture("activities_prev")) + len(fixture("activities_today")))
+        self.assertEqual([e["workoutId"] for e in scheduled], [EASY_ID, THRESHOLD_ID, SWIM_ID])
+        self.assertEqual(mod.calls[4][3], [EASY_ID])
+        self.assertIn("Plan: easy run 8 km 50 min", out["text"])
+        self.assertNotIn("feedback due", out["text"])
+        # The plan changes no rule: level, flags and recommendation as without plans.
+        base = self.without_plans()
+        for key in ("level", "flags", "recommendation", "missing", "rules_version"):
+            self.assertEqual(out[key], base[key])
+
+    def test_feedback_due_and_link_status_in_the_text(self):
+        session = dict(SESSION, link_status="done_late", feedback_due=1)
+        out = self.build_with(fake_tracking(session=session), text_format="markdown")
+        self.assertIs(out["plan"]["feedback_due"], True)
+        self.assertIn("(done a day late); feedback due (effort and pain)", out["text"])
+        self.assertLessEqual(sc.word_count(out["text"]), ds.MAX_WORDS)
+
+    def test_rest_day_and_feedback_for_yesterday(self):
+        session = {"workout_key": None, "date": DAY, "role": "rest", "sport": None, "planned_km": None,
+                   "planned_min": None, "link_status": None, "feedback_due": True, "feedback_for": "wk-0"}
+        out = self.build_with(fake_tracking(session=session), text_format="markdown")
+        self.assertEqual(out["plan"], session)
+        self.assertIn("Plan: rest day; feedback due (effort and pain)", out["text"])
+
+    def test_no_session_today_is_null(self):
+        out = self.build_with(fake_tracking(session=None), text_format="markdown")
+        self.assertIn("plan", out)
+        self.assertIsNone(out["plan"])
+        self.assertNotIn("Plan:", out["text"])
+
+    def test_failures_leave_the_report_without_plan(self):
+        golden = self.stable(self.without_plans())
+        for name in ("account_fp", "refresh_links", "today_plan", "ours_by_garmin_id"):
+            with self.subTest(name=name), self.assertLogs(ds.log, "WARNING") as logs:
+                out = self.build_with(fake_tracking(raise_in=name, ours={EASY_ID: {"workout_key": "k"}}))
+            self.assertEqual(self.stable(out), golden)
+            self.assertNotIn("secret", "\n".join(logs.output))
+        self.assertEqual(self.stable(self.build_with(fake_tracking(account=None))), golden)
+
+    def test_no_profile_id_no_plan(self):
+        mod = fake_tracking()
+        out = self.build_with(mod, client=FakeClient())
+        self.assertNotIn("plan", out)
+        self.assertNotIn("account_fp", [c[0] for c in mod.calls])
+
+    def test_slow_lookup_is_cut_and_the_report_succeeds(self):
+        gate = threading.Event()
+        self.addCleanup(join_plan_threads, gate)
+        with mock.patch.object(ds, "PLAN_TIMEOUT_S", 0.05), self.assertLogs(ds.log, "WARNING") as logs:
+            started = time.monotonic()
+            out = self.build_with(fake_tracking(gate=gate))
+        self.assertLess(time.monotonic() - started, 2.5)  # the held lookup is not waited for
+        self.assertNotIn("plan", out)
+        self.assertIn("longer than", logs.output[0])
+        join_plan_threads(gate)
+
+    def test_key_mode_and_probe_never_look(self):
+        mod = fake_tracking()
+        self.build_with(mod, key_mode=True)
+        self.build_with(mod, probe=True)
+        self.assertEqual(mod.calls, [])
+
+    def test_profile_id_sources(self):
+        self.assertEqual(ds.profile_id({"stats": {"userProfileId": 5}}), "5")
+        self.assertEqual(ds.profile_id({"stats": {"userProfileId": True},
+                                        "sleep": {"dailySleepDTO": {"userProfilePK": " 6 "}}}), "6")
+        self.assertEqual(ds.profile_id({"hrv": {"userProfilePk": 7}}), "7")
+        self.assertIsNone(ds.profile_id({"stats": {"userProfileId": " "}, "hrv": {"userProfilePk": 1.5}}))
+
+    def test_plan_call_after_the_loop_closed(self):
+        gate = threading.Event()
+        self.addCleanup(join_plan_threads, gate)
+
+        def work():
+            gate.wait(2)
+            return 1
+
+        async def main():
+            return await ds.plan_call(work, 0.01)
+
+        with self.assertLogs(ds.log, "WARNING"):
+            self.assertIsNone(run(main()))
+        join_plan_threads(gate)   # the thread now finds the loop closed and ends quietly
 
 
 if __name__ == "__main__":

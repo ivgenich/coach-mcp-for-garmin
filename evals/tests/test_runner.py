@@ -245,6 +245,8 @@ class ToolLoop(unittest.TestCase):
         self.assertEqual(tr["schema"], 1)
         self.assertEqual((tr["case_id"], tr["variant"], tr["model"], tr["trial"]), ("T01", "instr", MODEL, 1))
         self.assertEqual(tr["tools"], ["get_daily_status", "get_stats"])
+        # The optional tool_docs: each description and schema as the model saw them (grading.numbers).
+        self.assertEqual(tr["tool_docs"], ['Today\'s level.\n{"type": "object"}', 'Stats.\n{"type": "object"}'])
         self.assertRegex(tr["started"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertIsInstance(tr["duration_s"], float)
         self.assertEqual(set(tr["usage"]), set(cost.USAGE_KEYS))

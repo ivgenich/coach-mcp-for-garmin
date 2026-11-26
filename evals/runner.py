@@ -22,7 +22,8 @@ deferred: offered only after a search names it, as in a routine). Their calls ar
 tool_calls like any other; the database's final state is the transcript's "db".
 
 History search: a case's history fixture (Case.history, evals/harness/history.py) goes to
-start_server(history=...) when it is not "off"; other cases call start_server as before.
+start_server(history=...) when it is not "off"; other cases call start_server as before. The
+same goes for Case.plan (plan=...) and Case.writes (writes=..., the plan write tools).
 
 Prompt caching: one breakpoint on the last tool definition (tools are identical for
 every case of a mode), one on the system prompt, and top-level automatic caching for
@@ -80,6 +81,13 @@ def api_tools(tools: list[dict]) -> list[dict]:
     if out:
         out[-1] = {**out[-1], "cache_control": {"type": "ephemeral"}}
     return out
+
+
+def tool_docs(tools: list[dict]) -> list[str]:
+    """Each server tool's description and input schema as the model saw them, one string per tool (the
+    transcript's optional "tool_docs": numbers in them are not invented by the model, evals.grading.numbers)."""
+    return [(t.get("description") or "") + "\n" + json.dumps(t.get("input_schema") or {}, sort_keys=True)
+            for t in tools]
 
 
 def turns_of(prompt, followups=()) -> list[str]:
@@ -338,7 +346,7 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
         "system": "", "tools": [], "messages": [], "tool_calls": [], "final_text": "", "garmin_calls": [],
         "usage": {k: 0 for k in cost_mod.USAGE_KEYS}, "cost_usd": 0.0, "error": None,
         # optional fields (contract: extend only with optional fields)
-        "effort": effort, "turns": 0, "answers": [], "served_models": [],
+        "effort": effort, "turns": 0, "answers": [], "served_models": [], "tool_docs": [],
     }
     srv = ctools = None
     trace_token = tracing.begin_trial(case.id, variant, trial, model)
@@ -350,12 +358,19 @@ def run_trial(client, case, variant: str, trial: int, model: str = DEFAULT_MODEL
         state = harness.load_state(g.get("base", "empty"), list(g.get("overlays") or []), dict(g.get("faults") or {}))
         history = getattr(case, "history", "off") or "off"
         server_kw = {"history": history} if history != "off" else {}
+        plan = getattr(case, "plan", "off") or "off"
+        if plan != "off":
+            server_kw["plan"] = plan
+        writes = getattr(case, "writes", "off") or "off"
+        if writes != "off":
+            server_kw["writes"] = writes
         with harness.start_server(mode=case.mode, state=state, now=case.now, tz=case.tz, **server_kw) as srv:
             system = build_system(variant, harness.clock_line(case.now, case.tz), srv.instructions, coach_prompt)
             tools = api_tools(srv.tools)
             tracing.known_tools([t["name"] for t in tools])
             tr["system"] = system
             tr["tools"] = [t["name"] for t in tools] + [t["name"] for t in (ctools.definitions() if ctools else [])]
+            tr["tool_docs"] = tool_docs(tools)
             _loop(client, case, model, effort, max_turns, srv, system, tools, tr, ctools)
             tr["garmin_calls"] = garmin_calls(srv.calls)
     except cost_mod.BudgetExceeded as e:

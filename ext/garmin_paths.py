@@ -25,12 +25,16 @@ garminconnect puts the owner's display name in some paths (usersummary/daily/<na
 such as "My Name" or "Ívar" must keep working; requests percent-encodes them, and neither can change the
 path's structure. Any other non-ASCII character (a full-width dot or slash, a lookalike) is refused. Query
 parameters passed as params= are not part of the path and stay untouched.
+
+Method allowlist (check_garmin_request, in the same hook and in launch's tracing hook): GET, the GraphQL read
+query, and nothing else unless allow_plan_writes() admitted the plan's workout writes (PLAN_WRITES=on).
 """
 
 from __future__ import annotations
 
 import datetime
 import inspect
+import json
 import re
 import unicodedata
 
@@ -64,10 +68,163 @@ def _iso_date_ok(value):
     return True
 
 
+_PLAN_ID_RE = re.compile(r"[0-9a-f]{32}", re.ASCII)
+
+
+def _plan_id_ok(value):
+    """Empty (the latest plan), or 32 lower-case hex characters (plan_store's plan ids)."""
+    return isinstance(value, str) and (value == "" or _PLAN_ID_RE.fullmatch(value) is not None)
+
+
+_COURSE_ID_RE = re.compile(r"[1-9][0-9]{0,14}", re.ASCII)
+
+
+def _course_id_ok(value):
+    """Empty or "0" (no course), or a Garmin course id: a positive int (not bool) or its digits as a str (at most
+    15, no sign or leading zero); plan_preview puts it into the course read's path."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 <= value < 10 ** 15
+    return isinstance(value, str) and (value in ("", "0") or _COURSE_ID_RE.fullmatch(value) is not None)
+_WORKOUT_KEY_RE = re.compile(r"[0-9]{8}-(run|race|b)", re.ASCII)
+# plan_store.PAIN_LOCATIONS (test_plan_tracking checks they agree); "" means none.
+PAIN_LOCATIONS = frozenset({"", "none", "foot", "ankle", "achilles", "calf", "shin", "knee", "hamstring", "quad",
+                            "hip", "glute", "lower_back", "other"})
+
+
+def _workout_key_ok(value):
+    """A plan session key such as 20261206-run (plan_store.SESSION_KEY_RE)."""
+    return isinstance(value, str) and _WORKOUT_KEY_RE.fullmatch(value) is not None
+
+
+def _small_int_ok(value, low, high):
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _pain_location_ok(value):
+    return isinstance(value, str) and value in PAIN_LOCATIONS
+_TOKEN_RE = re.compile(r"(ct|at|xt)1\.[A-Za-z0-9_-]{32}", re.ASCII)
+
+
+def _token_ok(value, prefix):
+    """A plan token (plan_store: ct1. commit, at1. apply, xt1. cancel) that starts with `prefix`."""
+    return isinstance(value, str) and _TOKEN_RE.fullmatch(value) is not None and value.startswith(prefix + "1.")
+
+
+def _commit_token_ok(value):
+    return _token_ok(value, "ct")
+
+
+def _cancel_token_ok(value):
+    """Empty (plan_cancel then previews and issues a token) or a cancel token."""
+    return value == "" or _token_ok(value, "xt")
+
+
+def _apply_token_ok(value):
+    return _token_ok(value, "at")
+
+
+_CHANGE_ID_RE = re.compile(r"c[0-9a-f]{16}", re.ASCII)   # plan_store.CHANGE_ID_RE
+MAX_CHANGE_IDS = 20                                      # plan_writes.MAX_CHANGE_IDS
+
+
+def _change_ids_ok(value, empty=False):
+    """Change ids from plan_review_week (c and 16 hex), 1 to MAX_CHANGE_IDS separated by commas; empty only
+    where the argument is optional (plan_preview's accept_changes)."""
+    if not isinstance(value, str):
+        return False
+    ids = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
+    if not ids:
+        return empty and not value.strip()
+    return len(ids) <= MAX_CHANGE_IDS and all(_CHANGE_ID_RE.fullmatch(i) for i in ids)
+
+
+def _optional_date_ok(value):
+    return value == "" or _iso_date_ok(value)
+
+
+# plan_preview's overrides (plan_engine.OVERRIDE_KINDS and plan_tools.parse_overrides; test_deep_config_paths
+# checks the kinds agree). Keys are checked by their shape only: plan_tools checks the session-key format.
+OVERRIDE_KINDS = frozenset({"move", "swap", "rest", "easy", "cap_week_km", "long_run_day", "cap_km", "cap_long"})
+_OVERRIDE_FIELDS = frozenset({"kind", "key", "date", "date_b", "week_start", "km", "weekday"})
+_OVERRIDE_KEY_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}", re.ASCII)
+_WEEKDAY_NAMES = frozenset({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
+MAX_OVERRIDES = 20                 # plan_tools.MAX_OVERRIDES
+MAX_OVERRIDES_CHARS = 8000
+
+
+def _override_ok(o):
+    if not isinstance(o, dict) or set(o) - _OVERRIDE_FIELDS or o.get("kind") not in OVERRIDE_KINDS:
+        return False
+    key = o.get("key")
+    if key not in (None, "") and not (isinstance(key, str) and _OVERRIDE_KEY_RE.fullmatch(key)):
+        return False
+    for name in ("date", "date_b", "week_start"):
+        if o.get(name) not in (None, "") and not _iso_date_ok(o[name]):
+            return False
+    km = o.get("km")
+    if km is not None and (isinstance(km, bool) or not isinstance(km, (int, float)) or not 0 <= km <= 300):
+        return False
+    weekday = o.get("weekday")
+    if weekday not in (None, "") and not (isinstance(weekday, str) and weekday.strip().lower()[:3] in _WEEKDAY_NAMES
+                                          and weekday.isascii()):
+        return False
+    if o["kind"] == "cap_long" and (km is None or not (o.get("date") or key)):
+        return False
+    return True
+
+
+def _overrides_ok(value):
+    """Blank (no edits), or a JSON list of at most MAX_OVERRIDES edits, each a known kind with only the known
+    fields: ISO dates, km a number from 0 to 300, a weekday name, a key of lower-case letters, digits and
+    dashes; cap_long needs km and a date or key."""
+    if not isinstance(value, str) or len(value) > MAX_OVERRIDES_CHARS:
+        return False
+    if not value.strip():
+        return True
+    try:
+        raw = json.loads(value)
+    except (ValueError, RecursionError):   # deep nesting: refused, not an error
+        return False
+    return isinstance(raw, list) and len(raw) <= MAX_OVERRIDES and all(_override_ok(o) for o in raw)
+
+
 ARGUMENT_CHECKS = {
     "get_workout_by_id": {"workout_id": (_workout_id_ok, tool_errors.GENERIC_DETAIL)},
     "get_vo2max_trend": {"start_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
                          "end_date": (_iso_date_ok, tool_errors.DATE_DETAIL)},
+    # The plan tools put one caller value into a Garmin path, plan_preview's course_id (the course read); it and
+    # their other ids and dates are refused here, before the call guard counts a call.
+    "plan_assess": {"race_date": (_iso_date_ok, tool_errors.DATE_DETAIL)},
+    "plan_preview": {"race_date": (_iso_date_ok, tool_errors.DATE_DETAIL),
+                     "plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                     "course_id": (_course_id_ok, tool_errors.GENERIC_DETAIL),
+                     "overrides": (_overrides_ok, tool_errors.GENERIC_DETAIL),
+                     "accept_changes": (lambda v: _change_ids_ok(v, empty=True), tool_errors.GENERIC_DETAIL)},
+    "plan_get": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL)},
+    # log_feedback (PLAN_TRACKING=on) writes only the app's database; its values are checked here first too.
+    "log_feedback": {"workout_key": (_workout_key_ok, tool_errors.RANGE_VALUE_DETAIL),
+                     "rpe": (lambda v: _small_int_ok(v, 1, 10), tool_errors.RANGE_VALUE_DETAIL),
+                     "pain": (lambda v: _small_int_ok(v, 0, 10), tool_errors.RANGE_VALUE_DETAIL),
+                     "pain_location": (_pain_location_ok, tool_errors.RANGE_VALUE_DETAIL),
+                     "sharp": (lambda v: isinstance(v, bool), tool_errors.RANGE_VALUE_DETAIL),
+                     "plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL)},
+    # plan_activate (PLAN_TRACKING=on) writes only the app's database: plan_id, version (0: not given) and action.
+    "plan_activate": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                      "version": (lambda v: _small_int_ok(v, 0, 1_000_000), tool_errors.RANGE_VALUE_DETAIL),
+                      "action": (lambda v: isinstance(v, str) and v in ("", "start", "stop"),
+                                 tool_errors.RANGE_VALUE_DETAIL)},
+    "plan_commit": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                    "commit_token": (_commit_token_ok, tool_errors.GENERIC_DETAIL)},
+    "plan_cancel": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                    "cancel_token": (_cancel_token_ok, tool_errors.GENERIC_DETAIL)},
+    # Stage 4: the weekly review (PLAN_TRACKING=on) and its Garmin write (PLAN_WRITES=on too).
+    "plan_review_week": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                         "week_start": (_optional_date_ok, tool_errors.DATE_DETAIL)},
+    "plan_apply_changes": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                           "apply_token": (_apply_token_ok, tool_errors.GENERIC_DETAIL),
+                           "change_ids": (_change_ids_ok, tool_errors.GENERIC_DETAIL)},
 }
 
 
@@ -143,11 +300,101 @@ def check_garmin_path(path):
         raise GarminPathRefused()
 
 
+# --- Method allowlist (training-plan writes) -----------------------------------------------------------------
+# Only reads leave: GET, and POST to the GraphQL gateway with a body whose query starts with "query" (the calendar
+# read; no mutation channel). With PLAN_WRITES=on, launch.main() calls allow_plan_writes() and plan_writes may
+# also create, schedule, unschedule and delete workouts on exactly these workout-service paths; --plan-cleanup
+# allows only the two deletes. The history worker never allows a write.
+GRAPHQL_PATH = "graphql-gateway/graphql"
+_ID = r"[1-9][0-9]{0,18}"
+WRITE_PATHS = {
+    "create": ("POST", re.compile(r"workout-service/workout", re.ASCII)),
+    "schedule": ("POST", re.compile(rf"workout-service/schedule/{_ID}", re.ASCII)),
+    "unschedule": ("DELETE", re.compile(rf"workout-service/schedule/{_ID}", re.ASCII)),
+    "delete": ("DELETE", re.compile(rf"workout-service/workout/{_ID}", re.ASCII)),
+}
+_ALLOWED_WRITES = {"kinds": frozenset()}
+METHOD_REFUSED_TEXT = "a Garmin request was refused: this server sends only reads and the plan's own workout writes"
+
+
+class GarminMethodRefused(RuntimeError):
+    """A Garmin request whose method and path the allowlist does not admit (fixed text, never the path)."""
+
+    def __init__(self):
+        super().__init__(METHOD_REFUSED_TEXT)
+
+
+def allow_plan_writes(kinds):
+    """Admit the WRITE_PATHS of `kinds` (a subset of create, schedule, unschedule, delete) from now on in this
+    process; an empty set admits none again. ValueError for an unknown kind."""
+    kinds = frozenset(kinds)
+    if kinds - set(WRITE_PATHS):
+        raise ValueError("garmin_paths: unknown write kind")
+    _ALLOWED_WRITES["kinds"] = kinds
+
+
+def allowed_write_kinds():
+    """The write kinds this process admits (empty unless PLAN_WRITES=on or --plan-cleanup)."""
+    return _ALLOWED_WRITES["kinds"]
+
+
+# A GraphQL body's strings ("..." with escapes, """block""") and comments (# to the line end), cut out before the
+# keyword check so a quoted word neither hides nor fakes an operation. A comment ends at "\r", "\n" or "\r\n"
+# (GraphQL's LineTerminator), and so does a plain string.
+_GRAPHQL_NOISE = re.compile(r'"""(?:\\"""|[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n\r])*"|#[^\n\r]*')
+_GRAPHQL_WRITE_WORD = re.compile(r"\b(?:mutation|subscription)\b")
+_GRAPHQL_KEYS = frozenset({"query", "variables", "operationName"})
+
+
+def graphql_read_ok(body):
+    """True for a GraphQL request body that can only read: a dict with a string query that starts with
+    "query", no mutation or subscription keyword outside its strings and comments, no operationName (one
+    anonymous query, as every call here sends it) and no other keys."""
+    if not isinstance(body, dict) or set(body) - _GRAPHQL_KEYS or body.get("operationName") not in (None, ""):
+        return False
+    query = body.get("query")
+    if not isinstance(query, str):
+        return False
+    bare = _GRAPHQL_NOISE.sub(" ", query)
+    return bare.lstrip().startswith("query") and not _GRAPHQL_WRITE_WORD.search(bare)
+
+
+# Request bodies requests sends other than `json` (it sends `data` or `files` instead of `json` when given both),
+# so a non-GET request carrying one is refused: the only body checked, and so the only one sent, is `json`.
+_UNCHECKED_BODIES = ("data", "files")
+
+
+def garmin_method_ok(method, path, kwargs=None):
+    """True for GET, a GraphQL read query (graphql_read_ok), or a write the allowed kinds admit (compared on
+    path.lstrip("/")). A non-GET request carrying `data` or `files` is refused."""
+    verb = str(method).upper()
+    if verb == "GET":
+        return True
+    if any((kwargs or {}).get(name) is not None for name in _UNCHECKED_BODIES):
+        return False
+    route = path.lstrip("/") if isinstance(path, str) else ""
+    if verb == "POST" and route == GRAPHQL_PATH:
+        return graphql_read_ok((kwargs or {}).get("json"))
+    for kind in _ALLOWED_WRITES["kinds"]:
+        want, pattern = WRITE_PATHS[kind]
+        if verb == want and pattern.fullmatch(route):
+            return True
+    return False
+
+
+def check_garmin_request(method, path, kwargs=None):
+    """check_garmin_path(path), then GarminMethodRefused unless garmin_method_ok()."""
+    check_garmin_path(path)
+    if not garmin_method_ok(method, path, kwargs):
+        raise GarminMethodRefused()
+
+
 def path_guarded_run_request(original):
-    """garminconnect Client._run_request with check_garmin_path() first; params= and the rest pass as given."""
+    """garminconnect Client._run_request with check_garmin_request() first (the path, then the method
+    allowlist); params= and the rest pass as given."""
 
     def _run_request(self, method, path, *args, **kwargs):
-        check_garmin_path(path)
+        check_garmin_request(method, path, kwargs)
         return original(self, method, path, *args, **kwargs)
 
     _run_request._coach_path_guard = True

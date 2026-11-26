@@ -8,6 +8,122 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-26
+
+The training plan builder ([docs/training-plan.md](docs/training-plan.md)). Every part of it is off
+by default: with `PLAN_TOOLS`, `PLAN_TRACKING` and `PLAN_WRITES` unset or `off`, the tool list, the
+tool annotations, the server instructions and the daily and weekly reports are the same as in 1.0.5,
+and no tool changes any data. After turning a switch on, choose **Refresh tools list** in claude.ai.
+The offline evals pass; the live model evals were not rerun for this release.
+
+### Added
+
+- `PLAN_TOOLS=on` (needs `HISTORY_SEARCH=on` and `GARMIN_AUTH=full`; read by the app service only):
+  the read tools `plan_assess`, `plan_preview` and `plan_get`. A marathon or half-marathon plan from
+  your own Garmin numbers by fixed, versioned rules (plan rules version 2, carried as `rules_version`
+  in every plan answer and separate from the status tools' one): weekly volume, long-run, quality and
+  taper rules, a planned all-sport acute:chronic cap of 1.3 on the recorded training load, and pace
+  bands anchored on Garmin's race predictions and lactate threshold (a half marathon has its own race
+  pace band, peak ceiling and long-run limit). Every plan is checked by named invariants (a rule that
+  cannot be enforced is listed in `invariants.not_enforced` with its reason). B races (triathlons
+  included), what-if variants, overrides that only move or reduce load (`cap_long` among them; a
+  reduce-only edit of a long-run day applies with the warning `override_relaxed`, and a refused edit
+  is never stored) and optional per-segment race pacing from a saved course (`course_id`). A long-run
+  day that is not a run day moves the long runs to the nearest run day, with a warning. `plan_get`
+  shows only the plans of the Garmin account the history index belongs to. With this switch alone
+  nothing is written to Garmin.
+- Plan previews are stored as drafts, and `plan_preview` with a `plan_id` rebuilds a stored plan: on
+  its own week grid, keeping the stored sessions up to today and planning only the days after today
+  around them, with the invariants run on the whole merged plan (a problem only the kept days have is
+  the warning `history_rule`; an edit of a kept day is refused). The volume chain, the long-run step
+  and the B-race limits go on from the stored weeks, and km0, the longest run and the peak ceiling
+  are the ones the plan was first built with (stored with each version as `basis`; a new
+  `race_distance` gets that distance's own ceiling), so a rebuild with unchanged inputs and history
+  changes no day. Session keys are the session's day and slot (`YYYYMMDD-run`, `-race`, `-b`), so a
+  rebuild keeps the same key for the same session.
+- `PLAN_TRACKING=on` (needs `PLAN_TOOLS=on`): the active plan's sessions are linked to finished
+  activities, refreshed by the status tools and shown by `plan_get` and a plan section in the daily
+  and weekly reports. `plan_activate` starts following a stored draft or stops following the active
+  plan; `log_feedback` stores RPE, pain and a fixed pain location; `plan_review_week` reviews a week
+  by plan review rules version 1 and proposes changes that only hold or reduce load, which
+  `plan_preview` (`accept_changes`) applies to the stored plan (an accepted cut updates the stored
+  `basis`, so later rebuilds keep it and grow from the week as cut). All of this is in the app's own
+  database only, with no Garmin write, so tracking works with `PLAN_WRITES` off. A draft is never
+  tracked or reviewed.
+- `PLAN_WRITES=on` (needs `PLAN_TOOLS=on`): Garmin writes. `plan_commit` writes an approved preview's
+  next days (`commit_days` 1 to 21, default 7) to the Garmin calendar and starts the plan;
+  `plan_cancel` deletes the plan's own workouts after today and cancels the plan; with
+  `PLAN_TRACKING=on` too, `plan_apply_changes` writes approved review changes. Each write runs on a
+  single-use, resumable token from the preview, needs a sign-in with the `plan:write` consent (see
+  Security) and asks the user to confirm through MCP form elicitation when the client supports it
+  (the input-required round on protocol 2026-07-28, an elicitation request during the call before
+  that). Writes run one at a time, at most 8 per call; answers are `done`, `partial` (with
+  `retry_after_s`), `unknown` (settled from the whole Garmin workout library before anything is sent
+  again, so a retry never makes a second copy), `refused` or `declined`. Only the plan's own workouts
+  are touched, known by their Garmin workout id; a session Garmin linked to an activity is never
+  deleted or rewritten, and every delete unschedules the workout's calendar entries first and deletes
+  nothing while the calendar cannot be read.
+- `python ext/launch.py --plan-cleanup [--dry-run] [--orphans]` deletes this install's own future plan
+  workouts from Garmin, also with `PLAN_WRITES` off.
+- History database migration 003 (`003_training_plans.sql`) adds the plan tables (plans, versions,
+  workouts, tokens as SHA-256 only, feedback, review changes): numbers, enums, dates and the server's
+  own Garmin ids, no names or notes. With `HISTORY_SEARCH=on` it runs on the next start, whether
+  or not a plan switch is on, and an older release ignores the tables.
+  Retention (the worker's daily `sweep`): drafts untouched for 30 days, ended plans 392 days after
+  they ended; an active plan becomes `finished` the day after its A race.
+- History database migration 004 converts plans stored by pre-release builds of the plan builder,
+  whose session keys were week numbers (`w03-long`), to the date keys (bodies, inputs, workout rows,
+  feedback, review changes; an open token that names an old key expires). It changes nothing in a
+  database without such plans.
+- The server instructions name the tools that change data when a plan switch adds them, and those
+  tools carry write annotations; the read tools stay labelled read-only.
+
+### Changed
+
+- History search keeps its own rules version (1, 2), bumped only when the numbers it stores change,
+  so weekly rules version 3 does not rebuild or re-embed the history index.
+- `HISTORY_FORGET=yes` is refused while a plan still has workouts on Garmin from today on: run
+  `--plan-cleanup` first.
+- The plan docs, tests, golden plans and eval cases use fictional sample data.
+
+### Fixed
+
+- Weekly status: plan completion counts only the workouts already due. Weekly rules version 3 (old:
+  `completion_pct` = completed / scheduled, a linked workout still ahead counted in `completed`; new:
+  completed / due, that workout in the new `plan.done_early`, and the new `plan.due`), so a week in
+  progress no longer reads low and the share never passes 100%. Workouts and activities use the same
+  week edges, from the week's first day at 00:00 up to the end of the week or today.
+- Plan completion matching (`status_common.match_completion_pairs`): among the matchings that
+  complete the most workouts it picks the one with the most same-day matches; it could move a workout
+  off its own day's activity. Part of weekly rules version 3.
+- Activity times: one parser for Garmin's start times in both status tools. Without
+  `startTimeLocal`, the daily status dates an activity by the day it asked Garmin for (it dropped such
+  an activity from plan completion).
+- Daily status: a swim workout's distance steps are read in meters in every pool, a yard pool too
+  (Garmin stores them in meters), for its distance and the hard-work total.
+
+### Security
+
+- Every Garmin request passes a method allowlist (in the path guard and the tracing hook): GET, one
+  anonymous GraphQL read query, and only with `PLAN_WRITES=on` the four workout-service paths the plan
+  writes use.
+- Garmin writes need the owner's explicit `plan:write` consent: with `PLAN_WRITES=on` the consent page
+  adds a box for it, and only a sign-in approved with that box ticked may write. A `plan:write` scope
+  a client merely requested is dropped, and the static `MCP_BEARER_TOKEN` never writes. The consent is
+  kept in a new sign-in database table (`write_consent`); the schema version stays 1, older servers
+  ignore the table, and rolling back is safe (remove the plan's Garmin workouts with `--plan-cleanup`
+  first if you used `PLAN_WRITES`).
+- The write confirmation counts only the approving one of two fixed labels (a ticked checkbox can come
+  back false), and on the 2026 protocol only with the server's sealed state for the same tool, plan and
+  token.
+- Write-path guards: a write token writes only its own ops and checks each one against today when it
+  runs (a token resumed after midnight keeps the workout that became today's, listed in `kept[]`); a
+  commit never deletes or replaces a workout dated today or earlier, except for a red-day change of
+  today's session; `plan_commit`, `plan_apply_changes` and `plan_cancel` read the plan again under its
+  lock after the confirmation and write nothing (`plan_changed`) when a new version was stored or the
+  plan was started or stopped meanwhile; an `unknown` upload is never settled as a workout another row
+  owns; and a version with one session key or day twice gets no commit token.
+
 ## [1.0.5] - 2026-11-25
 
 ### Security

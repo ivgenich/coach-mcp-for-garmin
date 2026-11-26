@@ -50,10 +50,10 @@ VERSION_PY = os.path.join(HERE, "version.py")
 KEY_MODE_PY = os.path.join(HERE, "key_mode.py")
 TOOLS_FULL = os.path.join(ROOT, "config", "enabled-tools.txt")
 TOOLS_KEY = os.path.join(ROOT, "config", "enabled-tools-key.txt")
-# The sixteen pages of docs/ (with evals and the optional features); README links each.
+# The seventeen pages of docs/ (with evals and the optional features); README links each.
 DOC_PAGES = ("deploy-railway", "deploy-docker", "garmin-login", "connect-claude", "tools", "daily-status",
              "weekly-status", "maintenance", "updates", "protocol", "how-it-works", "troubleshooting", "evals",
-             "tracing", "history-search", "history-worker")
+             "tracing", "history-search", "history-worker", "training-plan")
 
 BASH = shutil.which("bash") or "/bin/bash"
 # The OWNER_SECRET alphabet: no 0, 1, i, l or o.
@@ -1350,12 +1350,15 @@ class DocsMatchConfig(unittest.TestCase):
     """The docs agree with the files they describe."""
 
     def test_rules_headings_carry_rules_version(self):
-        for module, page, title in (("daily_status.py", "daily-status", "Daily"),
-                                    ("weekly_status.py", "weekly-status", "Weekly")):
-            match = re.search(r"(?m)^RULES_VERSION = (\d+)$", read(os.path.join(HERE, module)))
+        for module, page, title, const in (("daily_status.py", "daily-status", "Daily status rules", "RULES_VERSION"),
+                                           ("weekly_status.py", "weekly-status", "Weekly status rules", "RULES_VERSION"),
+                                           ("plan_engine.py", "training-plan", "Plan rules", "RULES_VERSION"),
+                                           ("plan_review.py", "training-plan", "Plan review rules",
+                                            "REVIEW_RULES_VERSION")):
+            match = re.search(r"(?m)^%s = (\d+)$" % const, read(os.path.join(HERE, module)))
             with self.subTest(page=page):
                 self.assertIsNotNone(match, module + " has no RULES_VERSION line")
-                self.assertRegex(read(doc(page)), r"(?m)^## %s status rules v%s$" % (title, match.group(1)))
+                self.assertRegex(read(doc(page)), r"(?m)^## %s v%s$" % (title, match.group(1)))
 
     def test_tools_table_equals_the_tool_lists(self):
         text = section(read(doc("tools")), "## Tools in each mode")

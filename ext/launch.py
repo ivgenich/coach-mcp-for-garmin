@@ -117,6 +117,7 @@ import feature_startup  # noqa: E402
 import garmin_guard  # noqa: E402
 import garmin_paths  # noqa: E402
 import mcp2_compat  # noqa: E402
+import plan_engine  # noqa: E402
 import daily_status  # noqa: E402
 import key_mode  # noqa: E402
 import launch_logging  # noqa: E402
@@ -150,9 +151,42 @@ EXTRA_READ_ONLY_TOOLS = frozenset({"get_course_profile", "get_daily_status", "ge
 # HISTORY_SEARCH=on (allowed_tools()), outside config/enabled-tools.txt, and
 # GARMIN_ENABLED_TOOLS may narrow them away like any other tool.
 HISTORY_TOOLS = frozenset({"find_similar_weeks", "search_history"})
+# The training-plan read tools (plan_tools.py): they join the allowed list only with PLAN_TOOLS=on (which needs
+# HISTORY_SEARCH=on, GARMIN_AUTH=full and ROLE=app), outside config/enabled-tools.txt, like HISTORY_TOOLS.
+# plan_assess and plan_preview call Garmin (the call guard counts them); plan_get reads only Postgres.
+PLAN_READ_TOOLS = frozenset({"plan_assess", "plan_get", "plan_preview"})
+# The plan tracking write tools (PLAN_TRACKING=on, which needs PLAN_TOOLS=on): log_feedback (RPE and pain) and
+# plan_activate (start or stop following a stored plan) write only the app's own database, never Garmin. They
+# join the allowed list only from the switch (allowed_tools()), never from config/enabled-tools.txt or
+# GARMIN_ENABLED_TOOLS, and patch() then annotates them additive, idempotent and local-only (never read-only).
+PLAN_TRACKING_TOOLS = frozenset({"log_feedback", "plan_activate"})
+# The weekly review (Stage 4, PLAN_TRACKING=on): plan_review_week reads Garmin and the plan database and stores
+# its proposals in the app's own database, nothing the user sees in Garmin or in the plan (the same bookkeeping
+# as get_daily_status refreshing the links), so it is a read tool: hinted read-only, in OWN_READ_TOOLS. It joins
+# the allowed list only from the switch (full mode, ROLE=app), like the plan read tools.
+PLAN_REVIEW_TOOLS = frozenset({"plan_review_week"})
+# Tools that never call Garmin: the call guard skips them.
+NO_GARMIN_TOOLS = HISTORY_TOOLS | frozenset({"plan_get"}) | PLAN_TRACKING_TOOLS
+# This repo's read-only tools: patch() merges exactly these into upstream's READ_ONLY_TOOLS.
+OWN_READ_TOOLS = EXTRA_READ_ONLY_TOOLS | HISTORY_TOOLS | PLAN_READ_TOOLS | PLAN_REVIEW_TOOLS
+# The plan write tools. Never merged into READ_ONLY_TOOLS, and never named in config/enabled-tools.txt or
+# GARMIN_ENABLED_TOOLS (both stay errors). PLAN_WRITE_TOOLS join the allowed list only with PLAN_WRITES=on and
+# PLAN_TRACKING_TOOLS only with PLAN_TRACKING=on (allowed_tools()); patch() then merges them into upstream's
+# effect sets (WRITE_EFFECTS; log_feedback additive, idempotent and local-only) so their hints are right.
+# plan_apply_changes (Stage 4) joins only with PLAN_WRITES=on and PLAN_TRACKING=on (its token comes from
+# plan_review_week): destructive (it replaces the plan's own workouts) and idempotent (a done token replays).
+OWN_WRITE_TOOLS = frozenset({"log_feedback", "plan_activate", "plan_apply_changes", "plan_cancel", "plan_commit"})
+PLAN_APPLY_TOOLS = frozenset({"plan_apply_changes"})
+PLAN_WRITE_TOOLS = frozenset({"plan_cancel", "plan_commit"})
+# The tools that may change Garmin (the write failure text, the --check-config count).
+GARMIN_WRITE_TOOLS = PLAN_WRITE_TOOLS | PLAN_APPLY_TOOLS
+# name -> (upstream effect set, idempotent): plan_commit adds workouts, plan_cancel deletes them; both are safe to
+# repeat with the same token (a finished token replays its answer).
+WRITE_EFFECTS = {"plan_commit": ("ADDITIVE_TOOLS", True), "plan_cancel": ("DESTRUCTIVE_TOOLS", True),
+                 "plan_apply_changes": ("DESTRUCTIVE_TOOLS", True)}
 # This repo's tools: they clean their own read points, so call_tool() leaves
 # their answers as they are.
-OWN_TOOLS = EXTRA_READ_ONLY_TOOLS | HISTORY_TOOLS
+OWN_TOOLS = OWN_READ_TOOLS | OWN_WRITE_TOOLS
 
 # The feature settings main() read (feature_config.FeatureConfig); both off
 # until main() runs.
@@ -314,12 +348,16 @@ def allowed_tools(environ):
     In key mode (GARMIN_AUTH=key) only key_mode.KEY_MODE_TOOLS; an unset or
     invalid GARMIN_AUTH uses the full list (key_mode.check() reports it).
     With HISTORY_SEARCH=on (ROLE=app) the HISTORY_TOOLS join the list in
-    both modes.
+    both modes; with PLAN_TOOLS=on too the PLAN_READ_TOOLS join it (full mode
+    only), and with PLAN_TRACKING=on the PLAN_REVIEW_TOOLS. Of OWN_WRITE_TOOLS only PLAN_WRITE_TOOLS
+    (PLAN_WRITES=on), PLAN_TRACKING_TOOLS (PLAN_TRACKING=on) and PLAN_APPLY_TOOLS (both) join it, from their
+    switch only, never from a tool list.
     """
     mcp2_compat.install()
     from garmin_mcp import tool_annotations
 
-    write = tool_annotations.ADDITIVE_TOOLS | tool_annotations.DESTRUCTIVE_TOOLS
+    # Upstream's own write tools (a snapshot taken before patch() merges the plan write tools) and this repo's.
+    write = _upstream_write_tools() | OWN_WRITE_TOOLS
     # A name upstream lists as a write tool is never read-only here, not even
     # one of this repo's (or after patch() merged them into READ_ONLY_TOOLS).
     read_only = (tool_annotations.READ_ONLY_TOOLS | EXTRA_READ_ONLY_TOOLS) - write
@@ -331,10 +369,57 @@ def allowed_tools(environ):
         read_only = read_only | (HISTORY_TOOLS - write)
         if available is not None:
             available = frozenset(available) | HISTORY_TOOLS
+    if features.plan_tools and features.history and features.role == "app" and available is None:
+        baked = list(baked) + sorted(PLAN_READ_TOOLS)
+        read_only = read_only | (PLAN_READ_TOOLS - write)
+        if getattr(features, "plan_tracking", False):
+            baked = list(baked) + sorted(PLAN_REVIEW_TOOLS)
+            read_only = read_only | (PLAN_REVIEW_TOOLS - write)
     allowed, errors = resolve_tools(environ, baked, read_only, write, available)
     if errors:
         raise ConfigError(errors)
-    return allowed
+    if features.plan_writes and features.plan_tools and features.history and features.role == "app" \
+            and available is None:
+        # Only from the switch: never from the file or GARMIN_ENABLED_TOOLS, and never an upstream write tool.
+        allowed = allowed | (PLAN_WRITE_TOOLS - _upstream_write_tools())
+        if getattr(features, "plan_tracking", False):
+            allowed = allowed | (PLAN_APPLY_TOOLS - _upstream_write_tools())
+    return allowed | (plan_tracking_tools(features, key_mode=available is not None) - _upstream_write_tools())
+
+
+def plan_tracking_tools(features, *, key_mode=False):
+    """The tracking write tools PLAN_TRACKING=on turns on (PLAN_TRACKING_TOOLS: log_feedback and plan_activate,
+    which write only the app's database), full mode and ROLE=app only."""
+    if key_mode or not (getattr(features, "plan_tracking", False) and features.plan_tools and features.history
+                        and features.role == "app"):
+        return frozenset()
+    return PLAN_TRACKING_TOOLS & OWN_WRITE_TOOLS
+
+
+_UPSTREAM_WRITE = {}
+
+
+def _upstream_write_tools():
+    """Upstream's ADDITIVE_TOOLS | DESTRUCTIVE_TOOLS as they were before this process merged anything into
+    them (taken once, on the first call; patch() calls it before its merge)."""
+    if "tools" not in _UPSTREAM_WRITE:
+        mcp2_compat.install()
+        from garmin_mcp import tool_annotations
+
+        _UPSTREAM_WRITE["tools"] = frozenset(tool_annotations.ADDITIVE_TOOLS | tool_annotations.DESTRUCTIVE_TOOLS)
+    return _UPSTREAM_WRITE["tools"]
+
+
+def _merge_write_effects(tool_annotations, tracking=False):
+    """With PLAN_WRITES=on: plan_commit into ADDITIVE_TOOLS, plan_cancel (and with PLAN_TRACKING=on
+    plan_apply_changes) into DESTRUCTIVE_TOOLS, all into IDEMPOTENT_TOOLS, so upstream's annotations_for() hints
+    them right (readOnlyHint false)."""
+    for name, (effect, idempotent) in WRITE_EFFECTS.items():
+        if name in PLAN_APPLY_TOOLS and not tracking:
+            continue
+        setattr(tool_annotations, effect, getattr(tool_annotations, effect) | {name})
+        if idempotent:
+            tool_annotations.IDEMPOTENT_TOOLS = tool_annotations.IDEMPOTENT_TOOLS | {name}
 
 
 # --- Argument checks and the Garmin request path guard (garmin_paths.py) --------------------------------------
@@ -392,7 +477,9 @@ def read_only_server_class(base, allowed):
       (structured "result" kept equal to the text); this repo's 3 tools, which clean their
       own read points and whose markdown keeps its bidi isolates, unchanged;
     - an MCPError (a protocol error) passes through, and an
-      InputRequiredResult is returned as is.
+      InputRequiredResult (plan_confirm's input-required round) is returned
+      as is: not cleaned, not a failure, and the call guard hears no outcome
+      for it (it called no Garmin); telemetry counts it as an ok call.
     A bug in the override itself is answered as an internal error, never as
     its own text.
     """
@@ -434,8 +521,8 @@ def read_only_server_class(base, allowed):
                                   f"argument {refused[0]} refused before Garmin")
                 _record_tool_call(name, "error", tool_errors.BAD_INPUT, 0.0, result, None)
                 return result
-            # The guard (set up by main()) for a Garmin tool; the history tools never call Garmin.
-            guard = _GUARD if (name in allowed and name not in HISTORY_TOOLS) else None
+            # The guard (set up by main()) for a Garmin tool; the history tools and plan_get never call Garmin.
+            guard = _GUARD if (name in allowed and name not in NO_GARMIN_TOOLS) else None
             if guard is not None:
                 try:
                     guard.before_call(garmin_guard.TOOL)
@@ -462,7 +549,10 @@ def read_only_server_class(base, allowed):
                 status_common.end_capture(capture)
                 if guard is not None:
                     guard.live_call_finished()
-                    guard.after_outcome(garmin_guard.TOOL, _guard_outcome(group, sources))
+                    if not _is_input_required(result):
+                        # The input-required round asked the user and called no Garmin: no outcome to hear
+                        # (a success would end a login cooldown).
+                        guard.after_outcome(garmin_guard.TOOL, _guard_outcome(group, sources))
                 if _TELEMETRY is not None:
                     _record_tool_call(name, "ok" if group is None else "error", group,
                                       time.monotonic() - started, result, guard)
@@ -522,6 +612,12 @@ def read_only_server_class(base, allowed):
     return ReadOnlyFastMCP
 
 
+def _is_input_required(result):
+    """True for an InputRequiredResult (protocol 2026-07-28: the tool asks the client for input and runs again):
+    passed through as is, neither a failure nor a Garmin outcome."""
+    return getattr(result, "result_type", None) == "input_required"
+
+
 def _guard_outcome(group, source_groups):
     """The group the call guard hears for a tool call that ended in `group` (None: it answered) after its
     report sources met `source_groups`: the call's own group when it starts a cooldown, else a rate limit or
@@ -564,6 +660,9 @@ def _failure(name, group, detail, text, *, exc_info=None, original=None, message
             tool_log.log(level, "tool error: tool=%s group=%s: %s", tool, group, line)
     except Exception:  # noqa: BLE001 - the answer matters more than its log line
         pass
+    if message is None and name in GARMIN_WRITE_TOOLS and group != tool_errors.BAD_INPUT:
+        # The generic "retry once" is unsafe after a write: say that Garmin may have changed.
+        message = tool_errors.write_client_text(group, ref=ref)
     if message is None:
         message = tool_errors.client_text(group, ref=ref, detail=detail, today=_today_iso(), key_mode=_KEY_MODE)
     structured = None
@@ -725,8 +824,9 @@ def _traced_run_request(original):
 
     def _run_request(self, method, path, *args, **kwargs):
         # The tracing hook is installed after the path guard (patch()), so it is the outer wrapper: a refused
-        # path is refused here too, before it counts as a Garmin request in the metrics.
-        check_garmin_path(path)
+        # path is refused here too, before it counts as a Garmin request in the metrics; so is a method the
+        # allowlist does not admit (garmin_paths.check_garmin_request).
+        garmin_paths.check_garmin_request(method, path, kwargs)
         tel = _TELEMETRY
         if tel is None:
             return original(self, method, path, *args, **kwargs)
@@ -992,8 +1092,18 @@ def _check_config_cli(environ):
         print(f"launch: config OK ({extra})", file=sys.stderr)
         return 0
     extra = f"; {extra}" if extra else ""
+    own_writes = allowed & PLAN_TRACKING_TOOLS
+    if own_writes:
+        # PLAN_TRACKING=on: log_feedback and plan_activate write the app's own database only; not read-only tools.
+        allowed = allowed - own_writes
+        verb = "writes" if len(own_writes) == 1 else "write"
+        extra = f"; {' and '.join(sorted(own_writes))} {verb} only the app's database{extra}"
     if _is_key_mode(environ):
         print(f"launch: config OK ({len(allowed)} read-only tools, Garmin Personal API key{extra})", file=sys.stderr)
+    elif allowed & GARMIN_WRITE_TOOLS:
+        writes = len(allowed & GARMIN_WRITE_TOOLS)
+        print(f"launch: config OK ({len(allowed) - writes} read-only tools and {writes} plan write tools{extra})",
+              file=sys.stderr)
     else:
         print(f"launch: config OK ({len(allowed)} read-only tools{extra})", file=sys.stderr)
     return 0
@@ -1021,6 +1131,7 @@ def patch(garmin_auth="full"):
 
     daily_status.selfcheck()
     weekly_status.selfcheck()
+    plan_engine.selfcheck()
     # The Garmin path guard's hook (garminconnect's Client._run_request), checked in both modes so the
     # Dockerfile's patch() fails the build when a garminconnect bump moves it.
     _check_path_guard_hook()
@@ -1047,6 +1158,8 @@ def patch(garmin_auth="full"):
         weekly_status.register_tools(app, get_client, key_mode=keyed)
         if _history_tools_wanted(_FEATURES):
             _register_history_tools(app, _FEATURES)
+        if _plan_tools_wanted(_FEATURES):
+            _register_plan_tools(app, _FEATURES, get_client)
         if _AUTH is not None:
             # The consent page and the root protected-resource metadata. app
             # is upstream's _ToolFilter, which passes custom_route() through.
@@ -1056,7 +1169,19 @@ def patch(garmin_auth="full"):
         return app
 
     # annotations_for() reads this module global at registration time.
-    tool_annotations.READ_ONLY_TOOLS = tool_annotations.READ_ONLY_TOOLS | OWN_TOOLS
+    # Only the read tools: a write tool must never be labelled read-only.
+    tool_annotations.READ_ONLY_TOOLS = tool_annotations.READ_ONLY_TOOLS | OWN_READ_TOOLS
+    _upstream_write_tools()   # the snapshot, before anything below changes upstream's write sets
+    if getattr(_FEATURES, "plan_writes", False) and not keyed:
+        _merge_write_effects(tool_annotations, tracking=bool(plan_tracking_tools(_FEATURES, key_mode=keyed)))
+    # PLAN_TRACKING=on: log_feedback and plan_activate are additive, idempotent and local-only (they write only
+    # the app's database).
+    # With the switches off the upstream sets stay untouched.
+    tracking = plan_tracking_tools(_FEATURES, key_mode=keyed)
+    if tracking:
+        tool_annotations.ADDITIVE_TOOLS = tool_annotations.ADDITIVE_TOOLS | tracking
+        tool_annotations.IDEMPOTENT_TOOLS = tool_annotations.IDEMPOTENT_TOOLS | tracking
+        tool_annotations.LOCAL_ONLY_TOOLS = tool_annotations.LOCAL_ONLY_TOOLS | tracking
     courses.register_tools = register_tools
     if not keyed:
         # Full mode: no Garmin request leaves with a path a caller bent (key mode's client refuses its own).
@@ -1071,6 +1196,8 @@ def patch(garmin_auth="full"):
 _optional = feature_startup.optional
 _history_tools_wanted = feature_startup.history_tools_wanted
 _register_history_tools = feature_startup.register_history_tools
+_plan_tools_wanted = feature_startup.plan_tools_wanted
+_register_plan_tools = feature_startup.register_plan_tools
 _build_guard = feature_startup.build_guard
 _forget_history = feature_startup.forget_history
 _removed_text = feature_startup.removed_text
@@ -1108,7 +1235,10 @@ def _setup_features(features, environ, allowed=frozenset()):
                 # The served tool names may appear in spans; any other name reads "other".
                 # The history tools too when history search is on, so their spans and coach.history.searches
                 # read their names, not "other".
-                module.register_tools(sorted(set(allowed) | (HISTORY_TOOLS if features.history else set())))
+                module.register_tools(sorted(set(allowed) | (HISTORY_TOOLS if features.history else set())
+                                             | (PLAN_READ_TOOLS if features.plan_tools else set())
+                                             | plan_tracking_tools(features)
+                                             | (PLAN_REVIEW_TOOLS if plan_tracking_tools(features) else set())))
                 _TELEMETRY = module
                 _install_tracing_hooks()
             except Exception as exc:  # noqa: BLE001
@@ -1199,8 +1329,15 @@ def main(argv=None):
     args = sys.argv[1:] if argv is None else list(argv)
     if args == ["--check-config"]:
         sys.exit(_check_config_cli(os.environ))
+    if args[:1] == ["--plan-cleanup"]:
+        # The owner's cleanup of the plan's own workouts (plan_writes.cleanup_cli); works with PLAN_WRITES off.
+        import plan_writes
+
+        log_privacy.quiet_libraries()
+        mcp2_compat.install()
+        sys.exit(plan_writes.cleanup_cli(os.environ, args[1:]))
     if args:
-        sys.exit("usage: launch.py [--check-config]")
+        sys.exit("usage: launch.py [--check-config | --plan-cleanup [--dry-run] [--orphans]]")
 
     # The optional features, again (entrypoint.sh ran --check-config first).
     errors = feature_config.problems(os.environ)
@@ -1262,6 +1399,17 @@ def main(argv=None):
     # (the mode's) and, with the sign-in on, the sign-in itself.
     _AUTH = None
     instructions = server_instructions.INSTRUCTIONS_KEY if _KEY_MODE else server_instructions.INSTRUCTIONS
+    # PLAN_TRACKING=on: log_feedback and plan_activate write the app's database, so "No tool changes any data."
+    # is false too.
+    tracking = not _KEY_MODE and bool(plan_tracking_tools(_FEATURES))
+    if tracking:
+        instructions = getattr(server_instructions, "INSTRUCTIONS_TRACKING", instructions)
+    if _FEATURES.plan_writes and not _KEY_MODE and allowed & PLAN_WRITE_TOOLS:
+        # PLAN_WRITES=on: "No tool changes any data." is false now. The plan's workout writes leave this process
+        # only through garmin_paths' method allowlist, admitted here.
+        name = "INSTRUCTIONS_PLAN_TRACKING" if tracking else "INSTRUCTIONS_PLAN"
+        instructions = getattr(server_instructions, name, instructions)
+        garmin_paths.allow_plan_writes(set(garmin_paths.WRITE_PATHS))
     overrides = {"name": SERVER_NAME, "version": SERVER_VERSION, "instructions": instructions}
     middleware = ()
     if auth_config.auth_required(os.environ):

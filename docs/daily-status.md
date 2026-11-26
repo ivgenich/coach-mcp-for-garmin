@@ -20,6 +20,35 @@ The tool returns JSON with:
   Garmin has none). `null` when the activity search failed. No rule reads it; the report
   text shows it as one "Done today" line.
 - `flags` (which rules fired) and `missing` (which values Garmin had none for).
+- `plan`, only with plan tracking on (`PLAN_TRACKING=on`, see
+  [Training plans](training-plan.md)): today's session of the stored training plan, or
+  `null` without an active plan (a draft is never shown), outside its weeks, or when its database read failed. See "Training plan" below.
+
+### Training plan
+
+With plan tracking on, each full status first refreshes the plan's links: it matches the
+plan's sessions against yesterday's and today's activities and today's and tomorrow's
+calendar, the same way plan_get then shows them. An activity with only a GMT start time is
+dated by the day Garmin listed it under, as everywhere else in the report. Two days of activities never cover a
+session's whole window (the day before to the day after), so the daily status never settles
+one as `missed` or `replaced`; the weekly status does. It then adds:
+
+- `plan`: `workout_key`, `date`, `role` (easy, long, threshold and so on), `sport`,
+  `planned_km`, `planned_min`, `link_status` (`done`, `done_early`, `done_late`, `partial`,
+  `partial_early`, `partial_late`, `replaced`, `missed`, or `null` while it is not settled)
+  `feedback_due` and `feedback_for`. On a plan day without a run, `role` is `rest` and the
+  session fields are `null`. `feedback_for` is the `workout_key` of yesterday's or today's
+  done or partly done session that has no feedback yet, and `feedback_due` is `true` when
+  there is one: ask how it felt and store the answer with `log_feedback` for that key.
+- `today[i].plan` (`workout_key`, `role`) on each of today's calendar workouts that is the
+  plan's own.
+
+The report text adds one "Plan" line. The plan is read from the server's database, never
+from Garmin, and it is best effort: when the database does not answer within 3 seconds, or
+the Garmin answers carry no account id, the status comes without `plan`, exactly as with
+plan tracking off. The plan feeds no rule: flags, level, recommendation and
+`RULES_VERSION` stay the same. `plan` is never listed in `missing`. In key mode and in the
+probe there is no plan.
 
 Garmin writes several Training Readiness readings a day. `recovery.readiness` (and its
 level) is the morning one, taken at `readiness_at`; `recovery_hours` comes from the

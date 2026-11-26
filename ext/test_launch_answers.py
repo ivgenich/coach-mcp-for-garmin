@@ -86,14 +86,14 @@ def upstream_training_answer(tool, client, **arguments):
         training.garmin_client = saved
 
 
-# Garmin's fitnessstats rows as the owner's account answered them (centimeters, milliseconds, calories x 4.19).
+# Made-up fitnessstats rows in the units Garmin answers them (centimeters, milliseconds, calories x 4.19).
 PROGRESS_ROWS = {
-    "distance": {"running": {"count": 5, "sum": 3504354.0, "avg": 700870.8, "min": 401200.0, "max": 1203954.0},
-                 "cycling": {"count": 1, "sum": 2510000.0, "avg": 2510000.0, "min": 2510000.0, "max": 2510000.0}},
-    "duration": {"running": {"count": 5, "sum": 11748244.0, "avg": 2349648.8, "min": 1400000.0, "max": 4100244.0}},
-    "elevationGain": {"running": {"count": 5, "sum": 139300.0, "avg": 27860.0, "min": 0.0, "max": 61300.0}},
-    "calories": {"running": {"count": 5, "sum": 2364.0113 * 4.19, "avg": 472.80226 * 4.19,
-                             "min": 301.4 * 4.19, "max": 802.6 * 4.19}},
+    "distance": {"running": {"count": 5, "sum": 3104354.0, "avg": 620870.8, "min": 402200.0, "max": 1003954.0},
+                 "cycling": {"count": 1, "sum": 2210000.0, "avg": 2210000.0, "min": 2210000.0, "max": 2210000.0}},
+    "duration": {"running": {"count": 5, "sum": 10748244.0, "avg": 2149648.8, "min": 1400000.0, "max": 3900244.0}},
+    "elevationGain": {"running": {"count": 5, "sum": 129300.0, "avg": 25860.0, "min": 0.0, "max": 51300.0}},
+    "calories": {"running": {"count": 5, "sum": 2104.0113 * 4.19, "avg": 420.80226 * 4.19,
+                             "min": 300.4 * 4.19, "max": 700.6 * 4.19}},
 }
 LOAD_DTO = {"dailyTrainingLoadAcute": 612.0, "dailyTrainingLoadChronic": 455.0,
             "dailyAcuteChronicWorkloadRatio": 1.3, "acwrStatus": "OPTIMAL", "acwrPercent": 62,
@@ -101,18 +101,18 @@ LOAD_DTO = {"dailyTrainingLoadAcute": 612.0, "dailyTrainingLoadChronic": 455.0,
 
 
 class TrainingClient:
-    """The garminconnect calls upstream's progress and training tools make, with the owner's shapes."""
+    """The garminconnect calls upstream's progress and training tools make, in the shapes Garmin answers."""
 
     def get_progress_summary_between_dates(self, start, end, metric):
         stats = {sport: {metric: row} for sport, row in PROGRESS_ROWS[metric].items()}
         return [{"date": end, "countOfActivities": 9, "stats": stats}]
 
     def get_devices(self):
-        return [{"deviceId": 3442975180, "primaryDevice": True, "displayName": "Forerunner 965"}]
+        return [{"deviceId": 3400000001, "primaryDevice": True, "displayName": "Sample Watch"}]
 
     def get_training_status(self, date):
-        return {"mostRecentTrainingStatus": {"latestTrainingStatusData": {"3442975180": {
-                    "deviceId": 3442975180, "calendarDate": date, "trainingStatus": 4, "sport": "RUNNING",
+        return {"mostRecentTrainingStatus": {"latestTrainingStatusData": {"3400000001": {
+                    "deviceId": 3400000001, "calendarDate": date, "trainingStatus": 4, "sport": "RUNNING",
                     "trainingStatusFeedbackPhrase": "PRODUCTIVE_1", "fitnessTrend": 2,
                     "primaryTrainingDevice": True, "acuteTrainingLoadDTO": dict(LOAD_DTO)}}},
                 "mostRecentVO2Max": {"generic": {"vo2MaxValue": 53.0, "vo2MaxPreciseValue": 53.4}}}
@@ -144,10 +144,10 @@ class AnswerAdditions(unittest.TestCase):
     def test_progress_summary_gets_its_unit_and_converted_copies(self):
         add = self.launch.add_to_answer
         expected = {
-            "distance": ("cm", {"sum_m": 35043.5, "avg_m": 7008.7, "min_m": 4012.0, "max_m": 12039.5}),
-            "duration": ("ms", {"sum_s": 11748.2, "avg_s": 2349.6, "min_s": 1400.0, "max_s": 4100.2}),
-            "elevationGain": ("cm", {"sum_m": 1393.0, "avg_m": 278.6, "min_m": 0.0, "max_m": 613.0}),
-            "calories": ("kcal", {"sum_rounded": 2364, "avg_rounded": 473, "min_rounded": 301, "max_rounded": 803}),
+            "distance": ("cm", {"sum_m": 31043.5, "avg_m": 6208.7, "min_m": 4022.0, "max_m": 10039.5}),
+            "duration": ("ms", {"sum_s": 10748.2, "avg_s": 2149.6, "min_s": 1400.0, "max_s": 3900.2}),
+            "elevationGain": ("cm", {"sum_m": 1293.0, "avg_m": 258.6, "min_m": 0.0, "max_m": 513.0}),
+            "calories": ("kcal", {"sum_rounded": 2104, "avg_rounded": 421, "min_rounded": 300, "max_rounded": 701}),
         }
         for metric, (unit, copies) in expected.items():
             with self.subTest(metric=metric):
@@ -162,7 +162,7 @@ class AnswerAdditions(unittest.TestCase):
                 self.assertEqual(list(running)[-4:], list(copies))
                 self.assertEqual(text, json.dumps(after, indent=2))  # upstream's indent=2, ensure_ascii
         cycling = json.loads(add("get_progress_summary_between_dates", self.progress("distance")))
-        self.assertEqual(cycling["stats_by_activity_type"]["cycling"]["sum_m"], 25100.0)
+        self.assertEqual(cycling["stats_by_activity_type"]["cycling"]["sum_m"], 22100.0)
 
     def test_training_status_and_load_trend_get_the_acute_band(self):
         add = self.launch.add_to_answer
@@ -187,7 +187,7 @@ class AnswerAdditions(unittest.TestCase):
     def test_present_fields_are_never_doubled_or_overwritten(self):
         add = self.launch.add_to_answer
         fixed = json.dumps({"metric": "distance", "unit": "m", "stats_by_activity_type": {
-            "running": {"count": 1, "sum": 35043.5, "avg": 35043.5, "min": 35043.5, "max": 35043.5}}}, indent=2)
+            "running": {"count": 1, "sum": 31043.5, "avg": 31043.5, "min": 31043.5, "max": 31043.5}}}, indent=2)
         self.assertIs(add("get_progress_summary_between_dates", fixed), fixed)  # an upstream fix: left alone
         status = json.dumps({"optimal_chronic_load_min": 364.0, "optimal_chronic_load_max": 682.5,
                              "optimal_acute_load_min": 1.0, "optimal_acute_load_max": 2.0})

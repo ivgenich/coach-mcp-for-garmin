@@ -44,10 +44,13 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import asyncio
 import importlib
+import logging
 import re
+import threading
 import time
-from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Mapping, Optional, Tuple, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 import mcp2_compat
@@ -55,6 +58,8 @@ import status_common as sc
 import text_hygiene as th
 
 RULES_VERSION = 1
+
+log = logging.getLogger("garmin_ext.plans")
 
 THRESHOLDS: Dict[str, Any] = {
     "hrv_drop_ms": 10,
@@ -89,6 +94,8 @@ CALL_TIMEOUT_S = sc.DEFAULT_CALL_TIMEOUT_S
 DEADLINE_S = sc.DEFAULT_DEADLINE_S
 # Scheduled workouts of today and tomorrow whose steps are fetched, at most.
 MAX_WORKOUT_DETAILS = 4
+# The training-plan lookup (PLAN_TRACKING=on) gets this long, after the Garmin calls; slower: no plan section.
+PLAN_TIMEOUT_S = 3.0
 # The activity search of one day reads pages of ACTIVITY_PAGE, at most ACTIVITY_PAGES of them.
 ACTIVITY_PAGE = 20
 ACTIVITY_PAGES = 5
@@ -216,7 +223,6 @@ _READINESS_LEVEL_EN = {
 }
 _ACWR_STATUS_EN = {"LOW": "low", "OPTIMAL": "optimal", "HIGH": "high", "VERY_HIGH": "very high"}
 
-_TS_RE = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?")
 _ID_SEGMENT_RE = re.compile(r"^(?:\d{3,}|[0-9a-fA-F]{8}-[0-9a-fA-F-]{8,})$")
 
 
@@ -268,23 +274,6 @@ def _fmt_threshold(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
-
-
-def _parse_local_ts(value: Any) -> Optional[dt.datetime]:
-    """Naive datetime from Garmin's "2026-03-18T05:58:41.0" (any fraction, no zone).
-
-    datetime.fromisoformat on Python 3.10 rejects a one-digit fraction.
-    """
-    if not isinstance(value, str):
-        return None
-    m = _TS_RE.match(value)
-    if not m:
-        return None
-    y, mo, d, h, mi, s = m.groups()
-    try:
-        return dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))
-    except ValueError:
-        return None
 
 
 def _upstream(module: str, name: str) -> Optional[Callable[..., Any]]:
@@ -377,7 +366,7 @@ def _clock(value: Any, *, local: bool, zone: ZoneInfo) -> Optional[str]:
         except (OverflowError, ValueError, OSError):
             return None
         return (moment if local else moment.astimezone(zone)).strftime("%H:%M")
-    parsed = _parse_local_ts(value)
+    parsed = sc.parse_garmin_time(value)
     if parsed is None:
         return None
     if not local:
@@ -538,10 +527,10 @@ def snapshot_time(snap: Dict[str, Any], zone: ZoneInfo) -> Optional[dt.datetime]
             return dt.datetime.fromtimestamp(v / 1000, dt.timezone.utc)
         except (OverflowError, ValueError, OSError):
             return None
-    parsed = _parse_local_ts(gmt)
+    parsed = sc.parse_garmin_time(gmt)
     if parsed is not None:
         return parsed.replace(tzinfo=dt.timezone.utc)
-    local = _parse_local_ts(snap.get("timestampLocal"))
+    local = sc.parse_garmin_time(snap.get("timestampLocal"))
     return local.replace(tzinfo=zone) if local is not None else None
 
 
@@ -674,7 +663,7 @@ def extract_sessions(payload: Any, *, start: bool = False) -> Optional[List[Dict
             "name": th.name_or_none(a.get("activityName")),
         }
         if start:
-            started = _parse_local_ts(a.get("startTimeLocal"))
+            started = sc.parse_garmin_time(a.get("startTimeLocal"))
             session["start_local"] = started.strftime("%H:%M") if started is not None else None
         session.update({
             "minutes": _minutes(a.get("duration")),
@@ -689,35 +678,26 @@ def extract_sessions(payload: Any, *, start: bool = False) -> Optional[List[Dict
     return sessions
 
 
-def completion_sport(type_key: Any) -> str:
-    """The "sport" status_common.match_completions pairs on.
-
-    run / bike / swim pair by sport group. "other" lumps strength, yoga,
-    walking and the rest together, so those pair by their own type key: a
-    walk must not complete a strength workout.
-    """
-    group = sc.sport_group(type_key)
-    if group != "other":
-        return group
-    return (_text(type_key) or "other").lower()
-
-
-def completion_activities(payload: Any) -> List[Dict[str, Any]]:
+def completion_activities(payload: Any, zone: Optional[ZoneInfo] = None,
+                          day: Optional[dt.date] = None) -> List[Dict[str, Any]]:
     """A day's activities in status_common.match_completions' shape, in start order.
 
-    The activity ids only pair activities with workouts; they never reach
-    the status.
+    The date comes from status_common.activity_times: startTimeLocal, else
+    (day given, the local date the list was asked for) that day, else
+    startTimeGMT read in zone. The activity ids only pair activities with
+    workouts; they never reach the status.
     """
     if not isinstance(payload, list):
         return []
+    tz: dt.tzinfo = zone if zone is not None else dt.timezone.utc
+    timed = [(sc.activity_times(a, tz, day), a) for a in payload if isinstance(a, dict)]
+    timed.sort(key=lambda t: (t[0][0] or dt.date.min, t[0][1] or dt.datetime.min))
     out = []
-    acts = sorted((x for x in payload if isinstance(x, dict)), key=lambda x: str(x.get("startTimeLocal") or ""))
-    for i, a in enumerate(acts):
-        start = _text(a.get("startTimeLocal"))
+    for i, ((start_day, _), a) in enumerate(timed):
         activity_id = a.get("activityId")
         out.append({
-            "date": start[:10] if start else None,
-            "sport": completion_sport(sc.dig(a, "activityType", "typeKey")),
+            "date": start_day.isoformat() if start_day is not None else None,
+            "sport": sc.completion_sport(sc.dig(a, "activityType", "typeKey")),
             # Without an id each activity still pairs with one workout only.
             "id": activity_id if activity_id is not None else f"#{i}",
         })
@@ -791,11 +771,13 @@ def leaf_steps(curated: Optional[Dict[str, Any]]) -> Iterator[Tuple[Dict[str, An
             yield from walk(segment.get("steps"), 1)
 
 
-def _sum_steps(leaves: List[Tuple[Dict[str, Any], int]], condition: str) -> Optional[float]:
+def _sum_distance_m(leaves: List[Tuple[Dict[str, Any], int]]) -> Optional[float]:
+    """Meters of the steps that end on distance (status_common.step_distance_m: meters in every pool),
+    or None when no step does."""
     values = [
-        cast(float, sc.num(step.get("end_condition_value"))) * times  # the filter below drops None
+        (sc.step_distance_m(step) or 0.0) * times
         for step, times in leaves
-        if step.get("end_condition") == condition and sc.num(step.get("end_condition_value")) is not None
+        if step.get("end_condition") == "distance" and sc.num(step.get("end_condition_value")) is not None
     ]
     return sum(values) if values else None
 
@@ -897,7 +879,8 @@ def hard_from_steps(
     work the qualifying steps add up to. They must reach hard_min_work_s
     seconds or hard_min_work_m metres (step value x repeat iterations); a
     qualifying step that ends on the lap button, or any other open end, is
-    enough by itself.
+    enough by itself. A distance step's value is meters in every pool
+    (status_common.step_distance_m).
     """
     athlete = athlete or {}
     best: Optional[Tuple[float, str]] = None  # highest range below its threshold, for the reason
@@ -944,7 +927,7 @@ def hard_from_steps(
         if step.get("end_condition") == "time" and value is not None:
             seconds += value * times
         elif step.get("end_condition") == "distance" and value is not None:
-            metres += value * times
+            metres += (sc.step_distance_m(step) or 0.0) * times
         else:
             open_ended = True
 
@@ -1026,7 +1009,7 @@ def classify_workout(
     meters = _first_positive(
         entry.get("estimatedDistanceInMeters"),
         (cur or {}).get("estimated_distance_meters"),
-        _sum_steps(leaves, "distance"),
+        _sum_distance_m(leaves),
     )
     minutes = _minutes(seconds)
     km = _km(meters)
@@ -1061,7 +1044,7 @@ def mark_completed(
 
     Done = linked by Garmin, or an activity of the same sport group on the
     same local date (one activity per workout; "other" sports pair by type
-    key, see completion_sport). entries are the calendar items the workouts
+    key, see status_common.completion_sport). entries are the calendar items the workouts
     were classified from, in the same order; activities come from
     completion_activities().
     """
@@ -1069,7 +1052,7 @@ def mark_completed(
         {
             "date": e.get("scheduleDate"),
             "sport": w.get("sport") if w.get("sport") in ("run", "bike", "swim")
-            else completion_sport(e.get("workoutType")),
+            else sc.completion_sport(e.get("workoutType")),
             "activity_id": e.get("associatedActivityId"),
         }
         for e, w in zip(entries, workouts)
@@ -1708,7 +1691,7 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
                 reason = "workout details unreadable"
             out.append(classify_workout(entry, curated_of(entry), athlete=athlete, unavailable=reason))
         # Tomorrow's activities are not fetched: only Garmin's own links count there.
-        activities = completion_activities(payloads.get("activities_today")) if d == d0 else []
+        activities = completion_activities(payloads.get("activities_today"), zone, day) if d == d0 else []
         mark_completed(out, entries, activities)
         return out
 
@@ -1716,6 +1699,8 @@ async def _full(client: Any, day: dt.date, zone: ZoneInfo, now: dt.datetime, sta
         payloads, day=day, zone=zone, now=now, today=classified(d0), tomorrow=classified(d_next),
         athlete=athlete, athlete_needed=tuple(needed), key_mode=key_mode,
     )
+    if not key_mode:
+        await add_plan(status, day, zone, payloads, entries, planned[d0], now)
     status["sources"] = {
         **sc.source_meta(results, calls), **sc.source_meta(details, detail_calls),
         **sc.source_meta(fetched, threshold_calls),
@@ -1775,6 +1760,148 @@ async def build_daily_status(
     if fmt:
         status["text"] = render_text(status, fmt)
     return status
+
+
+# --- training plan (PLAN_TRACKING=on) ------------------------------------------
+#
+# With the plan switch on, plan_tracking.configured_store() gives the plan store; the report then refreshes the
+# plan's links from the day's activities and calendar and adds today's plan session ("plan") and, on each of
+# today's calendar workouts that is the plan's own, today[i].plan. Best effort: a missing module, the switch
+# off, no profile id, a database error or a lookup slower than PLAN_TIMEOUT_S leave the report as it is
+# without the plan (switch off: byte for byte the answer without plans). The plan never feeds a rule, a
+# flag, the level or the recommendation, and RULES_VERSION does not cover it.
+
+_T = TypeVar("_T")
+_TODAY_PLAN_KEYS = ("workout_key", "date", "role", "sport", "planned_km", "planned_min", "link_status",
+                    "feedback_due", "feedback_for")
+
+
+def plan_tracking_store() -> Tuple[Any, Any]:
+    """(plan_tracking module, its configured store), or (None, None) when the module is missing, the switch is
+    off or anything fails. No database access."""
+    try:
+        module = importlib.import_module("plan_tracking")
+        store = module.configured_store()
+    except Exception as exc:  # noqa: BLE001 - no plan section, never a failed report
+        if not isinstance(exc, ImportError):
+            log.warning("plans: the plan store is not available (%s)", type(exc).__name__)
+        return None, None
+    return (module, store) if store is not None else (None, None)
+
+
+def profile_id(payloads: Dict[str, Any]) -> Optional[str]:
+    """The Garmin profile id from the day's answers (the plan account fingerprint only; never in the answer)."""
+    for value in (sc.dig(payloads.get("stats"), "userProfileId"),
+                  sc.dig(payloads.get("sleep"), "dailySleepDTO", "userProfilePK"),
+                  sc.dig(payloads.get("hrv"), "userProfilePk")):
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, (int, str)) and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+async def plan_call(work: Callable[[], _T], timeout_s: float) -> Optional[_T]:
+    """work() in a daemon thread, awaited at most timeout_s: its result, or None when it raised or was slower.
+
+    A daemon thread, not the loop's executor: a stuck database call must hold up neither the answer nor the
+    process shutdown."""
+    loop = asyncio.get_running_loop()
+    done: "asyncio.Future[Optional[_T]]" = loop.create_future()
+
+    def settle(value: Optional[_T]) -> None:
+        if not done.done():
+            done.set_result(value)
+
+    def run() -> None:
+        value: Optional[_T] = None
+        try:
+            value = work()
+        except Exception as exc:  # noqa: BLE001 - no plan section, never a failed report
+            log.warning("plans: the plan lookup failed (%s)", type(exc).__name__)
+        try:
+            loop.call_soon_threadsafe(settle, value)
+        except RuntimeError:  # the loop has closed: nobody waits any more
+            pass
+
+    threading.Thread(target=run, name="plan-status", daemon=True).start()
+    try:
+        return await asyncio.wait_for(done, timeout=max(0.0, timeout_s))
+    except asyncio.TimeoutError:
+        log.warning("plans: the plan lookup took longer than %ss; the report has no plan section", timeout_s)
+        return None
+
+
+def dict_items(value: Any) -> List[Dict[str, Any]]:
+    """The dict items of a Garmin list answer (anything else: none)."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def today_plan_out(value: Any) -> Optional[Dict[str, Any]]:
+    """plan_tracking.today_plan()'s answer with its documented keys only (None stays None)."""
+    if not isinstance(value, dict):
+        return None
+    out = {key: value.get(key) for key in _TODAY_PLAN_KEYS}
+    out["feedback_due"] = bool(out["feedback_due"])
+    return out
+
+
+def plan_activities(payloads: Mapping[str, Any], day: dt.date, zone: dt.tzinfo) -> List[Dict[str, Any]]:
+    """Yesterday's and today's activity-list items for plan tracking, each dated as the rest of the report
+    dates it (status_common.activity_times with the day the list was asked for): an item with no
+    startTimeLocal gets that day as its startTimeLocal (with the GMT time read in zone when it falls on that
+    day, else the date only), so the plan refresh never files it under another day."""
+    out = []
+    for name, asked in (("activities_prev", day - dt.timedelta(days=1)), ("activities_today", day)):
+        for a in dict_items(payloads.get(name)):
+            listed, start = sc.activity_times(a, zone, asked)
+            if sc.activity_times(a, zone)[0] != listed:
+                a = dict(a)
+                a["startTimeLocal"] = (start.strftime("%Y-%m-%d %H:%M:%S") if start is not None
+                                       and start.date() == asked else asked.isoformat())
+            out.append(a)
+    return out
+
+
+def _daily_plan_lookup(module: Any, store: Any, day: dt.date, zone: ZoneInfo, payloads: Dict[str, Any],
+                       scheduled: Optional[List[Dict[str, Any]]], today_ids: List[int], today: dt.date
+                       ) -> Optional[Tuple[Optional[Dict[str, Any]], Dict[int, Dict[str, Any]]]]:
+    pid = profile_id(payloads)
+    account = module.account_fp(store, pid) if pid is not None else None
+    if not account:
+        return None
+    activities = plan_activities(payloads, day, zone)
+    # One read of the plan for the whole lookup: refresh_links hands its state to the readers.
+    state = module.refresh_links(store, account, day, activities, scheduled, tz=zone, today=today)
+    session = today_plan_out(module.today_plan(store, account, day, state=state))
+    ours: Dict[int, Dict[str, Any]] = {}
+    if today_ids:
+        found = module.ours_by_garmin_id(store, account, today_ids, state=state)
+        for workout_id, row in (found.items() if isinstance(found, dict) else []):
+            if isinstance(row, dict) and isinstance(workout_id, int):
+                ours[workout_id] = {"workout_key": row.get("workout_key"), "role": row.get("role")}
+    return session, ours
+
+
+async def add_plan(status: Dict[str, Any], day: dt.date, zone: ZoneInfo, payloads: Dict[str, Any],
+                   entries: Optional[List[Dict[str, Any]]], today_entries: Optional[List[Dict[str, Any]]],
+                   now: Optional[dt.datetime] = None) -> None:
+    """Add "plan" and today[i].plan to a full daily status when the plan switch is on (see above)."""
+    module, store = plan_tracking_store()
+    if store is None:
+        return
+    ids = [sc.path_int_id(e.get("workoutId")) for e in today_entries or []]
+    wanted = [i for i in ids if i is not None]
+    today = sc.local_now(zone, now).date()
+    found = await plan_call(lambda: _daily_plan_lookup(module, store, day, zone, payloads, entries, wanted, today),
+                            PLAN_TIMEOUT_S)
+    if found is None:
+        return
+    session, ours = found
+    status["plan"] = session
+    for workout, workout_id in zip(status.get("today") or [], ids):
+        if workout_id is not None and workout_id in ours:
+            workout["plan"] = ours[workout_id]
 
 
 # --- text ---------------------------------------------------------------------
@@ -1878,6 +2005,31 @@ def _workouts_txt(workouts: List[Dict[str, Any]], name_words: int, max_items: in
     return shown + (f"; {extra} more" if extra > 0 else "")
 
 
+_LINK_STATUS_EN = {
+    "done": "done", "done_early": "done a day early", "done_late": "done a day late", "partial": "partly done",
+    "partial_early": "partly done a day early", "partial_late": "partly done a day late",
+    "replaced": "replaced by another sport", "missed": "missed",
+}
+
+
+def _plan_txt(plan: Dict[str, Any]) -> str:
+    """The "Plan" line: today's plan session, how it went and whether feedback is due."""
+    if plan.get("role") == "rest" and not plan.get("workout_key"):
+        return "Plan: rest day" + ("; feedback due (effort and pain)" if plan.get("feedback_due") else "")
+    parts = [str(plan.get("role") or "session").replace("_", " "), _sport_txt(plan)]
+    if plan.get("planned_km"):
+        parts.append(f"{sc.num_txt(plan['planned_km'])} km")
+    if plan.get("planned_min"):
+        parts.append(f"{sc.num_txt(plan['planned_min'])} min")
+    text = "Plan: " + " ".join(parts)
+    link = _LINK_STATUS_EN.get(str(plan.get("link_status") or ""))
+    if link:
+        text += f" ({link})"
+    if plan.get("feedback_due"):
+        text += "; feedback due (effort and pain)"
+    return text
+
+
 def _daily_lines(status: Dict[str, Any], f: _Fmt, compact: int) -> Tuple[str, List[Tuple[str, str]]]:
     """Title and (key, line) pairs; compact 0..2 shortens names and lists."""
     rec = status.get("recovery") or {}
@@ -1925,6 +2077,9 @@ def _daily_lines(status: Dict[str, Any], f: _Fmt, compact: int) -> Tuple[str, Li
         lines.append(("today", f.esc(f"Today: {NO_VALUE}")))
     elif today:
         lines.append(("today", f.esc("Today: " + _workouts_txt(today, name_words, max_items))))
+    plan = status.get("plan")
+    if isinstance(plan, dict):
+        lines.append(("plan", f.esc(_plan_txt(plan))))
     done = status.get("today_done")
     if done:
         if compact >= 2:

@@ -1,9 +1,14 @@
 # Tools
 
-The server exposes only read-only tools, and the list is baked into the image from
+With every training-plan switch off (the default), the server exposes only read-only tools, and the list is baked into the image from
 `config/enabled-tools.txt`. At startup it checks every name against the read-only tools
-(upstream's plus this repo's), and it never registers a tool that changes data, whatever
-the settings say. No setting can turn on a write tool. In `key` mode the server exposes
+(upstream's plus this repo's), and it never registers one of upstream's tools that change
+data, whatever the settings say. No tool list or setting can turn on a write tool; the exceptions are this repo's training-plan
+tools that change data, which only their own switches turn on (each off by default): plan tracking
+(`PLAN_TRACKING=on`) adds `log_feedback` and `plan_activate`, which write only the app's own
+database, never Garmin; plan writes (`PLAN_WRITES=on`) add `plan_commit` and `plan_cancel`, which
+add and delete the plan's own workouts on the Garmin calendar
+([below](#training-plan-writes)), and with both switches on `plan_apply_changes` too. In `key` mode the server exposes
 only the tools marked `yes` in the `key` column below, the names in
 `config/enabled-tools-key.txt`; `GARMIN_ENABLED_TOOLS` can narrow that list further.
 
@@ -70,6 +75,52 @@ weeks that match words, flags or dates), in both modes. They read only your own 
 never call Garmin. They are not in `config/enabled-tools.txt`: the switch adds them, and
 `GARMIN_ENABLED_TOOLS`, when set, can narrow them away like any other tool.
 [History search](history-search.md).
+
+With training plans on as well (`PLAN_TOOLS=on`, full mode only), the server also has `plan_assess`
+(is a race goal realistic), `plan_preview` (the whole plan to race day, stored as a draft) and `plan_get`
+(the stored draft, without Garmin). They only read: nothing is written to Garmin unless plan writes are
+on too (below). Like the history tools they are not in `config/enabled-tools.txt`.
+[Training plans](training-plan.md).
+
+### Training-plan writes
+
+With `PLAN_WRITES=on` as well (it needs `PLAN_TOOLS=on`; full mode only), the server also has two tools that
+change Garmin data, annotated as writes (`readOnlyHint` false), so a client can ask before it runs them:
+
+- `plan_commit` (additive): puts the approved days of a `plan_preview` on your Garmin calendar, through the
+  preview's commit token. The answer says `done`, `partial` (stopped early: call again after `retry_after_s`
+  seconds), `unknown` (some changes may have landed: check `plan_get` first), `refused` or `declined` (you said
+  no in the confirmation), with the days written, replaced and skipped as conflicts.
+- `plan_cancel` (destructive): without a token, shows which future workouts of the plan it would delete and
+  gives a cancel token; with the token, deletes them. Today's and past workouts, workouts linked to an activity
+  and any workout the server did not write (a coach's, another app's) are kept.
+
+Both run only for a sign-in where you ticked "Also allow this app to change my Garmin calendar" on the consent
+page (the `plan:write` scope; older sign-ins keep read access), never for the static bearer token. Where the
+client supports it, the server asks you yes or no before each write; no answer within 3 minutes writes nothing.
+Each description tells Claude to call them only after you approved the preview in the conversation. The switch, the token and the scope are listed in [SECURITY.md](../SECURITY.md#how-plan-writes-behave).
+Neither name may go into `config/enabled-tools.txt` or `GARMIN_ENABLED_TOOLS`.
+
+With plan tracking on too (`PLAN_TRACKING=on`, which needs `PLAN_TOOLS=on`), the server also has
+`log_feedback`: RPE (1-10), pain (0-10), a pain location from a fixed list and whether the pain is sharp,
+for one session of the plan. It writes only the app's own database, never Garmin (the server's
+instructions say so instead of "No tool changes any data."), so it is annotated additive, idempotent and local-only (never read-only); only the switch adds
+it (`config/enabled-tools.txt` and `GARMIN_ENABLED_TOOLS` cannot name it). The same switch links finished
+activities to the plan's sessions; `plan_get` shows those links. Tracking follows the active plan only, so
+the switch also adds `plan_activate`: it starts following a stored draft (`action` `start`, with the
+`version` you approved) or stops following the active plan (`stop`: it becomes a draft again; refused while
+the plan has workouts on the Garmin calendar). It never calls Garmin, writes only the app's own database and
+is annotated like `log_feedback`; its description tells Claude to call it only after you agreed in the
+conversation. With `PLAN_WRITES=on`, `plan_commit` also starts a plan.
+[Training plans: tracking](training-plan.md#tracking).
+
+The same switch adds `plan_review_week`, the weekly review: it reads the week from Garmin and the plan database
+and proposes changes for the next week by fixed rules that only hold or reduce load, each with a reason and
+its evidence. It is annotated read-only: it stores its proposals in the app's own database only, the same
+bookkeeping as the links. A proposal changes nothing until you approve it: `plan_preview` with
+`accept_changes` patches the stored plan version with them, and with `PLAN_WRITES=on` too `plan_apply_changes`
+(destructive, idempotent; the `plan:write` scope, as `plan_commit`) writes that version's workouts with the
+review's apply token. [Training plans: weekly review](training-plan.md#weekly-review).
 
 ## What the server adds to upstream's answers
 

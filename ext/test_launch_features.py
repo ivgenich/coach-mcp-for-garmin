@@ -28,7 +28,7 @@ import feature_config  # noqa: E402
 import garmin_guard  # noqa: E402
 
 from test_launch_support import (captured_records, fake_db_url, fake_key, fake_modules, fake_secret, FakeTelemetry,
-    FULL, HAVE_UPSTREAM, keep_tracing_hooks, key_env, KEY_MODE_TOOL_NAMES, load_launch, quiet, serve_key_mode, Stubs,
+    FULL, HAVE_UPSTREAM, keep_tracing_hooks, key_env, KEY_MODE_TOOL_NAMES, load_launch, quiet, serve_key_mode, silenced, Stubs,
     UpstreamCase)
 
 FEATURE_VARS = ("TRACING", "HISTORY_SEARCH", "ROLE", "DATABASE_URL", "HISTORY_FORGET", "HISTORY_TOKEN_KEY",
@@ -71,6 +71,17 @@ class FeatureCheckConfig(unittest.TestCase):
         self.assertEqual(self.run_cli(env), (0, ["launch: config OK (1 read-only tools; history search on)"]))
         self.assertEqual(self.run_cli(env, packages=False),
                          (1, ["launch: config error: " + feature_config.ERR_H11]))
+
+    def test_tracking_line_does_not_count_log_feedback_as_read_only(self):
+        env = {"HISTORY_SEARCH": "on", "DATABASE_URL": fake_db_url(), "HISTORY_TOKEN_KEY": fake_token_key(),
+               "PLAN_TOOLS": "on", "PLAN_TRACKING": "on"}
+        with mock.patch.object(self.launch, "allowed_tools", return_value=frozenset({"get_stats", "log_feedback"})), \
+                mock.patch.object(self.launch, "_has_module", return_value=True), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            code = self.launch._check_config_cli({**FULL, "REPORT_TZ": "UTC", **env})
+        self.assertEqual((code, err.getvalue().splitlines()), (0, [
+            "launch: config OK (1 read-only tools; log_feedback writes only the app's database; history search on, "
+            "plan tools on, plan tracking on)"]))
 
     def test_key_mode_line_names_the_features(self):
         env = {"GARMIN_AUTH": "key", "GARMIN_PERSONAL_API_KEY": fake_key(), "TRACING": "on",
@@ -176,8 +187,21 @@ class SetupFeatures(unittest.TestCase):
         env.update(changes)
         return env
 
-    def fake_history(self, forget_result=None, forget_error=None):
+    def fake_history(self, forget_result=None, forget_error=None, live_workouts=0, plan_error=None):
         calls = []
+
+        class Plans:
+            def __init__(self, dsn):
+                calls.append(("plans", dsn))
+
+            def ready(self):
+                if plan_error:
+                    raise plan_error
+                return True
+
+            def live_workouts(self, on_or_after=None):
+                calls.append(("plans.live_workouts", on_or_after is not None))
+                return live_workouts
 
         class Store:
             def __init__(self, dsn):
@@ -204,8 +228,10 @@ class SetupFeatures(unittest.TestCase):
         retrieval, embed = types.ModuleType("history_retrieval"), types.ModuleType("history_embed")
         retrieval.forget = lambda cfg: calls.append(("retrieval.forget",)) or "the vector table"
         embed.forget_caches = lambda: calls.append(("embed.forget_caches",)) or "no caches"
+        plan_store = types.ModuleType("plan_store")
+        plan_store.PgPlanStore = Plans
         fake_modules(self, history_store=history_store, garmin_guard_pg=guard_pg, history_retrieval=retrieval,
-                     history_embed=embed)
+                     history_embed=embed, plan_store=plan_store)
         return calls
 
     def test_history_uses_the_shared_guard_state_and_starts_the_catch_up(self):
@@ -245,6 +271,29 @@ class SetupFeatures(unittest.TestCase):
         self.assertNotIn(("shared.migrate",), calls)  # history off: the guard stays in memory
         self.assertIn("history forget: removed history schema; the vector table; no caches",
                       [r.getMessage() for r in records])
+
+    def test_forget_is_refused_while_plan_workouts_are_on_garmin(self):
+        calls = self.fake_history(forget_result=["history schema"], live_workouts=2)
+        with mock.patch.object(self.launch, "_start_catch_up") as catch_up:
+            cfg, _, records = self.setup_features(self.history_env(HISTORY_FORGET="yes"))
+        self.assertIn(("plans.live_workouts", True), calls)
+        self.assertEqual([c for c in calls if "forget" in c[0]], [], "nothing dropped")
+        catch_up.assert_not_called()
+        errors = [r.getMessage() for r in records if r.levelno == logging.ERROR]
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("history forget: REFUSED, nothing was removed: 2 workout(s)"), errors)
+        self.assertIn("--plan-cleanup", errors[0])
+        self.assertFalse(any("history forget: done" in r.getMessage() for r in records))
+
+    def test_forget_is_refused_when_the_plan_workouts_cannot_be_counted(self):
+        calls = self.fake_history(plan_error=ConnectionError("could not connect to postgresql://u:pw@h/db"))
+        _, _, records = self.setup_features(self.history_env(HISTORY_FORGET="yes"))
+        self.assertEqual([c for c in calls if "forget" in c[0]], [])
+        errors = [r.getMessage() for r in records if r.levelno == logging.ERROR]
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("nothing was removed", errors[0])
+        self.assertIn("(ConnectionError)", errors[0])
+        self.assertNotIn("pw@h", errors[0])
 
     def test_a_failed_forget_is_one_error_line_and_no_value(self):
         self.fake_history(forget_error=ConnectionError("could not connect to postgresql://u:pw@h/db"))
@@ -658,6 +707,243 @@ class HistoryToolPolicy(UpstreamCase):
         self.assertEqual(set(tools), KEY_MODE_TOOL_NAMES | launch.HISTORY_TOOLS)
         self.assertEqual(tools["search_history"].description, "Search the stored history.")
         self.assertTrue(tools["find_similar_weeks"].annotations.read_only_hint)
+
+
+@unittest.skipUnless(HAVE_UPSTREAM, "needs upstream garmin_mcp on mcp 2.x")
+class PlanToolPolicy(UpstreamCase):
+    """allowed_tools() with PLAN_TOOLS=on: the plan read tools join the list only with history search on, in
+    full mode, on the app; the later write tools never do, and the default list is unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        self.launch = load_launch(self, Stubs().modules)
+
+    def on(self, **changes):
+        return {"HISTORY_SEARCH": "on", "PLAN_TOOLS": "on", **FULL, **changes}
+
+    def test_default_list_is_unchanged(self):
+        default = self.launch.allowed_tools(FULL)
+        self.assertFalse(self.launch.PLAN_READ_TOOLS & default)
+        self.assertFalse(self.launch.OWN_WRITE_TOOLS & default)
+        self.assertEqual(self.launch.allowed_tools({**FULL, "PLAN_TOOLS": "off", "PLAN_WRITES": "off"}), default)
+        history = self.launch.allowed_tools({"HISTORY_SEARCH": "on", **FULL})
+        self.assertEqual(history, default | self.launch.HISTORY_TOOLS)
+
+    def test_on(self):
+        allowed = self.launch.allowed_tools(self.on())
+        self.assertEqual(allowed, self.launch.allowed_tools(FULL) | self.launch.HISTORY_TOOLS
+                         | self.launch.PLAN_READ_TOOLS)
+        writes = self.launch.allowed_tools(self.on(PLAN_WRITES="on"))
+        self.assertEqual(writes, allowed | {"plan_commit", "plan_cancel"})
+        self.assertFalse(self.launch.OWN_WRITE_TOOLS & allowed)
+        self.assertFalse({"log_feedback", "plan_activate", "plan_apply_changes"} & writes)
+        self.assertEqual(self.launch.allowed_tools(self.on(GARMIN_ENABLED_TOOLS="plan_get,get_stats")),
+                         {"plan_get", "get_stats"})
+
+    def test_off_without_history_in_key_mode_and_off_the_app(self):
+        for env in ({**FULL, "PLAN_TOOLS": "on"}, self.on(GARMIN_AUTH="key"), self.on(ROLE="worker")):
+            with self.subTest(env=sorted(env.items())):
+                self.assertFalse(self.launch.PLAN_READ_TOOLS & self.launch.allowed_tools(env))
+
+    def test_a_write_tool_is_never_read_only(self):
+        self.assertFalse(self.launch.OWN_WRITE_TOOLS & self.launch.OWN_READ_TOOLS)
+        self.assertLessEqual(self.launch.OWN_WRITE_TOOLS, self.launch.OWN_TOOLS)
+        self.launch.patch()
+        self.assertFalse(self.launch.OWN_WRITE_TOOLS & self.annotations.READ_ONLY_TOOLS)
+        self.assertLessEqual(self.launch.OWN_READ_TOOLS, self.annotations.READ_ONLY_TOOLS)
+        with self.assertRaises(self.launch.ConfigError):
+            self.launch.allowed_tools(self.on(PLAN_WRITES="on", GARMIN_ENABLED_TOOLS="plan_commit"))
+
+    def test_tracking_serves_log_feedback_as_a_local_write(self):
+        default = self.launch.allowed_tools(self.on())
+        self.assertNotIn("log_feedback", default)
+        allowed = self.launch.allowed_tools(self.on(PLAN_TRACKING="on"))
+        self.assertEqual(allowed, default | {"log_feedback", "plan_activate", "plan_review_week"})
+        self.assertNotIn("plan_review_week", default)
+        self.assertIn("plan_review_week", self.launch.OWN_READ_TOOLS)
+        self.assertEqual(self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_review_week")),
+                         {"plan_review_week", "log_feedback", "plan_activate"})
+        with self.assertRaises(self.launch.ConfigError):
+            self.launch.allowed_tools(self.on(GARMIN_ENABLED_TOOLS="plan_review_week"))
+        # Only the switch admits it: GARMIN_ENABLED_TOOLS cannot name it, and narrowing keeps it.
+        for name in ("log_feedback", "plan_activate"):
+            with self.assertRaises(self.launch.ConfigError):
+                self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS=name))
+        self.assertEqual(self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_get")),
+                         {"plan_get", "log_feedback", "plan_activate"})
+        for env in (self.on(PLAN_TRACKING="on", GARMIN_AUTH="key"), self.on(PLAN_TRACKING="on", ROLE="worker"),
+                    {**FULL, "HISTORY_SEARCH": "on", "PLAN_TRACKING": "on"}):
+            with self.subTest(env=sorted(env.items())):
+                try:
+                    self.assertFalse({"log_feedback", "plan_activate", "plan_review_week"}
+                                     & self.launch.allowed_tools(env))
+                except self.launch.ConfigError:
+                    pass
+        self.assertIn("log_feedback", self.launch.NO_GARMIN_TOOLS)
+        self.assertIn("plan_activate", self.launch.NO_GARMIN_TOOLS)   # never calls Garmin: the guard skips it
+
+    def test_tracking_annotations_only_with_the_switch(self):
+        self.launch.patch()
+        for tool in ("log_feedback", "plan_activate"):
+            for name in ("ADDITIVE_TOOLS", "IDEMPOTENT_TOOLS", "LOCAL_ONLY_TOOLS", "READ_ONLY_TOOLS"):
+                self.assertNotIn(tool, getattr(self.annotations, name))
+        self.launch._FEATURES = feature_config.load(self.on(PLAN_TRACKING="on"))
+        self.launch.patch()
+        for tool in ("log_feedback", "plan_activate"):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, self.annotations.ADDITIVE_TOOLS)
+                self.assertIn(tool, self.annotations.IDEMPOTENT_TOOLS)
+                self.assertIn(tool, self.annotations.LOCAL_ONLY_TOOLS)
+                self.assertNotIn(tool, self.annotations.READ_ONLY_TOOLS)
+                hints = self.annotations.annotations_for(tool)
+                self.assertFalse(hints.read_only_hint)
+                self.assertFalse(hints.destructive_hint)
+                self.assertTrue(hints.idempotent_hint)
+                self.assertFalse(hints.open_world_hint)
+    def test_write_tools_only_from_the_switch(self):
+        for env in (self.on(PLAN_WRITES="on", GARMIN_AUTH="key"), self.on(PLAN_WRITES="on", PLAN_TOOLS="off"),
+                    {**FULL, "PLAN_WRITES": "on"}):
+            with self.subTest(env=sorted(env.items())):
+                try:
+                    allowed = self.launch.allowed_tools(env)
+                except self.launch.ConfigError:
+                    continue
+                self.assertFalse(self.launch.PLAN_WRITE_TOOLS & allowed)
+        narrowed = self.launch.allowed_tools(self.on(PLAN_WRITES="on", GARMIN_ENABLED_TOOLS="plan_get"))
+        self.assertEqual(narrowed, {"plan_get", "plan_commit", "plan_cancel"})
+        # plan_apply_changes needs both switches (its token comes from plan_review_week).
+        both = self.launch.allowed_tools(self.on(PLAN_WRITES="on", PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_get"))
+        self.assertEqual(both, {"plan_get", "plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback",
+                                "plan_activate"})
+        self.assertNotIn("plan_apply_changes", self.launch.allowed_tools(self.on(PLAN_TRACKING="on")))
+        for name in ("plan_cancel", "log_feedback"):
+            with self.assertRaises(self.launch.ConfigError) as cm:
+                self.launch.allowed_tools(self.on(PLAN_WRITES="on", GARMIN_ENABLED_TOOLS=name))
+            self.assertIn("is a write tool", "\n".join(cm.exception.errors))
+
+    def test_hints_with_the_switch_on_and_absent_by_default(self):
+        """patch() merges the plan write tools into upstream's effect sets only with PLAN_WRITES=on, so the
+        served hints say write (not read-only); the default leaves every set as upstream has it."""
+        import garmin_mcp
+
+        self.launch.patch()
+        self.assertIs(self.annotations.ADDITIVE_TOOLS, self.upstream_additive)
+        self.assertIsNone(self.annotations.annotations_for("plan_commit"))
+        self.launch = load_launch(self, Stubs().modules)
+        self.launch._FEATURES = feature_config.load(self.on(PLAN_WRITES="on"))
+        self.launch.patch()
+        commit = self.annotations.annotations_for("plan_commit")
+        cancel = self.annotations.annotations_for("plan_cancel")
+        self.assertEqual((commit.read_only_hint, commit.destructive_hint, commit.idempotent_hint, commit.open_world_hint),
+                         (False, False, True, True))
+        self.assertEqual((cancel.read_only_hint, cancel.destructive_hint, cancel.idempotent_hint, cancel.open_world_hint),
+                         (False, True, True, True))
+        self.assertTrue(self.annotations.annotations_for("plan_preview").read_only_hint)
+        self.assertIsNone(self.annotations.annotations_for("plan_apply_changes"))
+        self.assertNotIn("plan_commit", self.launch._upstream_write_tools())
+        # Served: the tools registered through upstream's _ToolFilter carry these hints.
+        from mcp.server.fastmcp import FastMCP
+
+        fastmcp = FastMCP("test")
+        app = garmin_mcp._ToolFilter(fastmcp, garmin_mcp._parse_tool_set("plan_commit,plan_cancel"), set())
+
+        def plan_commit(plan_id: str = "", commit_token: str = "") -> str:
+            return "{}"
+
+        def plan_cancel(plan_id: str = "", cancel_token: str = "") -> str:
+            return "{}"
+
+        app.tool(name="plan_commit")(plan_commit)
+        app.tool(name="plan_cancel")(plan_cancel)
+        tools = {t.name: t for t in asyncio.run(fastmcp.list_tools())}
+        self.assertFalse(tools["plan_commit"].annotations.read_only_hint)
+        self.assertTrue(tools["plan_cancel"].annotations.destructive_hint)
+        self.assertEqual(app.unannotated_tool_names(), [])
+        # With PLAN_TRACKING=on too: plan_apply_changes destructive and idempotent, plan_review_week read-only.
+        self.launch = load_launch(self, Stubs().modules)
+        self.launch._FEATURES = feature_config.load(self.on(PLAN_WRITES="on", PLAN_TRACKING="on"))
+        self.launch.patch()
+        apply = self.annotations.annotations_for("plan_apply_changes")
+        self.assertEqual((apply.read_only_hint, apply.destructive_hint, apply.idempotent_hint), (False, True, True))
+        self.assertTrue(self.annotations.annotations_for("plan_review_week").read_only_hint)
+
+    def test_check_config_line_names_the_write_tools_only_with_writes(self):
+        """Every PLAN_WRITES x PLAN_TRACKING combination: only the read-only tools are counted as read-only."""
+        base = len(self.launch.allowed_tools(self.on()))
+        feedback = "; log_feedback and plan_activate write only the app's database"
+        for writes in ("off", "on"):
+            for tracking in ("off", "on"):
+                env = self.on(PLAN_WRITES=writes, PLAN_TRACKING=tracking)
+                reads = base + (1 if tracking == "on" else 0)   # plan_review_week
+                count = 2 + (1 if tracking == "on" else 0)       # plan_apply_changes needs both switches
+                head = f"{reads} read-only tools" + (f" and {count} plan write tools" if writes == "on" else "")
+                tail = ("; history search on, plan tools on" + (", plan writes on" if writes == "on" else "")
+                        + (", plan tracking on" if tracking == "on" else "") + ")")
+                want = f"launch: config OK ({head}{feedback if tracking == 'on' else ''}{tail}"
+                with self.subTest(writes=writes, tracking=tracking):
+                    allowed = self.launch.allowed_tools(env)
+                    err = io.StringIO()
+                    with mock.patch.object(self.launch, "check_config", return_value=(allowed, [])), \
+                            contextlib.redirect_stderr(err):
+                        self.assertEqual(self.launch._check_config_cli(env), 0)
+                    self.assertEqual(err.getvalue().strip(), want)
+
+    def test_write_failures_never_say_retry(self):
+        import mcp_types  # noqa: F401 - _failure needs it
+
+        for group in (tool_errors.UNAVAILABLE, tool_errors.RATE_LIMITED, tool_errors.LOGIN, tool_errors.INTERNAL,
+                      tool_errors.NO_DATA):
+            with self.subTest(group=group):
+                with silenced("garmin_ext"):
+                    text = self.launch._failure("plan_commit", group, None, "x").content[0].text
+                self.assertIn("call plan_get before calling this tool again", text)
+                self.assertNotIn("Retry", text)
+                self.assertLessEqual(len(text), 300)
+        with silenced("garmin_ext"):
+            bad = self.launch._failure("plan_cancel", tool_errors.BAD_INPUT, "x", "x").content[0].text
+            plain = self.launch._failure("plan_get", tool_errors.UNAVAILABLE, None, "x").content[0].text
+        self.assertTrue(bad.startswith("Error: Invalid input"))
+        self.assertIn("Retry this call at most once", plain)
+
+    def test_the_guard_skips_only_plan_get(self):
+        self.assertIn("plan_get", self.launch.NO_GARMIN_TOOLS)
+        self.assertFalse({"plan_assess", "plan_preview"} & self.launch.NO_GARMIN_TOOLS)
+
+    def test_wanted_needs_the_history_tools(self):
+        on = feature_config.load(self.on())
+        self.assertTrue(self.launch._plan_tools_wanted(on))
+        forgetting = feature_config.load(self.on(HISTORY_FORGET="yes", DATABASE_URL=fake_db_url()))
+        self.assertFalse(self.launch._plan_tools_wanted(forgetting))
+        self.assertFalse(self.launch._plan_tools_wanted(feature_config.load(FULL)))
+
+    def test_the_adder_registers_through_the_app(self):
+        module = types.ModuleType("plan_tools")
+        seen = {}
+
+        def register(adder, cfg, get_client, *, writes=False):
+            seen["writes"] = writes
+            seen["client"] = get_client()
+            adder(lambda: "{}", name="plan_get", description="Stored plan.")
+
+        module.register = register
+        fake_modules(self, plan_tools=module)
+        app = mock.Mock()
+        cfg = feature_config.load(self.on(PLAN_WRITES="on"))
+        self.launch._register_plan_tools(app, cfg, lambda: "client")
+        self.assertEqual(seen, {"writes": True, "client": "client"})
+        app.tool.assert_called_once_with(name="plan_get", description="Stored plan.")
+
+    def test_a_failing_register_leaves_the_server_up(self):
+        module = types.ModuleType("plan_tools")
+
+        def register(adder, cfg, get_client, *, writes=False):
+            raise RuntimeError("TEST-ONLY detail")
+
+        module.register = register
+        fake_modules(self, plan_tools=module)
+        with self.assertLogs("garmin_ext", "ERROR") as logs:
+            self.launch._register_plan_tools(mock.Mock(), feature_config.load(self.on()), lambda: None)
+        self.assertNotIn("TEST-ONLY", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

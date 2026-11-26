@@ -40,7 +40,8 @@
 # Garmin email/password are never handled here; in full mode you type them once
 # inside `railway ssh` (docs/garmin-login.md).
 # The tools the server exposes are not set here: config/enabled-tools.txt is
-# baked into the image and only read-only tools can be enabled (ext/launch.py).
+# baked into the image and only read-only tools can be enabled there; only the
+# PLAN_WRITES=on service variable adds the plan write tools (ext/launch.py).
 set -euo pipefail
 
 SERVICE="${DEPLOY_SERVICE:-coach-mcp-for-garmin}"

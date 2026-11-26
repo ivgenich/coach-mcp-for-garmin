@@ -25,6 +25,23 @@ Optional fields beyond the shared contract (all default to "not used"):
 - Case.history: the history-search fixture the server runs with (evals/harness/history.py): "athlete",
   "partial", "two_weeks" or "mismatch" add find_similar_weeks and search_history (HISTORY_TOOLS) over the
   synthetic athlete in memory; "off" (the default) leaves them out. Those cases need the history packages.
+- Case.plan: "memory" serves the training-plan read tools (PLAN_TOOLS) over an in-memory plan store
+  (evals/harness/plans.py), full mode only; "tracked" also turns plan tracking on (PLAN_TRACKING=on: log_feedback,
+  the plan in get_daily_status / get_weekly_status) over a stored plan whose session today is done and has no
+  feedback yet; "drafted" is tracked too, but that plan is only a draft (plan_activate starts it, after the
+  user's yes); "reviewed" is tracked too, over a three-week plan with RPE and pain feedback stored, for the
+  weekly review (plan_review_week); "off" (the default) leaves them out.
+- Case.writes (needs plan = "memory"): the Garmin plan writes (PLAN_WRITES=on) add plan_commit and plan_cancel
+  (PLAN_WRITE_TOOLS) and the PLAN_WRITES=on instructions, Stage 2's real tools (evals/harness/plans.py): "on"
+  (the client has no confirmation form: the token confirms), "declined" (the user declines the confirmation
+  form), "committed" (the next 7 days of the marathon plan are on Garmin before the first turn); "off" (the
+  default) leaves them out.
+- Expect.garmin_writes_none: the fake Garmin's call log holds no write (evals/garmin_writes.write_calls).
+- Expect.max_calls {tool: n}: `tool` was called at most n times (0 forbids it, as tools_none does).
+- Expect.between_calls {tool: other}: every repeat of `tool` has a call of `other` since its previous call (after
+  an unknown write outcome, plan_get before plan_commit again).
+- garmin.faults may fail a Garmin write (upload_workout, schedule_workout, unschedule_workout, delete_workout) with
+  a write group (WRITE_FAULT_GROUPS), optionally "@N": the first N such writes succeed.
 
 Standard library only.
 """
@@ -47,7 +64,7 @@ TOOLS_FILE = os.path.join(REPO, "config", "enabled-tools.txt")
 KEY_TOOLS_FILE = os.path.join(REPO, "config", "enabled-tools-key.txt")
 
 GROUPS = ("tool_choice", "faithfulness", "failure_texts", "key_mode", "safety", "efficiency", "morning_report",
-          "history")
+          "history", "plan")
 # Groups whose every case must pass on every trial (a failure text ignored once is a failure).
 STRICT_GROUPS = ("failure_texts", "safety")
 MODES = ("full", "key")
@@ -62,6 +79,22 @@ FIXTURE_FOLDERS = ("overlays", "variants")
 # evals/harness/history.FIXTURES and ext/launch.HISTORY_TOOLS (test_cases checks they are equal).
 HISTORY_FIXTURES = ("athlete", "partial", "two_weeks", "mismatch", "off")
 HISTORY_TOOLS = ("find_similar_weeks", "search_history")
+# evals/harness/plans.FIXTURES and ext/launch.PLAN_READ_TOOLS (test_cases checks they are equal).
+PLAN_FIXTURES = ("memory", "tracked", "reviewed", "drafted", "off")
+# The plan fixtures that turn PLAN_TRACKING on (evals/harness/plans.TRACKED_FIXTURES).
+TRACKED_PLAN_FIXTURES = ("tracked", "reviewed", "drafted")
+PLAN_TOOLS = ("plan_assess", "plan_get", "plan_preview")
+# ext/launch.PLAN_TRACKING_TOOLS (test_cases checks they are equal): served with TRACKED_PLAN_FIXTURES.
+PLAN_TRACKING_TOOLS = ("log_feedback", "plan_activate")
+# ext/launch.PLAN_REVIEW_TOOLS (test_cases checks they are equal): served with plan = "tracked" or "reviewed".
+PLAN_REVIEW_TOOLS = ("plan_review_week",)
+# evals/harness/plans.WRITES_FIXTURES and WRITE_TOOLS, ext/launch.PLAN_WRITE_TOOLS (test_cases checks they are equal).
+WRITES_FIXTURES = ("off", "on", "declined", "committed")
+PLAN_WRITE_TOOLS = ("plan_cancel", "plan_commit")
+# evals/garmin_writes.WRITE_METHODS and evals/harness/state.WRITE_FAULT_GROUPS (test_cases checks they are equal).
+WRITE_FAULT_METHODS = ("upload_workout", "schedule_workout", "unschedule_workout", "delete_workout")
+WRITE_FAULT_GROUPS = ("rate_limited", "server_error", "connect_timeout", "read_timeout", "login", "internal")
+WRITE_FAULT_RE = re.compile(r"^([a-z_]+)(?:@([0-9]+))?$")
 
 ID_RE = re.compile(r"^[A-Z][0-9]{2}$")
 NOW_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
@@ -72,9 +105,9 @@ PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 CASE_KEYS = frozenset({
     "id", "group", "title", "prompt", "mode", "now", "tz", "variants", "garmin", "smoke", "trials",
     "all_trials_must_pass", "why", "expect", "followups", "prompt_file", "report_url", "extra_tools", "db_seed",
-    "max_turns", "history"})
+    "max_turns", "history", "plan", "writes"})
 DEFAULT_KEYS = frozenset({"mode", "now", "tz", "variants", "trials", "garmin", "all_trials_must_pass", "prompt_file",
-                          "report_url", "extra_tools", "max_turns", "history"})
+                          "report_url", "extra_tools", "max_turns", "history", "plan", "writes"})
 GARMIN_KEYS = frozenset({"base", "overlays", "faults"})
 SEED_KEYS = frozenset({"collection", "doc_id", "data", "status_of"})
 FILE_KEYS = frozenset({"defaults", "case"})
@@ -106,11 +139,14 @@ class Expect:
     db_collections: tuple = ()
     db_unchanged: tuple = ()
     db_no_delete: bool = False
+    garmin_writes_none: bool = False
+    max_calls: dict = dataclasses.field(default_factory=dict)
+    between_calls: dict = dataclasses.field(default_factory=dict)
 
 
 EXPECT_LISTS = ("tools_any", "tools_all", "tools_none", "must_mention", "must_not_mention", "no_call_after_error",
                 "judge", "tool_output_has", "tool_output_lacks", "db_collections", "db_unchanged")
-EXPECT_BOOLS = ("no_invented_numbers", "refuse_write", "db_no_delete")
+EXPECT_BOOLS = ("no_invented_numbers", "refuse_write", "db_no_delete", "garmin_writes_none")
 EXPECT_KEYS = frozenset(f.name for f in dataclasses.fields(Expect))
 
 
@@ -137,12 +173,14 @@ class Case:
     db_seed: tuple = ()
     max_turns: int | None = None  # model calls per trial; None = the runner's MAX_TURNS
     history: str = "off"  # the history-search fixture (HISTORY_FIXTURES); "off" = the tools are not served
+    plan: str = "off"  # "memory": the plan read tools over an in-memory store (PLAN_FIXTURES)
+    writes: str = "off"  # the plan write tools (WRITES_FIXTURES), served as PLAN_WRITES=on serves them
 
     @property
     def tools(self) -> frozenset:
-        """Every tool name the case may name: the server's tools in its mode (with the history tools when
-        history is on) plus its extra tools."""
-        return case_tools(self.mode, self.history) | frozenset(self.extra_tools)
+        """Every tool name the case may name: the server's tools in its mode (with the history, plan and plan
+        write tools when they are on) plus its extra tools."""
+        return case_tools(self.mode, self.history, self.plan, self.writes) | frozenset(self.extra_tools)
 
 
 def read_tool_list(path: str) -> frozenset:
@@ -166,9 +204,13 @@ def tool_names(mode: str) -> frozenset:
     return _TOOL_CACHE[mode]
 
 
-def case_tools(mode: str, history: str = "off") -> frozenset:
-    """The tools the eval server exposes in `mode` with history fixture `history`."""
-    return tool_names(mode) | (frozenset(HISTORY_TOOLS) if history != "off" else frozenset())
+def case_tools(mode: str, history: str = "off", plan: str = "off", writes: str = "off") -> frozenset:
+    """The tools the eval server exposes in `mode` with history fixture `history`, plan fixture `plan` and
+    plan writes `writes`."""
+    return (tool_names(mode) | (frozenset(HISTORY_TOOLS) if history != "off" else frozenset())
+            | (frozenset(PLAN_TOOLS) if plan != "off" else frozenset())
+            | (frozenset(PLAN_TRACKING_TOOLS + PLAN_REVIEW_TOOLS) if plan in TRACKED_PLAN_FIXTURES else frozenset())
+            | (frozenset(PLAN_WRITE_TOOLS) if writes != "off" else frozenset()))
 
 
 def fixture_path(name: str, base: bool = False) -> str:
@@ -212,6 +254,12 @@ def _check_faults(faults: Any, where: str) -> None:
     for name, group in faults.items():
         if not (isinstance(name, str) and METHOD_RE.fullmatch(name)):
             raise CaseError(f"{where}: fault target {name!r} is not a method or tool name")
+        if name in WRITE_FAULT_METHODS:
+            m = WRITE_FAULT_RE.fullmatch(group) if isinstance(group, str) else None
+            if not m or m.group(1) not in WRITE_FAULT_GROUPS:
+                raise CaseError(f"{where}: write fault {name} -> {group!r}: one of {', '.join(WRITE_FAULT_GROUPS)}, "
+                                "optionally @N")
+            continue
         if group not in FAULT_GROUPS:
             raise CaseError(f"{where}: unknown fault group {group!r} (known: {', '.join(FAULT_GROUPS)})")
 
@@ -298,9 +346,21 @@ def _expect(raw: Any, where: str, tools: frozenset) -> Expect:
                 if not isinstance(value, (str, int, float, bool)):
                     raise CaseError(f"{where}: args.{tool}.{arg} must be a string, number or boolean")
         kw["args"] = {tool: dict(values) for tool, values in args.items()}
+    if "max_calls" in raw:
+        limits = raw["max_calls"]
+        if not isinstance(limits, dict) or not limits or not all(
+                isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in limits.values()):
+            raise CaseError(f"{where}: max_calls must be {{tool: whole number >= 0}}")
+        kw["max_calls"] = dict(limits)
+    if "between_calls" in raw:
+        pairs = raw["between_calls"]
+        if not isinstance(pairs, dict) or not pairs or not all(isinstance(v, str) and v for v in pairs.values()):
+            raise CaseError(f"{where}: between_calls must be {{tool: tool}}")
+        kw["between_calls"] = dict(pairs)
     exp = Expect(**kw)
 
-    named = set(exp.tools_any) | set(exp.tools_all) | set(exp.tools_none) | set(exp.args)
+    named = (set(exp.tools_any) | set(exp.tools_all) | set(exp.tools_none) | set(exp.args) | set(exp.max_calls)
+             | set(exp.between_calls) | set(exp.between_calls.values()))
     if exp.first_tool:
         named.add(exp.first_tool)
     unknown = named - tools
@@ -431,6 +491,16 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
     history = merged.get("history", "off")
     if history not in HISTORY_FIXTURES:
         raise CaseError(f"{where}: history must be one of {', '.join(HISTORY_FIXTURES)}")
+    plan = merged.get("plan", "off")
+    if plan not in PLAN_FIXTURES:
+        raise CaseError(f"{where}: plan must be one of {', '.join(PLAN_FIXTURES)}")
+    if plan != "off" and mode != "full":
+        raise CaseError(f"{where}: plan cases run in full mode (the plan tools need GARMIN_AUTH=full)")
+    writes = merged.get("writes", "off")
+    if writes not in WRITES_FIXTURES:
+        raise CaseError(f"{where}: writes must be one of {', '.join(WRITES_FIXTURES)}")
+    if writes != "off" and plan != "memory":
+        raise CaseError(f"{where}: writes need plan = \"memory\" (PLAN_WRITES needs PLAN_TOOLS)")
 
     prompt_file, report_url = merged.get("prompt_file"), merged.get("report_url")
     if prompt_file is not None:
@@ -452,7 +522,7 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
     seed = _seed(merged.get("db_seed", []), where, check_files)
     if seed and "ArtifactData" not in extra:
         raise CaseError(f"{where}: db_seed needs ArtifactData in extra_tools")
-    tools = case_tools(mode, history) | frozenset(extra)
+    tools = case_tools(mode, history, plan, writes) | frozenset(extra)
     exp = _expect(merged.get("expect", {}), where, tools)
     for target in garmin["faults"]:
         if target in tool_names("full") and target not in tools:
@@ -463,7 +533,7 @@ def _case(raw: Any, defaults: dict, group: str, where: str, check_files: bool) -
                 tz=tz, variants=tuple(variants), garmin=garmin, smoke=merged.get("smoke", False), trials=trials,
                 all_trials_must_pass=strict, why=" ".join(merged["why"].split()), expect=exp,
                 followups=followups, prompt_file=prompt_file, report_url=report_url, extra_tools=extra,
-                db_seed=seed, max_turns=max_turns, history=history)
+                db_seed=seed, max_turns=max_turns, history=history, plan=plan, writes=writes)
 
 
 def load_file(path: str, check_files: bool = True) -> list:

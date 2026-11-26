@@ -269,7 +269,7 @@ def day_document(row: Mapping[str, Any], prev: Optional[Mapping[str, Any]] = Non
             "kind": "day", "start": day.isoformat(), "end": day.isoformat(), "mode": n.get("mode"),
             "level": derived["level"], "flags": derived["flags"], "tags": tags,
             "sports": [s for s in hx.SPORTS if n.get(f"{s}_sessions")], "final": bool(row.get("final")),
-            "rules_version": ds.RULES_VERSION, "text_version": TEXT_VERSION,
+            "rules_version": hx.RULES_VERSION[0], "text_version": TEXT_VERSION,
             "missing": list(n.get("missing") or []), "numbers": _scalar_numbers(n),
         },
     }

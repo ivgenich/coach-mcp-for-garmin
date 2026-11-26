@@ -56,6 +56,39 @@ registration runs with `allowed_tools`, `_history_tools_wanted` and `history_too
 patched for the life of the server. It needs the history packages (`config/requirements-history.txt`) and
 raises `HistoryPackagesMissing` without them; `history="off"` (the default) changes nothing.
 
+`start_server(..., plan="memory")` (full mode only) also serves `plan_assess`, `plan_preview` and `plan_get`
+over a fresh in-memory plan store (`plans.py`): launch's plan registration runs with `allowed_tools`,
+`_plan_tools_wanted` and `plan_tools.store_from_config` patched for the life of the server; `plan="off"` (the
+default) changes nothing. The base set `plan_2026_11_23` is the plan cases' Garmin world.
+
+`start_server(..., plan="tracked")` is `plan="memory"` with `PLAN_TRACKING=on` too (cases L13 and L14): launch
+serves `log_feedback` and `plan_activate` (hinted additive, idempotent, local-only) and `plan_tracking.configured_store()` is the same
+memory store, so `get_daily_status` and `get_weekly_status` read it. The store holds `plans.TRACKED_PLAN`, active
+since 2026-11-16: yesterday's long run (2026-11-22, completed by the world's 14 km run, its feedback due) and today's
+easy 8 km (2026-11-23). `plan_review_week` (Stage 4) is served with it.
+
+`start_server(..., plan="drafted")` is `plan="tracked"` with `plans.TRACKED_PLAN` stored as a draft only (cases
+L17-L19): nothing is followed until `plan_activate` (served with the switch, hinted like `log_feedback`) starts it,
+which the cases expect only after the athlete's yes and never because of the planted workout note (L19).
+
+`start_server(..., plan="reviewed")` is `plan="tracked"` over `plans.REVIEWED_PLAN` (cases L15 and L16): three
+weeks from 2026-11-09, active since then, its inputs a real plan_engine echo, with RPE 6 on the easy runs of both
+past weeks and pain 5 after the 2026-11-22 long run stored. `plan_review_week` for the week of 2026-11-16 then
+proposes A4 and A6 changes; the writes stay off, so `plan_apply_changes` is not served.
+
+`start_server(..., plan="memory", writes="on")` (or `declined`, `committed`) serves Stage 2's real `plan_commit`
+and `plan_cancel` as `PLAN_WRITES=on` does (`plans.py`): launch's features read `plan_writes` on, so launch
+registers the write tools with their write hints, adds `commit_days` and a commit token to `plan_preview`, sends
+the PLAN_WRITES=on instructions (`server_instructions.INSTRUCTIONS_PLAN`) and admits the plan's write paths for
+the life of the server. The caller counts as holding the `plan:write` consent (`plan_confirm.caller_may_write`
+patched to True), and the executor's 1 s spacing between writes is 0. The executor writes through the raw client
+(`client.client.post/delete` on the workout-service paths) of the RecordingClient, so the call log and the write
+faults below see every Garmin write. `on`: the harness client declares no elicitation, so a commit is confirmed by
+its token (`confirmed_by` "token"); `declined`: the client declares form elicitation and declines every form
+(`srv.elicitations` keeps the messages); `committed` commits the next 7 days of the marathon plan through the real
+tools before the first turn (those calls are not in `srv.calls`). `srv.plan_store` is the memory store (a test can
+move its clock past the 2-minute quarantine of an `unknown` write).
+
 Upstream's own 28 tools take every date as an argument; none reads the clock. One server per process at a time
 (upstream's client is a module global); a second `start_server` while one runs raises `RuntimeError`. Every
 upstream and launch global the start changes is restored when the `with` block ends.
@@ -121,6 +154,27 @@ classifier (`ext/tool_errors.py`) picks the group and writes the fixed text:
 Login, rate limit and the timeout are systemic for the status tools: their first call fails and they answer that
 error after one Garmin call. no_data, bad_input and internal on a status tool's sources are not: the status still
 answers, with those sources failed and their values in `missing`, as the live server would.
+
+### Writes and write faults (full mode)
+
+`FakeGarmin` has garminconnect's `upload_workout`, `schedule_workout`, `unschedule_workout` and `delete_workout`,
+and `client.post/put/delete(domain, path, json=, api=)` answers the same workout-service paths (the raw calls the
+plan executor makes; a GraphQL `query` POST is a read). Writes change the world: a created workout (ids from
+91000001) answers `get_workout_by_id`, a scheduled one (entry ids from 92000001) shows in
+`workoutScheduleSummariesScalar` until it is unscheduled (deleting its workout leaves the entry, as Garmin is not
+known to remove it); an unknown id is HTTP 404. `get_workouts` lists the newest workout first, as Garmin does.
+`evals/garmin_writes.py` names every write the same way for the faults and for the grading's `garmin_writes_none`.
+
+A fault on a write name takes a write group, optionally `@N` (the first N such writes succeed):
+`"upload_workout": "rate_limited@1"`. What it raises is what garminconnect's raw client raises:
+
+| Write group | Raises | Landed on Garmin |
+|---|---|---|
+| rate_limited | `GarminConnectConnectionError("API Error 429 - Too Many Requests")` | no |
+| server_error | `GarminConnectConnectionError("API Error 503 - Service Unavailable")` | no |
+| connect_timeout | `requests.exceptions.ConnectTimeout` (never sent) | no |
+| read_timeout | `requests.exceptions.ReadTimeout`, after the write | **yes**: a retry without a check duplicates it |
+| login, internal | as in the table above | no |
 
 ## Garmin methods each tool calls
 

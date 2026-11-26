@@ -411,6 +411,97 @@ def compact_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+# --- Garmin times -------------------------------------------------------------
+
+_TS_RE = re.compile(r"^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?")
+
+
+def parse_garmin_time(value: Any) -> Optional[dt.datetime]:
+    """Naive datetime from Garmin's text times, or None.
+
+    Reads "2026-03-18T05:58:41.0", "2026-03-18 05:58:41" and "2026-03-18 05:58"
+    (any fraction, no zone; anything after the seconds is ignored). Whether the
+    clock is local or GMT is the caller's to know: Garmin names it in the key
+    (startTimeLocal, startTimeGMT). datetime.fromisoformat on Python 3.10
+    rejects a one-digit fraction, so this does not use it. A date alone is not
+    a time: None.
+    """
+    if not isinstance(value, str):
+        return None
+    m = _TS_RE.match(value)
+    if not m:
+        return None
+    y, mo, d, h, mi, s = m.groups()
+    try:
+        return dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))
+    except ValueError:
+        return None
+
+
+def _iso_date(value: Any) -> Optional[dt.date]:
+    """The date of "YYYY-MM-DD..." text, else None."""
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    try:
+        return dt.date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def activity_times(activity: Mapping[str, Any], tz: dt.tzinfo,
+                   day: Optional[dt.date] = None) -> Tuple[Optional[dt.date], Optional[dt.datetime]]:
+    """(local start date, naive local start time) of an activity-list item.
+
+    startTimeLocal is the watch's own wall clock, so it wins: its date is the
+    activity's day even when the watch was in another zone than tz. Without it,
+    startTimeGMT is converted to tz. day is the local date the list was asked
+    for (a one-day query, as the daily report makes): Garmin filed the activity
+    under that day, so without startTimeLocal the date is day, not the GMT time
+    read in tz (a late run abroad would fall on the next day). The time is None
+    when startTimeLocal has a date only; (None, None) when nothing gives a date.
+    """
+    raw_local = activity.get("startTimeLocal")
+    local = parse_garmin_time(raw_local)
+    if local is not None:
+        return local.date(), local
+    local_day = _iso_date(raw_local)
+    if local_day is not None:
+        return local_day, None
+    gmt = parse_garmin_time(activity.get("startTimeGMT"))
+    moment: Optional[dt.datetime] = None
+    if gmt is not None:
+        try:
+            moment = gmt.replace(tzinfo=dt.timezone.utc).astimezone(tz).replace(tzinfo=None)
+        except (OverflowError, ValueError):
+            moment = None
+    if day is not None:
+        return day, moment
+    return (moment.date(), moment) if moment is not None else (None, None)
+
+
+# --- workout steps -------------------------------------------------------------
+
+def step_distance_m(step: Mapping[str, Any]) -> Optional[float]:
+    """Length in meters of a workout step that ends on distance, else None.
+
+    Reads upstream's curated step (end_condition / end_condition_value) or
+    Garmin's raw step (endCondition.conditionTypeKey / endConditionValue).
+    The value is meters in every pool, a yard pool too (spike S0.3: a 25 yd
+    pool workout's distance steps add up to its estimatedDistanceInMeters);
+    the pool's unit only says how the watch shows the step.
+    """
+    condition = step.get("end_condition")
+    if condition is None:
+        end = step.get("endCondition")
+        condition = end.get("conditionTypeKey") if isinstance(end, Mapping) else None
+    if condition != "distance":
+        return None
+    value = num(step["end_condition_value"] if "end_condition_value" in step else step.get("endConditionValue"))
+    if value is None or value <= 0:
+        return None
+    return value
+
+
 # --- sports -------------------------------------------------------------------
 
 def sport_group(type_key: Any) -> str:
@@ -428,6 +519,22 @@ def sport_group(type_key: Any) -> str:
         return "run"
     if "motor" not in key and any(part in key for part in ("cycl", "bik", "ride")):
         return "bike"
+    return "other"
+
+
+def completion_sport(type_key: Any) -> str:
+    """The "sport" the completion matchers pair on, from a Garmin type key.
+
+    run / bike / swim pair by sport group. "other" lumps strength, yoga,
+    walking and the rest together, so those pair by their own type key,
+    lower-cased: a walk must not complete a strength workout. No type key
+    gives "other".
+    """
+    group = sport_group(type_key)
+    if group != "other":
+        return group
+    if isinstance(type_key, str) and type_key.strip():
+        return type_key.strip().lower()
     return "other"
 
 
@@ -456,35 +563,77 @@ def _signed_day_gap(activity_day: Any, planned_day: Any) -> Optional[int]:
         return 0 if activity_day is not None and activity_day == planned_day else None
 
 
-def match_completion_shifts(
+def _moment(value: Any) -> Optional[dt.datetime]:
+    """A naive datetime from a datetime, a date (its midnight) or Garmin / ISO text; None otherwise."""
+    if isinstance(value, dt.datetime):
+        return value.replace(tzinfo=None)
+    if isinstance(value, dt.date):
+        return dt.datetime(value.year, value.month, value.day)
+    parsed = parse_garmin_time(value)
+    if parsed is not None:
+        return parsed
+    day = _iso_date(value)
+    return dt.datetime(day.year, day.month, day.day) if day is not None else None
+
+
+# (activity index or None, signed day gap): what completed a workout.
+Pair = Tuple[Optional[int], int]
+
+
+def match_completion_pairs(
     scheduled: List[Dict[str, Any]],
     activities: List[Dict[str, Any]],
-    max_shift_days: int = 0,
     *,
-    max_early_days: Optional[int] = None,
-    max_late_days: Optional[int] = None,
-) -> List[Optional[int]]:
-    """Per scheduled workout: how many days away it was done, or None if not done.
+    max_early_days: int,
+    max_late_days: int,
+    not_before: Any = None,
+) -> List[Optional[Pair]]:
+    """Per scheduled workout: (activity index, signed day gap) of what completed it, or None.
 
-    Same inputs as match_completions. 0 = linked by Garmin, or an activity of
-    the same sport group on the planned day; n = the nearest unused activity of
-    that sport n days before or after (n <= max_shift_days). max_early_days /
-    max_late_days, when given, replace max_shift_days for that direction: the
-    weekly report passes 1 early / 2 late, so a session done days before the
-    plan (or before the workout existed) never completes it; the daily report
-    uses 0. Same-day matches are made first for every workout, then 1 day away,
-    and so on, so a moved session never takes the activity of a session done on
-    its own day. Then each workout still without one tries an augmenting path
-    (an already matched workout moves to another activity in its own window), so
-    the number of completed workouts is the largest possible: planned Tue + Wed,
-    runs Mon + Tue gives Mon->Tue and Tue->Wed, not Tue->Tue alone. Each activity
-    completes at most one workout.
+    scheduled:  [{"date": "YYYY-MM-DD", "sport": <completion_sport or None>,
+                  "activity_id": <associatedActivityId or None>}, ...]
+    activities: [{"date": "YYYY-MM-DD" (local start date), "start": <local
+                  start time: datetime or Garmin text, optional>, "sport": ...,
+                  "id": <activityId or None>}, ...] in start-time order.
+
+    The gap is activity date - planned date in days (negative = done early).
+    A workout Garmin linked (activity_id) is done whatever the dates: its pair
+    names the activity with that id when it is in the list (the gap from the
+    dates, 0 when they cannot be compared), else (None, 0); that activity
+    completes nothing else. Any other workout is completed by an activity of
+    the same non-None sport from max_early_days before to max_late_days after
+    its date. not_before (a datetime, a date = its midnight, or text) drops
+    every activity that started before it (its "start", else its date's
+    midnight; an activity with neither is kept): the weekly report passes the
+    week's first day, so the week before never counts.
+
+    The matching completes as many workouts as possible (planned Tue + Wed,
+    runs Mon + Tue gives Mon->Tue and Tue->Wed, not Tue->Tue alone); among
+    those matchings it has as many same-day matches as possible, then as many
+    1 day away, and so on, so a moved session never takes the activity of a
+    session done on its own day when another activity keeps the count. Ties
+    go to the earlier workout and, for it, the earlier activity in list order.
+    Each activity completes at most one workout.
     """
-    early = max(0, int(max_shift_days if max_early_days is None else max_early_days))
-    late = max(0, int(max_shift_days if max_late_days is None else max_late_days))
+    early = max(0, int(max_early_days))
+    late = max(0, int(max_late_days))
+    floor = _moment(not_before) if not_before is not None else None
     linked_ids = {s.get("activity_id") for s in scheduled if s.get("activity_id") is not None}
     used = {i for i, act in enumerate(activities) if act.get("id") is not None and act.get("id") in linked_ids}
-    shifts: List[Optional[int]] = [0 if s.get("activity_id") is not None else None for s in scheduled]
+    if floor is not None:
+        for i, act in enumerate(activities):
+            started = _moment(act.get("start")) or _moment(act.get("date"))
+            if started is not None and started < floor:
+                used.add(i)
+    pairs: List[Optional[Pair]] = [None] * len(scheduled)
+    for n, item in enumerate(scheduled):
+        linked = item.get("activity_id")
+        if linked is None:
+            continue
+        index = next((i for i, act in enumerate(activities) if act.get("id") is not None and act.get("id") == linked),
+                     None)
+        gap = _signed_day_gap(activities[index].get("date"), item.get("date")) if index is not None else None
+        pairs[n] = (index, gap if gap is not None else 0)
 
     def gap_of(n: int, i: int) -> Optional[int]:
         """Signed day gap when activity i may complete workout n (same sport, inside the window), else None."""
@@ -496,37 +645,101 @@ def match_completion_shifts(
             return None
         return gap
 
-    owner: Dict[int, int] = {}  # activity index -> workout index (matched here, not Garmin-linked)
-    for shift in range(0, max(early, late) + 1):
-        for n in range(len(scheduled)):
-            if shifts[n] is not None:
-                continue
-            for i in range(len(activities)):
-                if i in used or i in owner:
+    free = [n for n in range(len(scheduled)) if scheduled[n].get("activity_id") is None]
+    open_acts = [i for i in range(len(activities)) if i not in used]
+    for n, i in _best_matching(free, open_acts, gap_of, max(early, late)).items():
+        pairs[n] = (i, cast(int, gap_of(n, i)))  # only pairs whose gap is not None are matched
+    return pairs
+
+
+def _best_matching(rows: List[int], cols: List[int], gap_of: Callable[[int, int], Optional[int]],
+                   widest: int) -> Dict[int, int]:
+    """row -> col: the most pairs; among those the most with |gap| 0, then 1, ...; then the earlier row with
+    the earlier column. Exact integer weights (one more pair outweighs any gap profile, one more pair at a
+    smaller gap outweighs every larger gap, the gap profile outweighs the tie-break), solved as an assignment
+    (Hungarian method, O(rows^2 * cols)) with one "no match" column per row."""
+    edges = {(r, c): g for r in rows for c in cols if (g := gap_of(r, c)) is not None}
+    if not edges:
+        return {}
+    rows = [r for r in rows if any((r, c) in edges for c in cols)]     # order kept: the tie-break reads it
+    cols = [c for c in cols if any((r, c) in edges for r in rows)]
+    n_rows, n_cols = len(rows), len(cols)
+    base = n_cols + 1
+    tie_span = base ** n_rows                                   # every tie-break total is below it
+    level = [tie_span * (n_rows + 1) ** (widest - g) for g in range(widest + 1)]
+    pair_bonus = tie_span * (n_rows + 1) ** (widest + 1)
+
+    def profit(a: int, b: int, g: int) -> int:
+        return int(pair_bonus + level[min(abs(g), widest)] + (n_cols - b) * base ** (n_rows - 1 - a))
+
+    top = max(profit(a, b, edges[(r, c)]) for a, r in enumerate(rows) for b, c in enumerate(cols)
+              if (r, c) in edges)
+    forbidden = (n_rows + 1) * top + 1
+    width = n_cols + n_rows                                     # real columns, then the "no match" ones
+    cost = [[-profit(a, b, edges[(r, c)]) if (r, c) in edges else forbidden for b, c in enumerate(cols)]
+            + [0] * n_rows for a, r in enumerate(rows)]
+    # Hungarian method (1-based potentials u, v; col_row[j] = row assigned to column j).
+    u = [0] * (n_rows + 1)
+    v = [0] * (width + 1)
+    col_row = [0] * (width + 1)
+    way = [0] * (width + 1)
+    for a in range(1, n_rows + 1):
+        col_row[0] = a
+        j0 = 0
+        minv: List[Optional[int]] = [None] * (width + 1)
+        done = [False] * (width + 1)
+        while True:
+            done[j0] = True
+            a0, delta, j1 = col_row[j0], None, 0
+            for j in range(1, width + 1):
+                if done[j]:
                     continue
-                gap = gap_of(n, i)
-                if gap is not None and abs(gap) == shift:
-                    owner[i] = n
-                    shifts[n] = shift
-                    break
+                cur = cost[a0 - 1][j - 1] - u[a0] - v[j]
+                if minv[j] is None or cur < cast(int, minv[j]):
+                    minv[j], way[j] = cur, j0
+                if delta is None or cast(int, minv[j]) < delta:
+                    delta, j1 = minv[j], j
+            step = cast(int, delta)
+            for j in range(width + 1):
+                if done[j]:
+                    u[col_row[j]] += step
+                    v[j] -= step
+                else:
+                    minv[j] = cast(int, minv[j]) - step
+            j0 = j1
+            if col_row[j0] == 0:
+                break
+        while j0:
+            j1 = way[j0]
+            col_row[j0] = col_row[j1]
+            j0 = j1
+    out = {}
+    for j in range(1, n_cols + 1):
+        a = col_row[j]
+        if a and (rows[a - 1], cols[j - 1]) in edges:
+            out[rows[a - 1]] = cols[j - 1]
+    return out
 
-    def augment(n: int, seen: Set[int]) -> bool:
-        candidates = [(abs(g), i) for i in range(len(activities)) if i not in used and (g := gap_of(n, i)) is not None]
-        for _, i in sorted(candidates):
-            if i in seen:
-                continue
-            seen.add(i)
-            if i not in owner or augment(owner[i], seen):
-                owner[i] = n
-                return True
-        return False
 
-    for n in range(len(scheduled)):
-        if shifts[n] is None and scheduled[n].get("activity_id") is None:
-            augment(n, set())
-    for i, n in owner.items():
-        shifts[n] = abs(cast(int, gap_of(n, i)))  # owner holds only pairs whose gap is not None
-    return shifts
+def match_completion_shifts(
+    scheduled: List[Dict[str, Any]],
+    activities: List[Dict[str, Any]],
+    max_shift_days: int = 0,
+    *,
+    max_early_days: Optional[int] = None,
+    max_late_days: Optional[int] = None,
+) -> List[Optional[int]]:
+    """Per scheduled workout: how many days away it was done, or None if not done.
+
+    match_completion_pairs with the gap made absolute, and 0 for a workout
+    Garmin linked. max_early_days / max_late_days, when given, replace
+    max_shift_days for that direction (the daily report uses 0 both ways).
+    """
+    early = max_shift_days if max_early_days is None else max_early_days
+    late = max_shift_days if max_late_days is None else max_late_days
+    pairs = match_completion_pairs(scheduled, activities, max_early_days=early, max_late_days=late)
+    return [None if p is None else 0 if s.get("activity_id") is not None else abs(p[1])
+            for s, p in zip(scheduled, pairs)]
 
 
 # --- fetching -----------------------------------------------------------------

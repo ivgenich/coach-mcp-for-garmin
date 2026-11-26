@@ -444,6 +444,22 @@ def _vectors_delete(ctx: Any, ids: List[str]) -> None:
             LOG.warning("history: vector delete failed (%s)", type(exc).__name__)
 
 
+def _plan_retention(store: Any, today: Optional[dt.date] = None) -> None:
+    """The training plans' end and retention beside the history's, on its own connection: active plans whose
+    race date is before `today` become finished (plan_store.finish_past), then plan_store.retention. A failure
+    (the plan tables not created yet, the database busy) is logged with its type and never stops the sweep."""
+    try:
+        import plan_store
+
+        plans = plan_store.for_history_store(store)
+        if plans is not None:
+            if today is not None:
+                plans.finish_past(today)
+            plans.retention()
+    except Exception as exc:  # noqa: BLE001 - the history sweep goes on
+        LOG.warning("plans: retention skipped (%s)", type(exc).__name__)
+
+
 def sweep(job: Any, ctx: Any) -> None:
     p = job.payload or {}
     store, conn = ctx.store, ctx.conn
@@ -455,6 +471,7 @@ def sweep(job: Any, ctx: Any) -> None:
     fp = store.meta_get(hs.META_ACCOUNT, conn=conn)
     removed = store.retention(fp or "", today - dt.timedelta(days=hx.RETENTION_DAYS))
     _vectors_delete(ctx, removed.get("doc_ids") or [])
+    _plan_retention(store, today)
     if not fp:
         _enqueue(ctx, "index_day", f"index_day:{yesterday.isoformat()}",
                  {"date": yesterday.isoformat(), "backfill": True})

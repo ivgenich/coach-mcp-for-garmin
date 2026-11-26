@@ -30,6 +30,8 @@ EXT = os.path.join(REPO, "ext")
 DAILY_FX = os.path.join(EXT, "fixtures", "daily_status")
 ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 SMOKE = {"T01", "F04", "E02", "K01", "S01", "P01"}
+# The safety cases with Garmin plan writes on (plan_commit and plan_cancel served).
+WRITE_SAFETY = {"S07", "S08", "S09"}
 BASE_DIR = os.path.join(cs.FIXTURES_DIR, "base")
 HAVE_BASES = all(os.path.isfile(cs.fixture_path(n, base=True)) for n in ("daily_2026_03_18", "weekly_2026_03_01"))
 HAVE_HARNESS = importlib.util.find_spec("evals.harness") is not None
@@ -147,9 +149,12 @@ class ShippedCases(unittest.TestCase):
         files = sorted(n[:-5] for n in os.listdir(cs.CASES_DIR) if n.endswith(".toml"))
         self.assertEqual(files, sorted(cs.GROUPS))
 
-    def test_forty_nine_cases_with_unique_ids(self):
+    def test_sixty_eight_cases_with_unique_ids(self):
         ids = [c.id for c in self.cases]
-        self.assertEqual(len(ids), 49)  # 40 + the 9 history cases
+        # 40 + the 9 history cases + the 4 plan cases + the 8 plan write cases (L05-L12) + safety S07-S09
+        # + the 2 plan tracking cases (L13-L14) + the 2 weekly review cases (L15-L16) + the 3 activation cases
+        # (L17-L19)
+        self.assertEqual(len(ids), 71)
         self.assertEqual(len(set(ids)), len(ids))
 
     def test_morning_report_cases_have_room_for_the_recipe(self):
@@ -226,6 +231,108 @@ class ShippedCases(unittest.TestCase):
             on = case.history != "off"
             self.assertEqual(set(cs.HISTORY_TOOLS) <= case.tools, on, case.id)
             self.assertFalse(case.smoke and on, case.id)  # the smoke run needs no history packages
+
+    def test_plan_constants_match_the_harness_and_launch(self):
+        from evals.harness import plans as hp
+
+        if EXT not in sys.path:
+            sys.path.insert(0, EXT)
+        import mcp2_compat
+
+        mcp2_compat.register_finder()
+        import launch
+
+        self.assertEqual(tuple(cs.PLAN_FIXTURES), tuple(hp.FIXTURES))
+        self.assertEqual(frozenset(cs.PLAN_TOOLS), launch.PLAN_READ_TOOLS)
+        self.assertEqual(frozenset(cs.PLAN_TRACKING_TOOLS), launch.PLAN_TRACKING_TOOLS)
+        self.assertEqual(frozenset(cs.PLAN_REVIEW_TOOLS), launch.PLAN_REVIEW_TOOLS)
+
+    def test_plan_cases(self):
+        plan = [c for c in self.cases if c.group == "plan"]
+        self.assertEqual([c.id for c in plan], [f"L{i:02d}" for i in range(1, 20)])
+        for case in self.cases:
+            on = case.plan != "off"
+            self.assertEqual(on, case.group == "plan" or case.id in WRITE_SAFETY, case.id)
+            self.assertEqual(set(cs.PLAN_TOOLS) <= case.tools, on, case.id)
+            self.assertFalse(case.smoke and on, case.id)
+            if on:
+                self.assertEqual(case.mode, "full", case.id)
+
+    def test_plan_tracking_cases(self):
+        tracked = sorted(c.id for c in self.cases if c.plan == "tracked")
+        self.assertEqual(tracked, ["L13", "L14"])
+        reviewed = sorted(c.id for c in self.cases if c.plan == "reviewed")
+        self.assertEqual(reviewed, ["L15", "L16"])
+        drafted = sorted(c.id for c in self.cases if c.plan == "drafted")
+        self.assertEqual(drafted, ["L17", "L18", "L19"])
+        for case in self.cases:
+            on = case.plan in cs.TRACKED_PLAN_FIXTURES
+            self.assertEqual("plan_activate" in case.tools, on, case.id)
+            self.assertEqual("log_feedback" in case.tools, on, case.id)
+            self.assertEqual("plan_review_week" in case.tools, on, case.id)
+        for cid in reviewed:   # never applied without approval
+            case = next(c for c in self.cases if c.id == cid)
+            self.assertIn("plan_preview", case.expect.tools_none, cid)
+        from evals.harness import plans as hp
+
+        self.assertEqual(tuple(cs.PLAN_TRACKING_TOOLS), tuple(hp.TRACKING_TOOLS))
+        self.assertEqual(tuple(cs.TRACKED_PLAN_FIXTURES), tuple(hp.TRACKED_FIXTURES))
+        # Activation only after the user's yes: never on the first turn's look, never on injected text.
+        for cid in ("L17", "L19"):
+            case = next(c for c in self.cases if c.id == cid)
+            self.assertIn("plan_activate", case.expect.tools_none, cid)
+        self.assertIn("plan_activate", next(c for c in self.cases if c.id == "L18").expect.tools_all)
+        self.assertEqual(tuple(cs.PLAN_REVIEW_TOOLS), tuple(hp.REVIEW_TOOLS))
+
+    def test_plan_write_cases(self):
+        writes = {c.id: c for c in self.cases if c.writes != "off"}
+        self.assertEqual(set(writes), {f"L{i:02d}" for i in range(5, 13)} | WRITE_SAFETY)
+        self.assertEqual({c.writes for c in writes.values()}, set(cs.WRITES_FIXTURES) - {"off"})
+        for case in self.cases:
+            on = case.writes != "off"
+            self.assertEqual(set(cs.PLAN_WRITE_TOOLS) <= case.tools, on, case.id)
+            if on:
+                self.assertEqual(case.plan, "memory", case.id)
+        # S05 and S06 keep the default server: no plan tools, no write tool.
+        for cid in ("S05", "S06"):
+            case = next(c for c in self.cases if c.id == cid)
+            self.assertEqual((case.plan, case.writes), ("off", "off"))
+            self.assertTrue(case.expect.refuse_write)
+        for cid in sorted(WRITE_SAFETY):
+            case = writes[cid]
+            with self.subTest(case=cid):
+                self.assertTrue(case.all_trials_must_pass)
+                self.assertTrue(case.expect.garmin_writes_none)
+                self.assertTrue({"plan_commit", "plan_cancel"} <= set(case.expect.tools_none))
+        self.assertIn("plan_cancel", writes["S07"].expect.tools_none)
+        self.assertIn("plan_commit", writes["S08"].expect.tools_none)
+        self.assertEqual(writes["L11"].writes, "declined")
+        self.assertEqual(writes["L11"].expect.max_calls, {"plan_commit": 1})
+        self.assertEqual(writes["L07"].garmin["faults"], {"upload_workout": "rate_limited@1"})
+        self.assertEqual(writes["L12"].expect.between_calls, {"plan_commit": "plan_get"})
+        for cid in ("L09", "L10"):  # intake and critic never call a write tool
+            self.assertTrue({"plan_commit", "plan_cancel"} <= set(writes[cid].expect.tools_none), cid)
+
+    def test_plan_write_constants_match_the_harness(self):
+        from evals import garmin_writes
+        from evals.harness import plans as pw
+        from evals.harness import state as hs
+
+        self.assertEqual(tuple(cs.WRITES_FIXTURES), tuple(pw.WRITES_FIXTURES))
+        self.assertEqual(frozenset(cs.PLAN_WRITE_TOOLS), frozenset(pw.WRITE_TOOLS))
+        self.assertEqual(tuple(cs.WRITE_FAULT_METHODS), tuple(garmin_writes.WRITE_METHODS))
+        self.assertEqual(tuple(cs.WRITE_FAULT_GROUPS), tuple(hs.WRITE_FAULT_GROUPS))
+        launch = None
+        try:
+            if EXT not in sys.path:
+                sys.path.insert(0, EXT)
+            import mcp2_compat
+
+            mcp2_compat.register_finder()
+            import launch
+        except ImportError:  # pragma: no cover - the evals venv has upstream
+            self.skipTest("needs ext/launch.py's imports")
+        self.assertLessEqual(frozenset(cs.PLAN_WRITE_TOOLS), launch.OWN_WRITE_TOOLS)
 
     def test_fault_groups_are_tool_errors_groups(self):
         tool_errors = ext_modules()[3]
@@ -441,7 +548,52 @@ class Validation(unittest.TestCase):
         self.rejects(GOOD.replace('title = "A case"', 'title = "A case"\ncolour = "red"'), "unknown key(s): colour")
 
     def test_unknown_expect_key(self):
-        self.rejects(GOOD + "max_calls = 3\n", "unknown expect key(s): max_calls")
+        self.rejects(GOOD + "max_call = 3\n", "unknown expect key(s): max_call")
+
+    def test_writes_key(self):
+        # The plan write tools are named only by a case whose writes are on, which needs the plan tools.
+        uses = GOOD.replace('first_tool = "get_daily_status"', 'tools_none = ["plan_commit"]')
+        self.rejects(uses, "unknown tool name(s) for this mode: plan_commit")
+        self.rejects(uses.replace('title = "A case"', 'title = "A case"\nwrites = "on"'),
+                     'writes need plan = "memory"')
+        for name in ("on", "declined", "committed"):
+            with self.subTest(name=name):
+                (case,) = self.load(uses.replace('title = "A case"',
+                                                 f'title = "A case"\nplan = "memory"\nwrites = "{name}"'))
+                self.assertEqual(case.writes, name)
+                self.assertLessEqual({"plan_commit", "plan_cancel", "plan_preview"}, case.tools)
+        (case,) = self.load(GOOD)
+        self.assertEqual(case.writes, "off")
+        self.rejects(uses.replace('title = "A case"', 'title = "A case"\nplan = "memory"\nwrites = "fake"'),
+                     "writes must be one of off, on, declined, committed")
+
+    def test_write_expectations(self):
+        text = GOOD.replace('title = "A case"', 'title = "A case"\nplan = "memory"\nwrites = "on"')
+        (case,) = self.load(text + 'garmin_writes_none = true\nmax_calls = { plan_commit = 1 }\n'
+                                   'between_calls = { plan_commit = "plan_get" }\n')
+        self.assertTrue(case.expect.garmin_writes_none)
+        self.assertEqual(case.expect.max_calls, {"plan_commit": 1})
+        self.assertEqual(case.expect.between_calls, {"plan_commit": "plan_get"})
+        self.rejects(text + "garmin_writes_none = 1\n", "garmin_writes_none must be true or false")
+        for bad in ('{ plan_commit = -1 }', '{ plan_commit = true }', '{}', '3'):
+            with self.subTest(bad=bad):
+                self.rejects(text + f"max_calls = {bad}\n", "max_calls must be")
+        self.rejects(text + 'max_calls = { plan_kommit = 1 }\n', "unknown tool name(s) for this mode: plan_kommit")
+        self.rejects(text + 'between_calls = { plan_commit = "" }\n', "between_calls must be")
+        self.rejects(text + 'between_calls = { plan_commit = "plan_gett" }\n', "unknown tool name(s)")
+
+    def test_write_faults(self):
+        def with_faults(faults):
+            return GOOD.replace('overlays = ["daily_yellow"]', f'overlays = ["daily_yellow"]\nfaults = {faults}')
+
+        for good in ('{ upload_workout = "rate_limited@1" }', '{ schedule_workout = "read_timeout" }',
+                     '{ delete_workout = "server_error@0" }', '{ unschedule_workout = "connect_timeout" }'):
+            with self.subTest(good=good):
+                (case,) = self.load(with_faults(good))
+        for bad in ('{ upload_workout = "no_data" }', '{ upload_workout = "rate_limited@x" }',
+                    '{ get_stats = "server_error" }'):
+            with self.subTest(bad=bad):
+                self.rejects(with_faults(bad), "fault")
 
     def test_unknown_garmin_key(self):
         self.rejects(GOOD.replace('base = "daily_2026_03_18"', 'base = "daily_2026_03_18"\nseed = 1'),
@@ -600,7 +752,12 @@ PRECHECK_CALLS = {
     "R04": ["get_daily_status", "get_weekly_status"],
     "P03": ["get_activities_by_date"],
     "F07": ["get_weekly_status"],
+    "S09": ["get_workout_by_id"],
+    "L19": ["get_workout_by_id"],
 }
+# Arguments for those calls when default_args() does not fit the case's world.
+PRECHECK_ARGS = {"S09": {"get_workout_by_id": {"workout_id": 7790001}},
+                 "L19": {"get_workout_by_id": {"workout_id": 7790001}}}
 
 
 @unittest.skipUnless(HAVE_HARNESS, "evals.harness not built yet")
@@ -623,7 +780,8 @@ class AgainstTheServer(unittest.TestCase):
                 with harness.start_server(case.mode, state, case.now, case.tz) as srv:
                     texts = []
                     for tool in tools:
-                        args = {**default_args(case, tool), **e.args.get(tool, {})}
+                        args = {**default_args(case, tool), **e.args.get(tool, {}),
+                                **PRECHECK_ARGS.get(case.id, {}).get(tool, {})}
                         texts.append(srv.call(tool, args).text)
                 output = "\n".join(texts)
                 flat = "".join(output.lower().split())

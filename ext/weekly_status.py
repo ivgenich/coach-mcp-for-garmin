@@ -27,17 +27,19 @@ Decisions worth knowing:
 - Plan: scheduled = workouts on Garmin's calendar in the week (rest days
   excluded). Garmin rarely links a finished activity to its workout
   (associatedActivityId stays null) and people move sessions inside a week,
-  so completed comes from status_common.match_completion_shifts over THIS
+  so completed comes from status_common.match_completion_pairs over THIS
   week's activities only, up to min(end_date, today): linked by Garmin, or an
   activity of the same sport group (for "other", of the same type) on the
   planned day, else at most 1 day earlier or 2 days later (rules v2; v1 took
   any day of the week); one activity per workout. on_planned_day counts the
   first two, moved the rest; "linked" keeps Garmin's own count. A workout
-  dated after today is "upcoming": never done, and left out of
-  low_completion. The schedule summary carries no created date, so "not
-  before the workout existed" is approximated by the 1-day early limit.
-  Without the activity list, completed, on_planned_day and moved are null
-  unless every workout is linked.
+  dated after min(end_date, today) is "upcoming": not due, never matched to
+  an activity; one Garmin already linked counts as done_early, not completed
+  (rules v3), and completion_pct is completed / due. The schedule summary
+  carries no created date, so "not before the workout existed" is
+  approximated by the 1-day early limit. Without the activity list,
+  completed, on_planned_day and moved are null unless every due workout is
+  linked.
 - Long session: the week's longest bike or run of at least 60 minutes. Its
   decoupling comes from upstream's FIT analysis (_parse_fit ->
   session.hr_drift: power:HR, first half vs second half); when that cannot be
@@ -78,13 +80,14 @@ import time
 from collections import OrderedDict
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple, cast
 
+import daily_status as ds
 import mcp2_compat
 import status_common as sc
 import text_hygiene as th
 
-RULES_VERSION = 2
+RULES_VERSION = 3
 
-# Weekly rules v2 (v1 + the plan window and the steadiness check below): starting values, to calibrate
+# Weekly rules v3 (v2 + plan completion over due workouts only, below): starting values, to calibrate
 # after a few weeks of use.
 THRESHOLDS: Dict[str, Any] = {
     "hrv_drop_ms": 5,               # hrv_down: avg_7d <= avg_28d - 5 (or avg_7d < balanced_low)
@@ -108,6 +111,9 @@ MAX_WORDS = 300
 # Whole-report budget (Garmin calls of every round); see status_common.fetch_all.
 DEADLINE_S = 60.0
 CALL_TIMEOUT_S = 30.0
+# The training-plan counts (PLAN_TRACKING=on) get this long after the Garmin calls; slower: no training_plan.
+PLAN_TIMEOUT_S = 3.0
+_PLAN_COUNT_KEYS = ("planned", "done", "partial", "missed", "replaced", "moved", "open")
 # FIT download + parse of a long ride: fitparse is slow on a 3-4 h file.
 FIT_TIMEOUT_S = 45.0
 # Finished drift results, newest last: decoding a long FIT file costs seconds
@@ -121,6 +127,11 @@ WEIGHT_LOOKBACK_DAYS = 90
 # week, which credited sessions done before the workout was even planned). Never after end_date or today.
 PLAN_EARLY_DAYS = 1
 PLAN_LATE_DAYS = 2
+# v3: completed and completion_pct count only workouts already due (dated up to min(end_date, today)); a
+# workout still ahead that Garmin already linked is done_early, so the pct never passes 100. One set of week
+# edges for both sides: workouts dated start..end, activities started start 00:00 .. min(end_date, today).
+# Also v3 (unreleased with it): of the matchings completing the most workouts, the one with the most same-day
+# matches (status_common.match_completion_pairs).
 # v2 steadiness check for the long session's decoupling: a halves comparison means something only when the
 # effort was even. Indoor sessions are steady; outdoors a ride needs a variability index (normalized / average
 # power) of at most STEADY_MAX_VI and both sports less climbing per hour than their limit, else the hills (or
@@ -258,23 +269,6 @@ def parse_sleep(raw: Any, day: dt.date) -> Optional[Dict[str, Any]]:
     return {"hours": seconds / 3600.0, "score": sc.num(sc.dig(dto, "sleepScores", "overall", "value"))}
 
 
-def _activity_start(activity: Dict[str, Any], tz: Any) -> Tuple[Optional[dt.date], Optional[str]]:
-    """(local start date, local start text) from startTimeLocal, else from startTimeGMT."""
-    local = activity.get("startTimeLocal")
-    day = _iso_day(local)
-    if day is not None:
-        return day, str(local)
-    gmt = activity.get("startTimeGMT")
-    if isinstance(gmt, str):
-        try:
-            moment = dt.datetime.fromisoformat(gmt.replace(" ", "T")[:19]).replace(tzinfo=dt.timezone.utc)
-        except ValueError:
-            return None, None
-        moment = moment.astimezone(tz)
-        return moment.date(), moment.strftime("%Y-%m-%d %H:%M:%S")
-    return None, None
-
-
 def parse_activities(raw: Any, tz: Any) -> List[Dict[str, Any]]:
     """The activity search list -> [{id, date, start_local, type, sport, name, seconds, meters}].
 
@@ -293,9 +287,10 @@ def parse_activities(raw: Any, tz: Any) -> List[Dict[str, Any]]:
             if aid in seen:
                 continue
             seen.add(aid)
-        day, start_local = _activity_start(activity, tz)
+        day, started = sc.activity_times(activity, tz)
         if day is None:
             continue
+        start_local = started.strftime("%Y-%m-%d %H:%M:%S") if started is not None else None
         type_key = sc.dig(activity, "activityType", "typeKey")
         out.append({
             "id": aid,
@@ -569,59 +564,61 @@ def fitness_section(now_ts: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _match_sport(item: Dict[str, Any]) -> Any:
-    """The sport key for completion matching: the group for run/bike/swim; for
-    "other" its own type key, lower-cased, so a walk never completes a strength workout."""
-    type_key = item.get("type")
-    if item.get("sport") == "other" and isinstance(type_key, str) and type_key.strip():
-        return type_key.strip().lower()
-    return item.get("sport")
-
-
 def plan_section(items: Optional[List[Dict[str, Any]]], acts: Optional[List[Dict[str, Any]]],
                  start: dt.date, end: dt.date, today: Optional[dt.date] = None) -> Dict[str, Any]:
-    """{scheduled, completed, on_planned_day, moved, upcoming, linked, completion_pct} for the week start..end.
+    """{scheduled, due, completed, on_planned_day, moved, upcoming, done_early, linked, completion_pct}.
 
-    sc.match_completion_shifts over THIS week's activities only (local start
-    date in start..min(end, today); the previous week's never count), at most
-    PLAN_EARLY_DAYS before or PLAN_LATE_DAYS after the planned day. completed =
-    done in that window; on_planned_day = linked by Garmin or done on the
-    planned day; moved = completed - on_planned_day. A workout dated after
-    today is not due yet (upcoming): it stays in scheduled but is never done
-    (a Garmin link would still count), and low_completion leaves it out.
-    Without the activity list only Garmin's links are known, a lower bound, so
-    completed, on_planned_day and moved stay null unless every workout is linked.
+    For the week start..end. A workout is due when dated up to last =
+    min(end, today); later ones are upcoming. sc.match_completion_pairs over
+    THIS week's activities only (started from start 00:00 up to last; the
+    previous week's never count), at most PLAN_EARLY_DAYS before or
+    PLAN_LATE_DAYS after the planned day. completed = due workouts linked by
+    Garmin or done in that window; on_planned_day = due workouts linked or
+    done on the planned day; moved = completed - on_planned_day. An upcoming
+    workout is never matched to an activity; one Garmin already linked counts
+    in done_early, not in completed (rules v3), so completion_pct =
+    completed / due never passes 100 (null when nothing is due). Without the
+    activity list only Garmin's links are known, a lower bound, so completed,
+    on_planned_day and moved stay null unless every due workout is linked.
     """
     if items is None:
-        return {"scheduled": None, "completed": None, "on_planned_day": None, "moved": None, "upcoming": None,
-                "linked": None, "completion_pct": None}
+        return {"scheduled": None, "due": None, "completed": None, "on_planned_day": None, "moved": None,
+                "upcoming": None, "done_early": None, "linked": None, "completion_pct": None}
     last = min(end, today) if today is not None else end
     scheduled = len(items)
+    due = sum(1 for i in items if i["date"] <= last)
     linked = sum(1 for i in items if i["activity_id"] is not None)
+    done_early = sum(1 for i in items if i["date"] > last and i["activity_id"] is not None)
+    completed: Optional[int]
+    on_planned_day: Optional[int]
     if acts is None:
-        completed = on_planned_day = scheduled if linked == scheduled else None
+        due_linked = sum(1 for i in items if i["date"] <= last and i["activity_id"] is not None)
+        completed = on_planned_day = due if due_linked == due else None
     else:
         week = sorted((a for a in acts if start <= a["date"] <= last),
                       key=lambda a: (a["date"], a.get("start_local") or ""))
-        # A workout still ahead gets no sport, so no activity can match it; its Garmin link still counts.
-        shifts = sc.match_completion_shifts(
-            [{"date": i["date"].isoformat(), "sport": _match_sport(i) if i["date"] <= last else None,
+        # A workout still ahead gets no sport, so no activity can match it; its Garmin link still pairs.
+        pairs = sc.match_completion_pairs(
+            [{"date": i["date"].isoformat(), "sport": sc.completion_sport(i["type"]) if i["date"] <= last else None,
               "activity_id": i["activity_id"]} for i in items],
-            [{"date": a["date"].isoformat(), "sport": _match_sport(a),
-              "id": str(a["id"]) if a["id"] is not None else None} for a in week if _match_sport(a) is not None],
-            max_early_days=PLAN_EARLY_DAYS, max_late_days=PLAN_LATE_DAYS,
+            [{"date": a["date"].isoformat(), "start": a.get("start_local"), "sport": sc.completion_sport(a["type"]),
+              "id": str(a["id"]) if a["id"] is not None else None} for a in week],
+            max_early_days=PLAN_EARLY_DAYS, max_late_days=PLAN_LATE_DAYS, not_before=start,
         )
-        completed = sum(1 for s in shifts if s is not None)
-        on_planned_day = sum(1 for s in shifts if s == 0)
+        done = [(i, p) for i, p in zip(items, pairs) if p is not None and i["date"] <= last]
+        completed = len(done)
+        on_planned_day = sum(1 for i, p in done if i["activity_id"] is not None or p[1] == 0)
     return {
         "scheduled": scheduled,
+        "due": due,
         "completed": completed,
         "on_planned_day": on_planned_day,
         # completed and on_planned_day are None together.
         "moved": completed - cast(int, on_planned_day) if completed is not None else None,
-        "upcoming": sum(1 for i in items if i["date"] > last),
+        "upcoming": scheduled - due,
+        "done_early": done_early,
         "linked": linked,
-        "completion_pct": sc.rnd(completed / scheduled * 100) if scheduled and completed is not None else None,
+        "completion_pct": sc.rnd(completed / due * 100) if due and completed is not None else None,
     }
 
 
@@ -876,11 +873,10 @@ def evaluate_flags(status: Dict[str, Any], thresholds: Optional[Dict[str, Any]] 
         flags.append(_flag("load_high", "red", "Load high: Garmin marks ACWR as high"))
 
     plan = status.get("plan") or {}
-    # Workouts still ahead (a week that ends today or later) are not due, so they neither count nor lower the pct.
-    scheduled, pct, upcoming = plan.get("scheduled"), plan.get("completion_pct"), plan.get("upcoming") or 0
-    due = scheduled - upcoming if scheduled is not None else None
-    if upcoming and due and plan.get("completed") is not None:
-        pct = sc.rnd(plan["completed"] / due * 100)
+    # completion_pct is over the workouts already due (rules v3): those still ahead neither count nor lower it.
+    due, pct = plan.get("due"), plan.get("completion_pct")
+    if due is None and plan.get("scheduled") is not None:  # a plan section without "due" (built by hand)
+        due = plan["scheduled"] - (plan.get("upcoming") or 0)
     if due is not None and pct is not None and due >= t["completion_min_scheduled"] and pct < t["completion_pct"]:
         flags.append(_flag("low_completion", "yellow",
                            f"Low plan completion: under {t['completion_pct']}% of planned workouts"
@@ -1155,6 +1151,73 @@ def _missing(status: Dict[str, Any], *, volume_ok: bool, plan_ok: bool, gear_ok:
     return out
 
 
+def week_profile_id(data: Mapping[str, Any], start: dt.date, end: dt.date) -> Optional[str]:
+    """The Garmin profile id (the plan account fingerprint only): from the week's HRV or sleep answers, else
+    the last used device's userProfileNumber, else an activity's ownerId."""
+    days = [end - dt.timedelta(days=back) for back in HRV_WEEKS]
+    days += [start + dt.timedelta(days=offset) for offset in range(7)]
+    for day in days:
+        for name in (f"hrv@{day.isoformat()}", f"sleep@{day.isoformat()}"):
+            payload = data.get(name)
+            pid = ds.profile_id({"hrv": payload} if name.startswith("hrv@") else {"sleep": payload})
+            if pid is not None:
+                return pid
+    number = sc.path_int_id(sc.dig(data.get("device_last_used"), "userProfileNumber"))
+    if number is not None:
+        return str(number)
+    for activity in _activity_items(data.get("activities")):
+        owner = sc.path_int_id(activity.get("ownerId"))
+        if owner is not None:
+            return str(owner)
+    return None
+
+
+def _activity_items(raw: Any) -> List[Dict[str, Any]]:
+    """The activity search answer's items (a list, or Garmin's activityList wrapper)."""
+    if isinstance(raw, dict):
+        raw = raw.get("activityList") or raw.get("activities") or []
+    return [a for a in raw if isinstance(a, dict)] if isinstance(raw, list) else []
+
+
+def plan_counts_out(value: Any) -> Optional[Dict[str, Any]]:
+    """plan_tracking.week_counts()'s answer with its documented keys only (None stays None)."""
+    if not isinstance(value, dict):
+        return None
+    return {key: value.get(key) for key in _PLAN_COUNT_KEYS}
+
+
+async def plan_counts(data: Mapping[str, Any], start: dt.date, end: dt.date, zone: Any = None,
+                      today: Optional[dt.date] = None, *, activities_ok: bool = True,
+                      ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """(found, the training plan's counts of the week start..end) with PLAN_TRACKING=on; (False, None) when the
+    switch is off, the module is missing, there is no profile id, or the lookup failed or was slower than
+    PLAN_TIMEOUT_S (daily_status.plan_call). First the plan's links are refreshed from the 14 days of
+    activities (end - 13 .. end) and the week's calendar, so a session whose window the daily reports never
+    covered whole is settled here; then the week is counted from that one read of the plan. When the activity
+    search failed (activities_ok false) nothing is settled from it, and when its one page is full
+    (_activities_cut) nothing is settled from the days the page may lack. Never raises; the counts feed no
+    flag and no level."""
+    module, store = ds.plan_tracking_store()
+    if store is None:
+        return False, None
+    pid = week_profile_id(data, start, end)
+    if pid is None:
+        return False, None
+
+    def lookup() -> Optional[Tuple[Optional[Dict[str, Any]]]]:
+        account = module.account_fp(store, pid)
+        if not account:
+            return None
+        raw = data.get("activities")
+        state = module.refresh_links(store, account, end, _activity_items(raw) if activities_ok else None,
+                                     ds.schedule_entries(data.get("schedule")), first=end - dt.timedelta(days=13),
+                                     last=end, tz=zone, today=today, cut=activities_ok and _activities_cut(raw))
+        return (plan_counts_out(module.week_counts(store, account, start, state=state)),)
+
+    found = await ds.plan_call(lookup, PLAN_TIMEOUT_S)
+    return (True, found[0]) if found is not None else (False, None)
+
+
 async def build_weekly_status(
     client: Any,
     end_date: str = "",
@@ -1258,6 +1321,12 @@ async def build_weekly_status(
         "body": body_section(weighs, start, end),
         "gear": gear,
     }
+    if not key_mode:
+        found, counts = await plan_counts(data, start, end, zone, current.date(), activities_ok=volume_ok)
+        if found:
+            items = list(status.items())
+            at = [k for k, _ in items].index("plan") + 1   # right after the calendar's "plan" section
+            status = dict(items[:at] + [("training_plan", counts)] + items[at:])
     if volume_cut:
         status["volume"]["change_pct"] = None
     flags = evaluate_flags(status)
@@ -1413,15 +1482,31 @@ def _lines(status: Dict[str, Any], compact: bool) -> List[Tuple[str, List[Segmen
         item("Plan: no workouts scheduled")
     elif plan.get("completed") is None:
         item(f"Plan: {n(plan['scheduled'])} scheduled · done: {NO_DATA}")
+    elif (due := plan.get("due") if plan.get("due") is not None
+          else plan["scheduled"] - (plan.get("upcoming") or 0)) == 0:
+        text = f"Plan: {n(plan['scheduled'])} scheduled, all still ahead"
+        if plan.get("done_early"):
+            text += f" ({n(plan['done_early'])} already done)"
+        item(text)
     else:
-        text = (f"Plan: {n(plan['completed'])} of {n(plan['scheduled'])} done"
-                f" ({n(plan.get('completion_pct'))}%)")
+        text = f"Plan: {n(plan['completed'])} of {n(due)} done"
+        if plan.get("completion_pct") is not None:
+            text += f" ({n(plan['completion_pct'])}%)"
         on_day = plan.get("on_planned_day")
         if on_day is not None and on_day != plan["completed"]:
             text += f", {n(on_day)} of them on the planned day"
         if plan.get("upcoming"):
             text += f", {n(plan['upcoming'])} still ahead"
+            if plan.get("done_early"):
+                text += f" ({n(plan['done_early'])} already done)"
         item(text)
+    training = status.get("training_plan")
+    if isinstance(training, dict) and training.get("planned"):
+        text = f"Training plan: {n(training.get('done'))} of {n(training['planned'])} sessions done"
+        extra = [f"{n(training[k])} {word}" for k, word in (
+            ("partial", "partly done"), ("moved", "moved"), ("replaced", "replaced"), ("missed", "missed"),
+            ("open", "still open")) if training.get(k)]
+        item(text + (", " + ", ".join(extra) if extra else ""))
     long_session = status.get("long_session")
     if not long_session:
         if volume.get("total_hours") is None:
@@ -1523,9 +1608,11 @@ def register_tools(app: Any, get_client: Callable[[], Any], key_mode: bool = Fal
         Covers HRV (7-day vs 28-day average, Garmin status and baseline), sleep
         (average, nights under 6 h, score), volume per sport (sessions, km,
         hours), Garmin training load (acute, chronic and its change over the
-        week, ACWR), scheduled workouts done this week (completed = linked by
-        Garmin or an activity of the same sport on any day of the week;
-        on_planned_day = done on the planned day; linked = Garmin's own count), the
+        week, ACWR), scheduled workouts done this week (completed = due
+        workouts linked by Garmin or done by an activity of the same sport
+        from 1 day before to 2 days after the planned day; on_planned_day =
+        done on the planned day; done_early = workouts still ahead Garmin
+        already linked; linked = Garmin's own count), the
         week's longest ride or run of 60+ min with its heart-rate decoupling,
         VO2max and training status, weight, and shoes/bikes near their
         distance limit. Returns JSON with flags and a level

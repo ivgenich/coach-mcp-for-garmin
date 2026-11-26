@@ -12,6 +12,15 @@ In both modes RecordingClient wraps the client: it logs every call (method, argu
 and applies the faults of the state. A faulted call raises what Garmin's failure of that group raises there
 (full: garminconnect's exceptions; key: an HTTP status through key mode's own mapping), so the server's real
 tool_errors classifier writes the text the model sees.
+
+Writes (full mode only): FakeGarmin has garminconnect's upload_workout, schedule_workout, unschedule_workout and
+delete_workout, and its garth-style `client` answers post/put/delete on the same workout-service paths (the raw
+calls the plan executor makes). They change the World: a created workout answers get_workout_by_id, a scheduled
+one shows in the calendar (query_garmin_graphql's workoutScheduleSummariesScalar) until it is unscheduled. A
+write fault (state.WRITE_FAULT_GROUPS, keyed by evals/garmin_writes.write_op's names, "@N" lets the first N
+through) raises what garminconnect's raw client raises for that failure: 429 and 5xx as
+GarminConnectConnectionError("API Error 429 ..."), timeouts as requests' ConnectTimeout (never sent) and
+ReadTimeout (raised after the write landed, so a retry without a check makes a duplicate).
 """
 
 from __future__ import annotations
@@ -22,7 +31,8 @@ import inspect
 import re
 import threading
 
-from .state import BYTES_KEY, FAULT_KEY
+from ..garmin_writes import WRITE_METHODS, write_op
+from .state import BYTES_KEY, FAULT_KEY, parse_write_fault
 
 ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 METRICS_PATH = "/metrics-service/metrics/maxmet/daily"
@@ -63,6 +73,7 @@ METHODS = {
     "get_body_composition": {"dateWeightList": [], "totalAverage": {}},
     "query_garmin_graphql": None,
     "get_workout_by_id": NOT_FOUND,
+    "get_workouts": [],
     "get_stats": NO_SUMMARY,
     "get_user_summary": NO_SUMMARY,
     "get_sleep_data": {"dailySleepDTO": {"calendarDate": None}},
@@ -103,6 +114,11 @@ _TYPE_FAMILIES = {
 _GRAPHQL_ROOT_RE = re.compile(r"query\s*\{\s*([A-Za-z_]+)")
 _GRAPHQL_DATES_RE = re.compile(r'startDate:\s*"(\d{4}-\d{2}-\d{2})"\s*,\s*endDate:\s*"(\d{4}-\d{2}-\d{2})"')
 SCHEDULE_ROOT = "workoutScheduleSummariesScalar"
+# Ids the fake gives the workouts and calendar entries it creates (far from every fixture's ids).
+FIRST_WORKOUT_ID = 91000001
+FIRST_SCHEDULE_ID = 92000001
+_WORKOUT_PATH_RE = re.compile(r"workout-service/workout/(\d+)")
+_SCHEDULE_PATH_RE = re.compile(r"workout-service/schedule/(\d+)")
 
 
 class FaultSignal(Exception):
@@ -156,11 +172,84 @@ def decode_answer(answer):
     return copy.deepcopy(answer)
 
 
+# The fields of a get_workouts item the fake answers (Garmin's list carries no steps).
+_LIBRARY_KEYS = ("workoutId", "workoutName", "description", "sportType", "estimatedDurationInSecs",
+                 "estimatedDistanceInMeters")
+
+
 class World:
     """The answers of one state, shared by both modes' fakes."""
 
     def __init__(self, state):
         self.responses = (state or {}).get("responses", {})
+        self.workouts = {}   # workout id -> the workout JSON as created (with its workoutId)
+        self.schedules = {}  # calendar entry id -> {"workoutId", "date"}
+        self._ids = [FIRST_WORKOUT_ID, FIRST_SCHEDULE_ID]
+        self._write_lock = threading.Lock()
+
+    # -- writes (full mode)
+
+    def create_workout(self, payload):
+        if not isinstance(payload, dict):
+            raise WriteRejected(400)
+        with self._write_lock:
+            wid = self._ids[0]
+            self._ids[0] += 1
+            workout = copy.deepcopy(payload)
+            workout["workoutId"] = wid
+            self.workouts[wid] = workout
+            return copy.deepcopy(workout)
+
+    def schedule(self, workout_id, date):
+        with self._write_lock:
+            wid = int(workout_id)
+            if wid not in self.workouts and str(wid) not in self.responses.get("get_workout_by_id", {}):
+                raise WriteRejected(404)
+            sid = self._ids[1]
+            self._ids[1] += 1
+            self.schedules[sid] = {"workoutId": wid, "date": str(date)[:10]}
+            return {"workoutScheduleId": sid, "calendarDate": str(date)[:10],
+                    "workout": copy.deepcopy(self.workouts.get(wid) or {"workoutId": wid})}
+
+    def unschedule(self, schedule_id):
+        with self._write_lock:
+            if self.schedules.pop(int(schedule_id), None) is None:
+                raise WriteRejected(404)
+            return {}
+
+    def delete_workout(self, workout_id):
+        with self._write_lock:
+            wid = int(workout_id)
+            if self.workouts.pop(wid, None) is None:
+                raise WriteRejected(404)
+            # Its calendar entries stay: Garmin is not known to remove them with the workout (docs/training-plan.md,
+            # "Garmin facts"), so the server must unschedule first, and an eval sees an entry it left behind.
+            return {}
+
+    def library(self, start=0, limit=100):
+        """get_workouts, newest first like Garmin's listing (spike S0.2): the workouts the fake's writes created
+        (newest first), then the state's own library ("*"), paged."""
+        answer, _ = self.lookup("get_workouts", "*")
+        older = list(decode_answer(answer) or []) if answer is not None else []
+        with self._write_lock:
+            items = [{k: copy.deepcopy(v) for k, v in w.items() if k in _LIBRARY_KEYS}
+                     for _, w in sorted(self.workouts.items(), reverse=True)]
+        items += older
+        return items[int(start):int(start) + int(limit)]
+
+    def schedule_entries(self):
+        """The calendar entries the fake's own writes made, as workoutScheduleSummariesScalar items."""
+        with self._write_lock:
+            out = []
+            for sid, entry in sorted(self.schedules.items()):
+                w = self.workouts.get(entry["workoutId"]) or {}
+                out.append({"scheduleDate": entry["date"], "workoutName": w.get("workoutName"),
+                            "workoutType": ((w.get("sportType") or {}).get("sportTypeKey") or "running"),
+                            "estimatedDurationInSecs": w.get("estimatedDurationInSecs"),
+                            "estimatedDistanceInMeters": w.get("estimatedDistanceInMeters"),
+                            "isRestDay": False, "workoutId": entry["workoutId"], "scheduledWorkoutId": sid,
+                            "associatedActivityId": None})
+            return out
 
     def lookup(self, method, key):
         """(answer, found under "*") for responses[method][key], else [method]["*"], else (None, None)."""
@@ -173,6 +262,10 @@ class World:
 
     def answer(self, method, key, start=None, end=None):
         """The decoded answer, or METHODS' default (a value, NOT_FOUND or NO_SUMMARY)."""
+        if method == "get_workout_by_id" and str(key).isdigit():
+            with self._write_lock:
+                if int(key) in self.workouts:
+                    return copy.deepcopy(self.workouts[int(key)])
         answer, wildcard = self.lookup(method, key)
         if wildcard is None:
             default = METHODS.get(method)
@@ -246,6 +339,8 @@ class World:
             value = {"data": {root: [] if root == SCHEDULE_ROOT else None}}
         dates = _GRAPHQL_DATES_RE.search(text)
         data = value.get("data") if isinstance(value, dict) else None
+        if root == SCHEDULE_ROOT and isinstance(data, dict) and isinstance(data.get(SCHEDULE_ROOT), list):
+            data[SCHEDULE_ROOT] = data[SCHEDULE_ROOT] + self.schedule_entries()
         if dates and isinstance(data, dict) and isinstance(data.get(SCHEDULE_ROOT), list):
             data[SCHEDULE_ROOT] = [e for e in data[SCHEDULE_ROOT] if not isinstance(e, dict)
                                    or dates.group(1) <= str(e.get("scheduleDate") or "")[:10] <= dates.group(2)]
@@ -293,6 +388,51 @@ def full_mode_exception(group):
     }[group]()
 
 
+class WriteRejected(Exception):
+    """Garmin refused a write with this HTTP status (400 bad body, 404 no such id)."""
+
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+_STATUS_TEXT = {400: "Bad Request", 404: "Not Found", 429: "Too Many Requests", 503: "Service Unavailable"}
+
+
+def http_error(status):
+    """What garminconnect's raw client (Client._run_request) raises for an HTTP error status."""
+    from garminconnect import GarminConnectConnectionError
+
+    return GarminConnectConnectionError(f"API Error {status} - {_STATUS_TEXT.get(status, 'Error')}")
+
+
+def write_exception(group):
+    """What a Garmin write of fault `group` raises in full mode (state.WRITE_FAULT_GROUPS). For read_timeout,
+    CallLog raises it after the write landed."""
+    import requests
+
+    return {
+        "rate_limited": lambda: http_error(429),
+        "server_error": lambda: http_error(503),
+        "connect_timeout": lambda: requests.exceptions.ConnectTimeout("Connection to connect.garmin.com timed out"),
+        "read_timeout": lambda: requests.exceptions.ReadTimeout("Read timed out (read timeout=15)"),
+        "login": lambda: full_mode_exception("login"),
+        "internal": lambda: full_mode_exception("internal"),
+    }[group]()
+
+
+class _Response:
+    """requests.Response as client.post/put/delete return it without api=True."""
+
+    def __init__(self, body):
+        self._body = body
+        self.status_code = 204 if body == {} else 200
+        self.content = b"" if body == {} else b"{}"
+
+    def json(self):
+        return copy.deepcopy(self._body)
+
+
 def _full_value(value):
     if value is NOT_FOUND:
         raise full_mode_exception("no_data")
@@ -317,6 +457,42 @@ class _FakeGarth:
         except FaultSignal as signal:
             raise full_mode_exception(signal.group) from None
 
+    # The raw calls garminconnect's write methods (and the plan executor) make: (domain, path, json=, api=).
+
+    def post(self, _domain, path, **kwargs):
+        return self._write("POST", path, kwargs)
+
+    def put(self, _domain, path, **kwargs):
+        return self._write("PUT", path, kwargs)
+
+    def delete(self, _domain, path, **kwargs):
+        return self._write("DELETE", path, kwargs)
+
+    def _write(self, verb, path, kwargs):
+        bare = str(path or "").lstrip("/").split("?", 1)[0]
+        body = kwargs.get("json")
+        op = write_op("client." + verb.lower(), ("connectapi", bare), {"json": body})
+        world = self._world
+        try:
+            if op is None:   # a GraphQL read through the raw client
+                result = world.graphql(body)
+            elif op == "upload_workout":
+                result = world.create_workout(body)
+            elif op == "schedule_workout":
+                date = body.get("date") if isinstance(body, dict) else None
+                if not isinstance(date, str):
+                    raise WriteRejected(400)
+                result = world.schedule(_SCHEDULE_PATH_RE.fullmatch(bare).group(1), date)
+            elif op == "unschedule_workout":
+                result = world.unschedule(_SCHEDULE_PATH_RE.fullmatch(bare).group(1))
+            elif op == "delete_workout":
+                result = world.delete_workout(_WORKOUT_PATH_RE.fullmatch(bare).group(1))
+            else:
+                raise WriteRejected(404)
+        except WriteRejected as exc:
+            raise http_error(exc.status) from None
+        return result if kwargs.get("api") else _Response(result)
+
 
 class FakeGarmin:
     """garminconnect.Garmin's methods of METHODS, answered from a World; any other name is an AttributeError
@@ -334,6 +510,39 @@ class FakeGarmin:
 
     def __repr__(self):
         return "FakeGarmin()"
+
+    # garminconnect's write methods, through the raw client as garminconnect does (same checks, same paths).
+
+    def upload_workout(self, workout_json):
+        if isinstance(workout_json, str):
+            import json as _json
+
+            workout_json = _json.loads(workout_json)
+        if not isinstance(workout_json, (dict, list)):
+            raise ValueError("workout_json must be a JSON object or array")
+        return self.client.post("connectapi", "/workout-service/workout", json=workout_json, api=True)
+
+    def schedule_workout(self, workout_id, date_str):
+        gc = _garminconnect()
+        workout_id = gc._validate_positive_integer(int(workout_id), "workout_id")
+        date_str = gc._validate_date_format(date_str, "date_str")
+        return self.client.post("connectapi", f"/workout-service/schedule/{workout_id}", json={"date": date_str},
+                                api=True)
+
+    def unschedule_workout(self, scheduled_workout_id):
+        gc = _garminconnect()
+        sid = gc._validate_positive_integer(int(scheduled_workout_id), "scheduled_workout_id")
+        return self.client.delete("connectapi", f"/workout-service/schedule/{sid}", api=True)
+
+    def delete_workout(self, workout_id):
+        gc = _garminconnect()
+        workout_id = gc._validate_positive_integer(int(workout_id), "workout_id")
+        return self.client.delete("connectapi", f"/workout-service/workout/{workout_id}", api=True)
+
+    @property
+    def world(self):
+        """The answers and the fake's own writes (tests and the harness's plan-write fake read them)."""
+        return self._world
 
     def __getattr__(self, name):
         if name.startswith("__") or name not in METHODS:
@@ -359,6 +568,8 @@ class FakeGarmin:
         _check(gc, name, params)
         if name == "query_garmin_graphql":
             return self._world.graphql(params["query"])
+        if name == "get_workouts":
+            return self._world.library(params["start"], params["limit"])
         if name == "get_activities":
             return self._world.activities(name, activity_type=params.get("activitytype"),
                                           start=params["start"], limit=params["limit"])
@@ -517,6 +728,10 @@ class CallLog:
     def __init__(self, faults, key_mode):
         self.faults = dict(faults or {})
         self.key_mode = key_mode
+        # Faults on a Garmin write: (group, how many writes pass first), counted per write.
+        self.write_faults = {name: parse_write_fault(self.faults.pop(name))
+                             for name in WRITE_METHODS if name in self.faults}
+        self.write_counts = {}
         self.calls = []
         self.missing = []
         self.tool = None
@@ -549,6 +764,16 @@ class CallLog:
 
     def invoke(self, method, fn, args, kwargs):
         self.record(method, args, kwargs)
+        op = write_op(method, args, kwargs)
+        if op in self.write_faults and not self.key_mode:
+            with self._lock:
+                self.write_counts[op] = self.write_counts.get(op, 0) + 1
+                count = self.write_counts[op]
+            group, after = self.write_faults[op]
+            if count > after:
+                if group == "read_timeout":
+                    fn(*args, **kwargs)   # the write lands; its answer is lost
+                raise write_exception(group)
         group = self.fault_for(method, args, kwargs)
         if group is None:
             return fn(*args, **kwargs)

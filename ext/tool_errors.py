@@ -96,6 +96,29 @@ _KEY_MODE_TEXTS = {
     NO_DATA: ("No data: Garmin has nothing for this request. Check the id or the date (ids come from get_activities "
               "or get_activities_by_date); repeating the same call will not help."),
 }
+# The plan write tools (plan_commit, plan_cancel; PLAN_WRITES=on): a failure that reaches launch's _failure() may
+# come after a write landed, so no text says "retry". Every group but bad input (refused before Garmin).
+WRITE_SUFFIX = "Some Garmin changes may have been made: call plan_get before calling this tool again."
+_WRITE_TEXTS = {
+    LOGIN: "Error: Garmin login missing or expired; the server owner must sign in to Garmin again. " + WRITE_SUFFIX,
+    RATE_LIMITED: ("Error: Garmin rate limit. Stop calling Garmin tools for at least 15 minutes, even if the user asks. "
+                   + WRITE_SUFFIX),
+    NO_DATA: "No data: the plan's write could not run. " + WRITE_SUFFIX,
+    UNAVAILABLE: "Error: Garmin Connect did not answer. Do not retry now. " + WRITE_SUFFIX,
+    INTERNAL: "Error: Internal server error (ref {ref}); tell the user. " + WRITE_SUFFIX,
+}
+
+
+def write_client_text(group, *, ref=None) -> str:
+    """The fixed client text of a failed plan write tool for `group` (any group but BAD_INPUT, whose text stays
+    client_text()'s). INTERNAL needs a valid ref like client_text(). ASCII, at most 300 characters."""
+    if group == BAD_INPUT or group not in _WRITE_TEXTS:
+        return client_text(group, ref=ref)
+    if group == INTERNAL:
+        if not (isinstance(ref, str) and _REF_RE.fullmatch(ref)):
+            raise ValueError("write_client_text(INTERNAL) needs ref: 8 lowercase hex characters from new_ref()")
+        return _WRITE_TEXTS[INTERNAL].format(ref=ref)
+    return _WRITE_TEXTS[group]
 
 # A date Garmin has no sleep for (for example a night that has not synced yet). Upstream's get_sleep_summary then
 # answers an empty JSON object, or one with only nulls, which tells the model nothing; launch answers this instead.

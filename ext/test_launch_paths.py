@@ -162,6 +162,17 @@ class PathRules(RefusedPath, unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     self.assertEqual(refused("get_vo2max_trend", {**good, field: value}),
                                      (field, tool_errors.DATE_DETAIL))
+        # plan_preview's course_id goes into the course read's path: digits only (rules v2 race pacing)
+        preview = {"race_date": "2027-03-05"}
+        for value in ("", "0", "4242", 4242, 0, "1" * 15):
+            with self.subTest(course_id=value):
+                self.assertIsNone(refused("plan_preview", {**preview, "course_id": value}))
+                if value not in ("", "0", 0):
+                    self.assertTrue(garmin_paths.garmin_path_ok(f"course-service/course/{value}"))
+        for value in (TRAVERSAL_ID, "../1", "-1", "01", "1" * 16, 10 ** 15, -1, True, 1.5, None):
+            with self.subTest(course_id=value):
+                self.assertEqual(refused("plan_preview", {**preview, "course_id": value}),
+                                 ("course_id", tool_errors.GENERIC_DETAIL))
         # Absent arguments are the SDK's to report; other tools have no row.
         self.assertIsNone(refused("get_workout_by_id", {}))
         self.assertIsNone(refused("get_stats", {"date": TRAVERSAL_ID}))

@@ -118,11 +118,15 @@ ENV GARMIN_MCP_TRANSPORT=streamable-http \
 # (key_mode.selfcheck()), or the status tools' time zone data is missing (any
 # IANA zone; Europe/London is only a probe), or the optional features' modules
 # no longer import with their pinned packages (tracing always; history search
-# and its worker with HISTORY=1).
+# and its worker with HISTORY=1), or the training-plan engine's sample plan
+# fails a rule (patch()) or upstream's workout ids and validators changed
+# under the plan's workout JSON (plan_tools.selfcheck(), HISTORY=1).
 #
 # The read-only tool list is baked in at a fixed path: launch.py reads
 # ../config/enabled-tools.txt relative to itself, the repo's own layout, so
-# /opt/config/ here. Env variables can only narrow it (ext/launch.py).
+# /opt/config/ here. Env variables can only narrow it; the feature switches
+# add their own tools beside it, the plan write tools only with
+# PLAN_WRITES=on (ext/launch.py).
 COPY ext/ /opt/garmin-ext/
 COPY config/enabled-tools.txt /opt/config/enabled-tools.txt
 RUN printf '%s\n' "import sys; sys.path.insert(0, '/opt/garmin-ext'); import mcp2_compat; sys.path.remove('/opt/garmin-ext'); mcp2_compat.register_finder()" \
@@ -130,7 +134,7 @@ RUN printf '%s\n' "import sys; sys.path.insert(0, '/opt/garmin-ext'); import mcp
     && garmin-mcp-auth --help >/dev/null \
     && python -c "import sys, zoneinfo; sys.path.insert(0, '/opt/garmin-ext'); import launch, owner_auth, key_mode, version, worker_garmin; launch.patch(); launch.gate(launch.allowed_tools({})); owner_auth.selfcheck(); key_mode.selfcheck(); worker_garmin.selfcheck(); zoneinfo.ZoneInfo('Europe/London'); print('coach-mcp-for-garmin', version.VERSION)" \
     && python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import telemetry, feature_config, garmin_guard; from opentelemetry.sdk.trace import TracerProvider; from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter" \
-    && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue"; fi \
+    && if [ "$HISTORY" = 1 ]; then python -c "import sys; sys.path.insert(0, '/opt/garmin-ext'); import psycopg, langchain_postgres, history_store, history_tools, garmin_guard_pg, jobqueue, worker, enqueue, plan_store, plan_tools, plan_writes, plan_review, plan_review_tools, plan_activate; plan_tools.selfcheck()"; fi \
     && python -m compileall -q /opt/garmin-ext
 
 # The last step above compiles ext/ once at build time: PYTHONDONTWRITEBYTECODE

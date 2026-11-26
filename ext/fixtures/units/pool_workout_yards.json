@@ -1,0 +1,30 @@
+{
+ "_note": "Fully synthetic values in the shape of Garmin's workout-service/workout answer for a pool swim in a 25 yd pool (no names or personal ids). Verified by spike S0.3 against real yard-pool workouts: the endConditionValue of a distance step is in meters even in a yard pool, and estimatedDistanceInMeters equals the sum of the distance steps (here 100 + 8 x 100 + 200 = 1100). status_common.step_distance_m reads it as meters, with no conversion.",
+ "answer": {
+  "workoutName": "Synthetic Yard Swim",
+  "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+  "estimatedDistanceInMeters": 1100.0,
+  "poolLength": 25.0,
+  "poolLengthUnit": {"unitId": 3, "unitKey": "yard", "factor": 91.44},
+  "workoutSegments": [
+   {
+    "segmentOrder": 1,
+    "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+    "workoutSteps": [
+     {"type": "ExecutableStepDTO", "stepOrder": 1, "stepType": {"stepTypeKey": "warmup"},
+      "endCondition": {"conditionTypeKey": "distance"}, "endConditionValue": 100.0},
+     {"type": "RepeatGroupDTO", "stepOrder": 2, "stepType": {"stepTypeKey": "repeat"}, "numberOfIterations": 8,
+      "endCondition": {"conditionTypeKey": "iterations"}, "endConditionValue": 8.0,
+      "workoutSteps": [
+       {"type": "ExecutableStepDTO", "stepOrder": 3, "stepType": {"stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeKey": "distance"}, "endConditionValue": 100.0},
+       {"type": "ExecutableStepDTO", "stepOrder": 4, "stepType": {"stepTypeKey": "rest"},
+        "endCondition": {"conditionTypeKey": "time"}, "endConditionValue": 20.0}
+      ]},
+     {"type": "ExecutableStepDTO", "stepOrder": 5, "stepType": {"stepTypeKey": "cooldown"},
+      "endCondition": {"conditionTypeKey": "distance"}, "endConditionValue": 200.0}
+    ]
+   }
+  ]
+ }
+}
