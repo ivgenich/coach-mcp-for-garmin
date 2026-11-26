@@ -41,7 +41,7 @@ import tool_errors
 log = logging.getLogger("garmin_ext.plans")
 
 TOOL_NAMES = ("plan_assess", "plan_preview", "plan_get")
-TRACKING_TOOL_NAMES = ("log_feedback",)   # PLAN_TRACKING=on
+TRACKING_TOOL_NAMES = ("log_feedback", "plan_activate")   # PLAN_TRACKING=on (plan_activate: plan_activate.py)
 REVIEW_TOOL_NAMES = ("plan_review_week",)  # PLAN_TRACKING=on (Stage 4, plan_review_tools)
 HISTORY_WEEKS = 8
 ACTIVITY_LIMIT = 300
@@ -60,7 +60,8 @@ TEXT_NO_PLAN = "No data: no plan is stored yet. Call plan_preview to build one."
 TEXT_NOT_FOUND = "No data: there is no plan with this plan_id."
 # A draft is never tracked: log_feedback and plan_review_week refuse it with this fixed text (plan_get still shows it).
 TEXT_DRAFT = ("No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow "
-              "the active plan only; a plan becomes active on its first plan_commit.")
+              "the active plan only. After the user agrees, start it with plan_activate (or, when plan_commit is "
+              "in your tool list, write it to Garmin with plan_commit, which also starts it).")
 TEXT_NO_ACCOUNT = ("No data: the history index has not recorded this Garmin account yet (or it belongs to another "
                    "account), so stored plans are not shown. plan_preview still works.")
 NOTE = ("Every number, date, pace and warning was computed by the server's fixed plan rules (rules_version). "
@@ -120,7 +121,8 @@ HOLD_PAIN = 4   # pain at or above this, or sharp pain: progression_hold
 NOTE_LINKS = ("tracking.links: each session's status (done, partial, a day _early or _late, replaced, missed) as of "
               "its last check, when get_daily_status last ran; a session without a status was not settled then.")
 NOTE_DRAFT = ("This plan is a draft: tracking, the status reports, log_feedback and plan_review_week follow the "
-              "active plan only (a plan becomes active on its first plan_commit).")
+              "active plan only. plan_activate starts it after the user agrees (plan_commit, when in your tool "
+              "list, also starts it).")
 NOTE_FEEDBACK = "Feedback stored. Numbers only; nothing else from the conversation is kept."
 NOTE_HOLD = ("Feedback stored. Pain of 4 or more, or sharp pain: progression_hold is true, so the next weeks "
              "should not add load. If the pain persists or is sharp, see a physiotherapist or doctor. Training "
@@ -916,6 +918,9 @@ def register(adder: Callable[..., Any], cfg: Any, get_client: Callable[[], Any],
             return await asyncio.to_thread(svc.feedback, workout_key, rpe, pain, pain_location, sharp, plan_id)
 
         adder(log_feedback, name="log_feedback", description=FEEDBACK_DESCRIPTION)
+        import plan_activate
+
+        plan_activate.register(adder, svc._store, svc._today)
         import plan_review_tools
 
         plan_review_tools.register(adder, get_client, svc._store, svc._today, writes=writes,
