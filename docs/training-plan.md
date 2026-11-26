@@ -125,8 +125,11 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    `peak_capped` gives the numbers. After every 3 normal weeks comes a deload at 0.78 x the last normal
    week. A reduced week is never made up afterwards. Taper: 0.70 x the peak week; race week: 0.45 x the
    peak week, pro rata to the days before the race, the race not counted (the peak week as planned too).
+   A half marathon has its own, lower ceiling (`rules.by_distance`): max(1.2 x the biggest full week,
+   km0 + 18 km).
 3. Long run in a normal week: at most min(max(0.50 x the week's km, the longest run of the last 8 weeks),
-   3 h at the slow edge of its pace band, the longest long run placed so far + 2 km, `max_long_km`, 32 km).
+   3 h at the slow edge of its pace band, the longest long run placed so far + 2 km, `max_long_km`, 32 km;
+   24 km for a half marathon).
    Reduced weeks scale it. Within 21 days of the A race no long run is longer than 0.80 x the peak long run
    (the longest long run of a normal week 21 days or more out; before there is one, the longest run so far:
    the longest of the last 8 weeks or a long run placed before it). The cap applies on the day the long run
@@ -135,8 +138,22 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    marathon pace 20% of the week's km) and at least 80% of the week's time easy. Strides stay at 6 x 100 m,
    which `get_daily_status` classifies as easy.
 5. Pace bands are fractions of the lactate-threshold speed: easy and long 0.70-0.80, threshold 0.97-1.03,
-   intervals and strides 1.05-1.10, marathon pace from the goal (clamped to 0.85-0.96 of LT, with a
-   warning). Without an LT speed the steps have no pace target and `lt_speed` is listed as missing.
+   intervals and strides 1.05-1.10. Without an LT speed the steps have no pace target and `lt_speed` is
+   listed as missing.
+   - Garmin's 5K and 10K race predictions anchor the harder bands when there is one (a missing one is
+     converted from the other by Riegel's formula, t2 = t1 x (d2/d1)^1.06), because a Garmin LT close to
+     the 5K pace makes LT multiples faster than the athlete races: intervals run from the 5K pace to its
+     3K equivalent (never faster); a threshold band whose fast end is faster than the 10K pace moves down
+     until its fast end is the 10K pace (at most until its slow end is 0.91 x LT, so `get_daily_status`
+     still calls it hard), and its slow end is then no slower than the half-marathon pace. Without a 5K or
+     10K prediction the LT multiples stay. Strides keep 1.05-1.10.
+   - Marathon pace (the race pace of the MP sessions; a half's for a half) and the feasibility check use
+     one source. With a goal: the goal pace +-1.5%, clamped to 0.85-0.96 of LT (`mp_clamped`), but never
+     raised past the fastest goal feasibility accepts; a goal faster than that keeps its pace and warns
+     `goal_beyond_feasible` with the corrected goal. Without a goal: the pace of feasibility's
+     `corrected_goal_s` (Garmin's prediction, or the 0.93 x LT time when that is slower), never sped up to
+     the sanity band (`mp_below_band` says so instead). Without a goal or a prediction there are no MP
+     targets (`marathon_pace` missing).
 6. Placement: long run first, then Q1 and Q2, so that no two hard-or-long days touch, counting fixed
    calendar sessions, the races and the weeks before and after. When a session does not fit, a fallback
    (Q2 dropped, long run moved, Q1 as strides, long run dropped) warns with its dates; a long run off its

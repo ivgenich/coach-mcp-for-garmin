@@ -55,6 +55,18 @@ and so what a MAJOR, MINOR or PATCH release may change:
 - Plan rules v2, B races: a long run 5 to 13 days before a B race and the first one after it are
   held at 0.70 x the peak long run (0.60 after a full-distance triathlon, whose first long run waits
   10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`).
+- Plan rules v2, paces from the race predictions: Garmin's 5K and 10K predictions (a missing one
+  converted from the other by Riegel's formula) anchor the intervals, from the 5K pace to its 3K
+  equivalent and never faster, and check the threshold band: one whose fast end is faster than the
+  10K pace moves down to it (at most to a slow end of 0.91 x LT), its slow end then no slower than
+  the half-marathon pace. Without a 5K or 10K prediction the LT multiples stay. Marathon pace and
+  the feasibility check share one source: without a goal, MP is the pace of `corrected_goal_s`
+  (Garmin's prediction, or slower), never sped up to 0.85 x LT (warning `mp_below_band`); with a
+  goal, the goal pace is never raised past the fastest goal feasibility accepts, and a goal beyond
+  it warns `goal_beyond_feasible`. A half marathon has its own volume rules: a peak ceiling of
+  max(1.2 x the biggest week, km0 + 18 km) and long runs of at most 24 km. `plan_assess` reads the
+  running VO2max from the training status (`mostRecentVO2Max`) when `get_max_metrics` has no
+  reading for today.
 
 ### Changed
 
