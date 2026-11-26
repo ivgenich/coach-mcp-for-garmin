@@ -1195,6 +1195,15 @@ def _why_parts(why: str) -> List[str]:
 
 def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str, int]) -> None:
     r, paces = ctx.rules, ctx.paces
+    # rule 11: a blocked date drops its share and no other day runs more than it would without the block (a
+    # blocked day can take the long run's spot, and an even split of the whole week then tops the split of
+    # what the long run left); the same week filled with no blocked dates gives each day's ceiling
+    ceiling: Dict[dt.date, float] = {}
+    if any(d in ctx.inputs.blocked_dates for d in w.days()):
+        dry_ctx = dataclasses.replace(ctx, inputs=dataclasses.replace(ctx.inputs, blocked_dates=()), warnings=[])
+        dry = dataclasses.replace(w, sessions=[])
+        fill_week(dry, dry_ctx, set(hard_before), dict(index))
+        ceiling = {s.date: float(s.distance) for s in dry.sessions if s.counts}
     long_day, placed = place_week(w, ctx, hard_before)
     sessions: List[Session] = []
     w.b_cut = 0.0
@@ -1259,6 +1268,7 @@ def fill_week(w: Week, ctx: Context, hard_before: Set[dt.date], index: Dict[str,
             ctx.warnings.append({"id": "volume_capped", "dates": [w.start.isoformat()],
                                  "detail": "easy runs stop at the easy cap, so the week ends below its target"})
         _cap_mini_days(per_day, ctx)
+        per_day = {d: Meters(min(p, ceiling.get(d, p))) for d, p in per_day.items()}
         for day in sorted(ranked):
             if day in ctx.inputs.blocked_dates:
                 continue

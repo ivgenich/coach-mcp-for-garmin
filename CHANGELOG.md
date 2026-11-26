@@ -89,6 +89,9 @@ and so what a MAJOR, MINOR or PATCH release may change:
   B-race long runs in between change nothing); the `long_step` invariant checks that sequence (a
   travel week then a deload had let the long run jump 18.5 to 25.8 km with no check). A week with
   every run day blocked warns `no_runs_blocked` instead of `long_dropped` and `q1_to_strides`.
+- Plan rules v2, blocked dates: no other day of the week runs more than it would without the
+  block. A blocked day that held the long run's spot used to turn the week into an even split of
+  all its km, so each other easy run rose (8.5 to 8.6 km after a triathlon).
 - Plan rules v2, the planned ACWR cap: it acts on every day after today and before the A race with
   a planned run in its 7 days (the series the `acwr_cap` invariant measures; it used to check only
   some of them, so a plan said ok at 1.42), and only the week that owns a day is cut for it. Cuts
