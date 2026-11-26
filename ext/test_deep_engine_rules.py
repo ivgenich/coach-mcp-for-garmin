@@ -87,7 +87,8 @@ class OverridesApplied(OverrideBase):
         self.assertEqual(now[e]["km"], self.sessions[e]["km"])
 
     def test_swap_two_easy_days_and_swap_back(self):
-        w = self.a_normal_week()
+        w = next(w for w in self.base["weeks"] if w["kind"] == "normal" and w["phase"] == "build"
+                 and sum(1 for s in w["sessions"] if s["role"] in ("easy", "strides")) >= 2)
         easy = [s for s in w["sessions"] if s["role"] in ("easy", "strides")]
         a, b = _day(easy[0]["date"]), _day(easy[1]["date"])
         now = self.applied(pe.Override("swap", date=a, date_b=b))

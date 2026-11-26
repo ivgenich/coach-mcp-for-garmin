@@ -13,6 +13,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import datetime as dt
+import math
 import unittest
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -125,8 +126,12 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
     recs = [(_day(b["recovery"][0]), _day(b["recovery"][1])) for b in a["b_races"]]
     lt = snap.lt_speed_mps
     easy_cap = 14.0
-    if lt and lt * 0.70 >= 1.5 and lt * 0.80 <= 7.0:
-        easy_cap = min(easy_cap, int(lt * 0.75 * 74 * 60 / 100) / 10.0)   # 74 minutes at mid easy, 100 m steps
+    e_lo, e_hi = _easy_band(inputs, snap, a["race"]["marathon_pace"], False) if lt else (0.0, 0.0)
+    if lt and e_lo >= 1.5 and e_hi <= 7.0:
+        easy_cap = min(easy_cap, int((e_lo + e_hi) / 2 * 74 * 60 / 100) / 10.0)   # 74 min at mid easy, 100 m steps
+        if (e_lo, e_hi) != _easy_band(inputs, snap, None, False):
+            easy_cap += 0.1   # held at MP + 30 s from the answer's MP, rounded to the second: one 100 m step
+
 
     hard: Dict[dt.date, str] = {}
     runs = collections.Counter()
@@ -189,9 +194,7 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
                     if not 1.5 <= lo <= hi <= 7.0:
                         out.append(f"{s['key']}: band {lo}-{hi} outside the speed limits")
                     if s["role"] in ("easy", "long") and lt:
-                        f = 1 - inputs.easy_band_slowdown
-                        if abs(lo - round(lt * 0.70 * f, 3)) > 0.002 or abs(hi - round(lt * 0.80 * f, 3)) > 0.002:
-                            out.append(f"{s['key']}: easy band {lo}-{hi}")
+                        out += _easy_band_problems(s, lo, hi, inputs, snap, a["race"]["marathon_pace"])
     if races != [race]:
         out.append(f"race sessions on {races}")
     for d, k in runs.items():
@@ -276,13 +279,80 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
             total_t += t
         if total_t > 0 and hard_t / total_t > 0.2 + 1e-6:
             out.append(f"week {w['week']}: {round(100 * (1 - hard_t / total_t), 1)}% easy")
-    # rule 5: mp band clamped to 0.85-0.96 of LT
+    # rule 5: mp band clamped to 0.85-0.96 of LT, but never raised past the fastest race pace feasibility accepts
     if lt and a["race"]["marathon_pace"]:
         m, s_ = a["race"]["marathon_pace"].split(":")
         speed = 1000.0 / (int(m) * 60 + int(s_))
-        if not 0.85 * lt - 0.02 <= speed <= 0.96 * lt + 0.02:
+        accept = _accepted_speed(inputs, snap)
+        floor = 0.85 * lt if accept is None else min(0.85 * lt, accept)
+        if not inputs.goal_time_s and accept is not None:   # the corrected goal's pace, at most 0.96 x LT
+            floor = min(accept, 0.96 * lt)
+        if not floor - 0.02 <= speed <= 0.96 * lt + 0.02:
             out.append(f"marathon pace {a['race']['marathon_pace']} outside 0.85-0.96 of LT")
+        goal_speed = (21097.5 if inputs.race_distance == "half" else 42195.0) / (inputs.goal_time_s or 1e9)
+        if accept is not None and speed > max(accept, goal_speed) + 0.02:
+            out.append(f"marathon pace {a['race']['marathon_pace']} faster than feasibility accepts")
     return out
+
+
+def _easy_band(inputs: pe.PlanInputs, snap: pe.Snapshot, mp_text: Optional[str], long: bool) -> Tuple[float, float]:
+    """The easy (long) band before any slowdown by rule 5's numbers (see _easy_band_problems); with mp_text the
+    fast end held at MP + 30 (20) s/km."""
+    lt = float(snap.lt_speed_mps or 0)
+    pred_m, pred_h = snap.prediction("marathon"), snap.prediction("half")
+    v_m = 42195.0 / pred_m if pred_m else (21097.5 / pred_h * 0.5 ** 0.06 if pred_h else None)
+    if v_m is not None:
+        v = 42195.0 / (math.ceil(max(42195.0 / v_m, 42195.0 / (0.93 * lt)) / 60.0) * 60)
+        lo, hi = v * 0.82, v * (0.92 if long else 0.90)
+    else:
+        lo, hi = lt * 0.70, lt * 0.80
+    if mp_text:
+        m, sec = mp_text.split(":")
+        cap = 1000.0 / (int(m) * 60 + int(sec) + (20 if long else 30))
+        if hi > cap:
+            lo, hi = min(lo, cap * lo / hi), cap
+    return lo, hi
+
+
+def _easy_band_problems(s: Dict[str, Any], lo: float, hi: float, inputs: pe.PlanInputs, snap: pe.Snapshot,
+                        mp_text: Optional[str]) -> List[str]:
+    """Rule 5's easy and long bands from the documented numbers: 0.82-0.90 (long 0.82-0.92) x the marathon's
+    corrected-goal speed (the marathon prediction, or the half's by Riegel 1.06; the slower of it and 0.93 x
+    LT, up to the minute), else 0.70-0.80 x LT; the fast end held at least 30 (long 20) s/km slower than the
+    marathon pace, which then scales the slow end alike; all slowed by easy_band_slowdown."""
+    f = 1 - inputs.easy_band_slowdown
+    long = s["role"] == "long"
+    exp_lo, exp_hi = _easy_band(inputs, snap, None, long)
+    out = []
+    if hi > exp_hi * f + 0.002 or lo > exp_lo * f + 0.002 or not lo < hi:
+        out.append(f"{s['key']}: {s['role']} band {lo}-{hi}")
+    if mp_text:
+        m, sec = mp_text.split(":")
+        mp_pace = int(m) * 60 + int(sec)
+        gap = 20 if long else 30
+        fast = 1000.0 / (hi / f)
+        if fast < mp_pace + gap - 1.5:
+            out.append(f"{s['key']}: {s['role']} fast end {round(fast)} s/km within {gap} s of MP")
+        if hi < exp_hi * f - 0.002 and abs(fast - (mp_pace + gap)) > 1.5:   # held: exactly at MP + gap
+            out.append(f"{s['key']}: {s['role']} band {lo}-{hi} below its rule without the MP limit")
+    elif abs(hi - exp_hi * f) > 0.002 or abs(lo - exp_lo * f) > 0.002:
+        out.append(f"{s['key']}: {s['role']} band {lo}-{hi}")
+    return out
+
+
+def _accepted_speed(inputs: pe.PlanInputs, snap: pe.Snapshot) -> Optional[float]:
+    """The fastest race pace feasibility accepts, from the documented numbers: with a goal the slower of
+    0.95 (half 1.02) x LT and 3% faster than the prediction; without one the corrected goal's pace (the
+    slower of the prediction and 0.93 (half 0.97) x LT, up to the minute)."""
+    half = inputs.race_distance == "half"
+    dist = 21097.5 if half else 42195.0
+    lt = snap.lt_speed_mps
+    pred = snap.prediction(inputs.race_distance)
+    if inputs.goal_time_s:
+        limits = ([(1.02 if half else 0.95) * lt] if lt else []) + ([dist / (pred * 0.97)] if pred else [])
+        return min(limits) if limits else None
+    times = ([float(pred)] if pred else []) + ([dist / ((0.97 if half else 0.93) * lt)] if lt else [])
+    return dist / (math.ceil(max(times) / 60.0) * 60) if times else None
 
 
 def _times(s: Dict[str, Any], by_time: bool) -> Tuple[float, float]:
@@ -419,7 +489,8 @@ class ProfileMatrix(Oracle):
 
     def test_a_runner_under_the_speed_limit_loses_the_easy_band_only(self):
         prof = dataclasses.replace(PROFILES["very_slow"], lt=2.0)   # 0.70 x 2.0 = 1.4 m/s < 1.5
-        plan = self.assertSound(pe.PlanInputs(race_date=race_in(TODAY, 18, 6)), snapshot(TODAY, prof))
+        # no predictions: the LT multiples (a marathon prediction would anchor the easy band instead)
+        plan = self.assertSound(pe.PlanInputs(race_date=race_in(TODAY, 18, 6)), snapshot(TODAY, prof, predictions=()))
         easy = [s for w in plan["weeks"] for s in w["sessions"] if s["role"] == "easy"]
         self.assertTrue(easy)
         self.assertTrue(all("speed_mps" not in s["steps"][0] for s in easy))

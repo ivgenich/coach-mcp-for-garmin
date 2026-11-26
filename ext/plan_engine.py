@@ -64,6 +64,8 @@ MetersPerSecond = NewType("MetersPerSecond", float)
 RULES_VERSION = 2
 
 DISTANCES: Dict[str, Meters] = {"marathon": Meters(42195.0), "half": Meters(21097.5)}
+# Garmin's race predictions by name (the pace anchors read 5k and 10k, the race paces half and marathon).
+PREDICTION_DISTANCES: Dict[str, Meters] = {"5k": Meters(5000.0), "10k": Meters(10000.0), **DISTANCES}
 B_RACE_KINDS = ("tri_full", "tri_half", "run")
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 ROLES = ("easy", "strides", "long", "threshold", "intervals", "mp", "race", "b_race")
@@ -114,6 +116,15 @@ RULES: Dict[str, Any] = {
                     "threshold": [0.97, 1.03], "intervals": [1.05, 1.10]},
     "mp_band": 0.015,
     "mp_of_lt_sanity": [0.85, 0.96],
+    # Garmin's 5K and 10K predictions anchor the intervals and check the threshold band (a missing one is
+    # converted from the other by Riegel's t2 = t1 x (d2/d1)^1.06): intervals from the 5K pace to the 3K
+    # equivalent; a threshold band whose fast end is faster than the 10K pace moves down to it (at most
+    # until its slow end is 0.91 x LT), its slow end then no slower than the half-marathon pace.
+    # Easy and long from the marathon prediction (or the half's, by Riegel) at its corrected goal's speed; with
+    # a marathon pace, their fast ends at least this many s/km slower than it (also on LT multiples).
+    "pace_anchors": {"riegel_exponent": 1.06, "intervals_m": [5000.0, 3000.0], "threshold_min_of_lt": 0.91,
+                     "easy_of_marathon": [0.82, 0.90], "long_of_marathon": [0.82, 0.92],
+                     "easy_min_s_slower_than_mp": 30, "long_min_s_slower_than_mp": 20},
     "speed_limits_mps": [1.5, 7.0],
     "strides": {"reps": 6, "m": 100, "jog_s": 60},
     "warmup_m": 2000,
@@ -146,6 +157,9 @@ RULES: Dict[str, Any] = {
              "b_race_minutes": {"tri_full": 750, "tri_half": 330, "run": 120}},
     # v2: race pacing from a course's climbs (item 13)
     "race_pacing": {"uphill_slowdown_per_grade_pct": 0.03, "course_distance_tolerance": 0.05},
+    # each race distance's own volume rules over the ones above (the marathon uses those): a half marathon
+    # grows to a lower peak ceiling and its long run stops at 24 km
+    "by_distance": {"half": {"peak_ceiling": {"of_max_week": 1.2, "over_km0_km": 18}, "max_long_km": 24.0}},
 }
 # A jog speed for distance estimates of timed recoveries when the LT speed is unknown.
 FALLBACK_JOG_MPS = MetersPerSecond(2.5)
@@ -368,21 +382,40 @@ class Session:
 
 
 class Paces:
-    """The pace bands of one plan: fractions of the LT speed, marathon pace from the goal."""
+    """The pace bands of one plan: fractions of the LT speed, marathon pace from the goal or the prediction,
+    and the intervals and threshold bands from Garmin's 5K/10K predictions when there are some (anchored)."""
 
     def __init__(self, lt: Optional[MetersPerSecond], mp: Optional[MetersPerSecond], rules: Mapping[str, Any],
-                 easy_slowdown: float = 0.0):
+                 easy_slowdown: float = 0.0,
+                 anchored: Optional[Mapping[str, Tuple[float, float]]] = None):
         self.lt = lt
         self.mp = mp
         self.rules = rules
         self.easy_slowdown = easy_slowdown   # the easy and long bands this share slower (Stage 4, rule A4)
+        self.anchored: Dict[str, Tuple[float, float]] = dict(anchored or {})   # anchored_bands()
         lo, hi = rules["speed_limits_mps"]
         self.limits = (float(lo), float(hi))
 
     def band(self, name: Optional[str]) -> Optional[Tuple[MetersPerSecond, MetersPerSecond]]:
+        """The band in m/s (3 decimals), or None: no LT speed or MP, or outside speed_limits_mps (see
+        out_of_limits())."""
+        raw = self.raw_band(name)
+        if raw is None or raw[0] < self.limits[0] or raw[1] > self.limits[1]:
+            return None
+        return MetersPerSecond(round(raw[0], 3)), MetersPerSecond(round(raw[1], 3))
+
+    def out_of_limits(self, name: Optional[str]) -> bool:
+        """The band is known but outside speed_limits_mps, so its steps carry no pace target."""
+        raw = self.raw_band(name)
+        return raw is not None and (raw[0] < self.limits[0] or raw[1] > self.limits[1])
+
+    def raw_band(self, name: Optional[str]) -> Optional[Tuple[float, float]]:
+        """The band before the speed limits; None without an LT speed (or MP for "mp")."""
         if name is None or self.lt is None:
             return None
-        if name == "mp":
+        if name in self.anchored:
+            low, high = self.anchored[name]
+        elif name == "mp":
             if self.mp is None:
                 return None
             w = float(self.rules["mp_band"])
@@ -390,11 +423,15 @@ class Paces:
         else:
             f_lo, f_hi = self.rules["bands_of_lt"][name]
             low, high = self.lt * f_lo, self.lt * f_hi
-            if name in ("easy", "long") and self.easy_slowdown:
+        if name in ("easy", "long"):
+            if self.mp is not None:   # the fast end at least easy/long_min_s_slower_than_mp s/km slower than MP
+                gap = float(self.rules["pace_anchors"][f"{name}_min_s_slower_than_mp"])
+                cap = 1000.0 / (1000.0 / self.mp + gap)
+                if high > cap:
+                    low, high = min(low, cap * low / high), cap
+            if self.easy_slowdown:
                 low, high = low * (1 - self.easy_slowdown), high * (1 - self.easy_slowdown)
-        if low < self.limits[0] or high > self.limits[1]:
-            return None
-        return MetersPerSecond(round(low, 3)), MetersPerSecond(round(high, 3))
+        return float(low), float(high)
 
     def mid(self, name: Optional[str]) -> Optional[MetersPerSecond]:
         b = self.band(name)
@@ -729,8 +766,9 @@ class Context:
 
 
 def long_time_cap(paces: Paces, rules: Mapping[str, Any]) -> Optional[Meters]:
-    """3 h at the slow edge of the long-run band; from the LT speed even when the band itself is outside the
-    speed limits (a slow runner keeps the cap). None without an LT speed."""
+    """3 h at 0.70 x LT (the LT long band's slow edge, also when the predictions anchor the band); from the LT
+    speed even when the band itself is outside the speed limits (a slow runner keeps the cap). None without an
+    LT speed."""
     if paces.lt is None:
         return None
     return Meters(float(rules["long_max_s"]) * paces.lt * float(rules["bands_of_lt"]["long"][0]))
@@ -741,7 +779,7 @@ def long_cap(ctx: Context, target: Meters, last_long: Meters, step: Optional[flo
     r = ctx.rules
     step_m = float(r["long_step_m"]) if step is None else step
     caps = [max(ctx.inputs.long_share * target, ctx.longest), last_long + step_m,
-            ctx.inputs.max_long_km * 1000.0]
+            max_long_m(ctx)]
     t = long_time_cap(ctx.paces, r)
     if t is not None:
         caps.append(t)
@@ -845,10 +883,11 @@ def easy_cap(paces: Paces, rules: Mapping[str, Any]) -> Meters:
     return Meters(cap)
 
 
-def peak_ceiling(snap: Snapshot, km0: Meters, rules: Mapping[str, Any]) -> Tuple[Meters, Meters]:
+def peak_ceiling(snap: Snapshot, km0: Meters, rules: Mapping[str, Any],
+                 distance: str = "marathon") -> Tuple[Meters, Meters]:
     """(ceiling, biggest week): no weekly target above max(1.3 x the biggest full week of the last 8 weeks,
-    km0 + 25 km)."""
-    pc = rules["peak_ceiling"]
+    km0 + 25 km); a half marathon's own numbers (rules "by_distance") are lower."""
+    pc = by_distance(rules, distance, "peak_ceiling")
     biggest = Meters(max(list(snap.week_m)[-int(rules["history_weeks"]):], default=0.0))
     return Meters(max(float(pc["of_max_week"]) * biggest, km0 + float(pc["over_km0_km"]) * 1000.0)), biggest
 
@@ -894,7 +933,7 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
     what was placed (week_base), so a week the easy-run cap holds below its target does not lift the weeks
     after it. capacity(week) gives (km, sessions) the week would get without its calendar items."""
     r = ctx.rules
-    ceiling, biggest = peak_ceiling(ctx.snapshot, ctx.km0, r)
+    ceiling, biggest = peak_ceiling(ctx.snapshot, ctx.km0, r, ctx.inputs.race_distance)
     capped_warned = False
     last_normal = ctx.km0
     last_long = ctx.longest
@@ -918,7 +957,7 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
                 w.target = ceiling
                 if not capped_warned:
                     capped_warned = True
-                    pc = r["peak_ceiling"]
+                    pc = by_distance(r, ctx.inputs.race_distance, "peak_ceiling")
                     ctx.warnings.append({
                         "id": "peak_capped", "dates": [w.start.isoformat()],
                         "detail": f"weekly km held at {km(ceiling)} km, the larger of {pc['of_max_week']} x the "
@@ -1324,20 +1363,166 @@ def week0(ctx: Context) -> Optional[Week]:
     return w
 
 
+def report_out_of_limits(paces: Paces, warnings: List[Dict[str, Any]], missing: List[str]) -> None:
+    """A band outside speed_limits_mps leaves its steps without a pace target: listed as missing
+    (pace_targets.<band>) with a warning, never dropped silently (bands_match_roles checks it)."""
+    names = [n for n in (*paces.rules["bands_of_lt"], "mp") if paces.out_of_limits(n)]
+    new = [n for n in names if f"pace_targets.{n}" not in missing]
+    if not new:
+        return
+    missing += [f"pace_targets.{n}" for n in new]
+    lo, hi = paces.limits
+    warnings.append({"id": "band_out_of_limits", "dates": [],
+                     "detail": f"the {', '.join(new)} band{'s' if len(new) > 1 else ''} outside {lo}-{hi} m/s: "
+                               f"those steps carry no pace target"})
+
+
+def by_distance(rules: Mapping[str, Any], distance: str, key: str) -> Any:
+    """rules[key], or the race distance's own value of it (rules "by_distance")."""
+    own = (rules.get("by_distance") or {}).get(distance) or {}
+    return own[key] if key in own else rules[key]
+
+
+def max_long_m(ctx: "Context") -> Meters:
+    """The longest long run the inputs and the race distance allow (max_long_km, at most the distance's own)."""
+    return Meters(min(float(ctx.inputs.max_long_km),
+                      float(by_distance(ctx.rules, ctx.inputs.race_distance, "max_long_km"))) * 1000.0)
+
+
+def prediction_speed(snap: Snapshot, name: str, rules: Mapping[str, Any]) -> Optional[float]:
+    """Garmin's predicted race speed (m/s) for `name` (5k, 10k, half, marathon); a missing 5K or 10K converted
+    from the other one by Riegel's formula, a missing half from the 10K (or the 5K). None without them."""
+    exp = float(rules["pace_anchors"]["riegel_exponent"])
+
+    def own(n: str) -> Optional[float]:
+        t = snap.prediction(n)
+        return float(PREDICTION_DISTANCES[n]) / t if t else None
+
+    v = own(name)
+    if v is not None:
+        return v
+    sources = {"5k": ("10k",), "10k": ("5k",), "half": ("10k", "5k"), "marathon": ("half",)}.get(name, ())
+    for src in sources:
+        sv = own(src)
+        if sv is not None:
+            return riegel_speed(sv, float(PREDICTION_DISTANCES[src]), float(PREDICTION_DISTANCES[name]), exp)
+    return None
+
+
+def riegel_speed(speed: float, from_m: float, to_m: float, exponent: float) -> float:
+    """The speed over to_m equivalent to `speed` over from_m: t2 = t1 x (d2/d1)^exponent."""
+    return float(speed * (from_m / to_m) ** (exponent - 1.0))
+
+
+def anchored_bands(lt: Optional[MetersPerSecond], snap: Snapshot,
+                   rules: Mapping[str, Any]) -> Dict[str, Tuple[float, float]]:
+    """The bands Garmin's predictions anchor (rules "pace_anchors"), only those they change; empty without an
+    LT speed (LT multiples then). Easy and long: fractions of the marathon's corrected-goal speed (from the
+    marathon prediction, or the half's by Riegel). With a 5K or 10K prediction, intervals: the 5K pace to its 3K equivalent. Threshold: the LT band, moved down when its fast end is
+    faster than the 10K pace (at most until its slow end is threshold_min_of_lt x LT), its slow end then
+    no slower than the half-marathon pace."""
+    pa = rules["pace_anchors"]
+    exp = float(pa["riegel_exponent"])
+    out: Dict[str, Tuple[float, float]] = {}
+    if lt is None:
+        return out
+    v_m = prediction_speed(snap, "marathon", rules)
+    if v_m is not None:
+        # the marathon's corrected goal, as feasibility's: the prediction, or the 0.93 x LT time when slower
+        m = float(DISTANCES["marathon"])
+        corrected_of_lt = float(rules["feasibility"]["marathon"]["corrected_of_lt"])
+        v = m / (math.ceil(max(m / v_m, m / (corrected_of_lt * lt)) / 60.0) * 60.0)
+        for name in ("easy", "long"):
+            f_lo, f_hi = (float(x) for x in pa[f"{name}_of_marathon"])
+            out[name] = (v * f_lo, v * f_hi)
+    v5k = prediction_speed(snap, "5k", rules)
+    if v5k is None:
+        return out
+    slow_m, fast_m = (float(x) for x in pa["intervals_m"])
+    t_lo, t_hi = (float(x) for x in rules["bands_of_lt"]["threshold"])
+    low, high = lt * t_lo, lt * t_hi
+    v10k = prediction_speed(snap, "10k", rules) or v5k
+    if high > v10k:
+        shift = max(v10k / high, float(pa["threshold_min_of_lt"]) / t_lo)
+        low, high = low * shift, high * shift
+        v_half = prediction_speed(snap, "half", rules)
+        if v_half is not None and low < v_half < high:
+            low = v_half
+        out["threshold"] = (low, high)
+    i_lo = riegel_speed(v5k, 5000.0, slow_m, exp)
+    i_hi = riegel_speed(v5k, 5000.0, fast_m, exp)
+    out["intervals"] = (max(i_lo, high), max(i_hi, high * (i_hi / i_lo)))
+    return out
+
+
+def corrected_goal_s(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any]) -> Optional[int]:
+    """Feasibility's corrected goal: the slower of Garmin's prediction and the distance at corrected_of_lt x
+    the LT speed, up to the whole minute. None without either."""
+    f = rules["feasibility"][inputs.race_distance]
+    dist = DISTANCES[inputs.race_distance]
+    pred = snap.prediction(inputs.race_distance)
+    options = [float(pred)] if pred else []
+    if snap.lt_speed_mps is not None:
+        options.append(dist / (float(f["corrected_of_lt"]) * snap.lt_speed_mps))
+    return int(math.ceil(max(options) / 60.0) * 60) if options else None
+
+
+def accepted_speed(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any]) -> Optional[float]:
+    """The fastest race pace (m/s) feasibility accepts. With a goal: the fastest goal that fails neither
+    goal_vs_threshold nor goal_vs_prediction; without one: the corrected goal's pace. None when unknown."""
+    dist = float(DISTANCES[inputs.race_distance])
+    if not inputs.goal_time_s:
+        corrected = corrected_goal_s(inputs, snap, rules)
+        return dist / corrected if corrected else None
+    f = rules["feasibility"]
+    limits = []
+    if snap.lt_speed_mps is not None:
+        limits.append(float(f[inputs.race_distance]["max_goal_of_lt"]) * snap.lt_speed_mps)
+    pred = snap.prediction(inputs.race_distance)
+    if pred:
+        limits.append(dist / (pred * (1 - float(f["ambitious_pct"]) / 100.0)))
+    return min(limits) if limits else None
+
+
 def marathon_pace(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
                   warnings: List[Dict[str, Any]]) -> Optional[MetersPerSecond]:
+    """The race pace of the MP sessions (the half's race pace for a half). With a goal: the goal pace, clamped
+    to mp_of_lt_sanity x LT, but never raised past what feasibility accepts (a warning when the goal itself is
+    beyond it). Without one: the pace of feasibility's corrected goal (Garmin's prediction, or slower), never
+    raised to the sanity band (a warning instead). None without an LT speed, or without a goal or a
+    prediction."""
     dist = DISTANCES[inputs.race_distance]
-    goal = inputs.goal_time_s or snap.prediction(inputs.race_distance)
-    if not goal or snap.lt_speed_mps is None:
+    lt = snap.lt_speed_mps
+    goal = inputs.goal_time_s
+    if lt is None or not (goal or snap.prediction(inputs.race_distance)):
         return None
-    mp = dist / goal
+    accept = accepted_speed(inputs, snap, rules)
+    corrected = corrected_goal_s(inputs, snap, rules)
+    mp = dist / (goal or corrected or 1)
+    what = "goal pace" if goal else f"the corrected goal {hms(corrected or 0)}"
     lo, hi = rules["mp_of_lt_sanity"]
-    ratio = mp / snap.lt_speed_mps
-    if not lo <= ratio <= hi:
-        mp = snap.lt_speed_mps * (lo if ratio < lo else hi)
+    ratio = mp / lt
+    if ratio > hi:
+        mp = lt * hi
+    elif ratio < lo:
+        target = lt * lo if accept is None else min(lt * lo, accept)
+        if target > mp:
+            mp = target
+    if mp != dist / (goal or corrected or 1):
         warnings.append({"id": "mp_clamped", "dates": [],
-                         "detail": f"goal pace at {round(ratio * 100)}% of threshold speed; MP sessions use "
-                                   f"{round((lo if ratio < lo else hi) * 100)}%"})
+                         "detail": f"{what} at {round(ratio * 100)}% of threshold speed; MP sessions use "
+                                   f"{round(mp / lt * 100)}%"})
+    if mp / lt < lo - 1e-9:
+        warnings.append({"id": "mp_below_band", "dates": [],
+                         "detail": f"MP sessions at {pace_text(mp)}/km, {round(mp / lt * 100)}% of threshold "
+                                   f"speed: below {round(lo * 100)}%, but no faster than feasibility accepts "
+                                   f"({what})"})
+    if goal and accept is not None and dist / goal > accept + 1e-9:
+        warnings.append({"id": "goal_beyond_feasible", "dates": [],
+                         "detail": f"goal pace {pace_text(dist / goal)}/km is faster than the "
+                                   f"{pace_text(accept)}/km feasibility accepts"
+                                   + (f" (corrected goal {hms(corrected)})" if corrected else "")
+                                   + "; MP sessions keep the goal pace"})
     return MetersPerSecond(mp)
 
 
@@ -1362,7 +1547,9 @@ def context(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any]) -> Con
     fixed: Dict[dt.date, List[FixedSession]] = {}
     for f in snap.fixed:
         fixed.setdefault(f.date, []).append(f)
-    return Context(inputs, snap, rules, Paces(snap.lt_speed_mps, mp, rules), km0, longest, [], fixed,
+    paces = Paces(snap.lt_speed_mps, mp, rules, anchored=anchored_bands(snap.lt_speed_mps, snap, rules))
+    report_out_of_limits(paces, warnings, missing)
+    return Context(inputs, snap, rules, paces, km0, longest, [], fixed,
                    warnings, missing)
 
 
@@ -2305,7 +2492,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
         return sum(s.distance for s in w.sessions if s.counts)
 
     growth = 1 + float(rules["growth_max"])
-    ceiling, _biggest = peak_ceiling(ctx.snapshot, ctx.km0, rules)
+    ceiling, _biggest = peak_ceiling(ctx.snapshot, ctx.km0, rules, ctx.inputs.race_distance)
     step = float(rules["long_step_m"])
     days_late = int(rules["late_long_days"])
     t_cap = long_time_cap(paces, rules)
@@ -2335,7 +2522,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
                 probs["no_makeup" if prev_reduced else "growth_cap"].append(
                     f"week {w.number}: {km(p)} km > {km(last_normal * growth)} km")
             limit = min([max(ctx.inputs.long_share * w.target, ctx.longest), step_ref + w_step,
-                         ctx.inputs.max_long_km * 1000] + ([float(t_cap)] if t_cap is not None else [])) + EPS_M
+                         max_long_m(ctx)] + ([float(t_cap)] if t_cap is not None else [])) + EPS_M
             if lmax > limit:
                 probs["long_cap"].append(f"week {w.number}: long {km(lmax)} km > {km(limit)} km"
                                          + (" (the first normal week after a gap: no step)" if gap else ""))
@@ -2428,9 +2615,18 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
     for w in weeks:
         for s in w.sessions:
             for st in _leaves(s.steps):
-                band = paces.band(st.band) if st.band else None
-                if band is not None and not (lo_lim <= band[0] <= band[1] <= hi_lim):
-                    bands.append(f"{s.key}: {band}")
+                band = paces.raw_band(st.band) if st.band else None
+                if band is not None and not (lo_lim <= band[0] <= band[1] <= hi_lim) \
+                        and f"pace_targets.{st.band}" not in ctx.missing:
+                    # outside the speed limits the step has no pace target: only with it listed as missing
+                    bands.append(f"{s.key}: {st.band} band {round(band[0], 3)}-{round(band[1], 3)} m/s outside "
+                                 f"the speed limits, not reported")
+                if st.band in ("easy", "long") and band is not None and paces.mp:
+                    # rule 5: easy and long fast ends well slower than marathon pace
+                    gap_s = float(rules["pace_anchors"][f"{st.band}_min_s_slower_than_mp"])
+                    if 1000.0 / band[1] < 1000.0 / paces.mp + gap_s - 0.5:
+                        bands.append(f"{s.key}: {st.band} fast end {pace_text(band[1])}/km within {int(gap_s)} s/km "
+                                     f"of marathon pace {pace_text(paces.mp)}/km")
                 if st.band and s.role in ("easy", "long") and st.band not in ("easy", "long"):
                     bands.append(f"{s.key}: {st.band} step in an {s.role} run")
                 if s.role in QUALITY_ROLES and st.kind == "interval" and st.band != s.role:
@@ -2540,12 +2736,7 @@ def feasibility(inputs: PlanInputs, snap: Snapshot, weeks_to_race: Optional[int]
             check("goal_unrealistic", "fail", pct > float(fr["unrealistic_pct"]), pct, float(fr["unrealistic_pct"]))
         else:
             missing.append("goal_vs_prediction")
-    corrected: Optional[int] = None
-    options = [float(pred)] if pred else []
-    if lt is not None:
-        options.append(dist / (float(f["corrected_of_lt"]) * lt))
-    if options:
-        corrected = int(math.ceil(max(options) / 60.0) * 60)
+    corrected = corrected_goal_s(inputs, snap, rules)   # marathon_pace() uses it too
     failed = [c for c in checks if not c["ok"]]
     verdict = ("unrealistic" if any(c["level"] == "fail" for c in failed)
                else "ambitious" if failed else "feasible")
@@ -2635,7 +2826,8 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
     if inputs.easy_band_slowdown:
         # Stage 4 (plan_review A4): the easy and long runs keep their planned distances, only their pace band
         # (and so their minutes) is slower in the answer and the workouts; every rule above ran on the plan's bands.
-        paces = Paces(ctx.paces.lt, ctx.paces.mp, rules, inputs.easy_band_slowdown)
+        paces = Paces(ctx.paces.lt, ctx.paces.mp, rules, inputs.easy_band_slowdown, ctx.paces.anchored)
+        report_out_of_limits(paces, ctx.warnings, ctx.missing)
     week_list = [week_json(w, paces) for w in weeks]
     echo = inputs.echo()
     summ = summary(weeks)

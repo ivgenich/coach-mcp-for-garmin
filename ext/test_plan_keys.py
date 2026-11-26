@@ -197,12 +197,17 @@ class Rebuilds(unittest.TestCase):
         second = self.preview()   # the default 7 days
         ops = second["commit"].get("ops") or []
         created = {o["key"] for o in ops if o["op"] == "create"}
+        planned = self.runs(second)
         for o in ops:
-            if o["op"] == "delete":   # only a replaced workout goes, never one whose session is still planned as is
+            # only a replaced workout goes, or one whose day the rebuilt plan no longer has (the ratio cap reads
+            # one more recorded day and may cut a planned run), never one whose session is still planned as is
+            if o["op"] == "delete" and o["date"] in planned:
                 self.assertIn(o["key"].split("~")[0], created, o)
         if ops:
             self.commit(second)
-        self.assertEqual(self.calendar_days(), cal, "every committed day is still on Garmin")
+        kept = [d for d in cal if d in planned or d <= self.today.isoformat()]
+        self.assertEqual([d for d in self.calendar_days() if d in kept], kept,
+                         "every committed day still planned is still on Garmin")
 
 
 class WeekGrid(Rebuilds):

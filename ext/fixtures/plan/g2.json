@@ -34,7 +34,7 @@
    }
   },
   "b_races": [],
-  "content_hash": "bfa20ee818c3312ece20e6501244e7146d514c182369ecbb026cc7897199fc56",
+  "content_hash": "bbfc30cc5fcedbea7117a24915ed4ef7c45db649163974a1a874a51556accd95",
   "feasibility": {
    "checks": [
     {
@@ -56,7 +56,7 @@
      "level": "warn",
      "limit": 30.0,
      "ok": true,
-     "value": 36.1
+     "value": 33.5
     },
     {
      "id": "long_run_km",
@@ -143,11 +143,18 @@
    "lt_pace": "5:12"
   },
   "summary": {
-   "peak_km": 36.1,
+   "peak_km": 33.5,
    "peak_long_km": 16.7,
    "weeks": 16.0
   },
   "warnings": [
+   {
+    "dates": [
+     "2027-03-01"
+    ],
+    "detail": "weekly km held at 33.5 km, the larger of 1.2 x the biggest week of the last 8 (17.0 km) and the start 15.5 km + 18 km; deloads still apply",
+    "id": "peak_capped"
+   },
    {
     "dates": [
      "2027-03-01"
@@ -174,21 +181,21 @@
       "hard_or_long": false,
       "key": "20261126-run",
       "km": 5.1,
-      "minutes": 35,
-      "pace": "6:31-7:26",
+      "minutes": 37,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 5100,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "5.1 km easy at 6:31-7:26/km",
+      "structure": "5.1 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -196,21 +203,21 @@
       "hard_or_long": false,
       "key": "20261129-run",
       "km": 5.1,
-      "minutes": 35,
-      "pace": "6:31-7:26",
+      "minutes": 37,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 5100,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "5.1 km easy at 6:31-7:26/km",
+      "structure": "5.1 km easy at 6:52-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -223,23 +230,23 @@
     "kind": "normal",
     "long_km": 8.3,
     "phase": "base",
-    "planned_km": 16.7,
+    "planned_km": 16.6,
     "sessions": [
      {
       "date": "2026-12-01",
       "hard_or_long": false,
       "key": "20261201-run",
-      "km": 4.2,
+      "km": 4.1,
       "minutes": 28,
-      "pace": "6:31-7:26",
+      "pace": "6:52-7:33",
       "role": "strides",
       "steps": [
        {
         "distance_m": 2700,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        },
@@ -263,7 +270,7 @@
         "type": "repeat"
        }
       ],
-      "structure": "2.7 km easy at 6:31-7:26/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
+      "structure": "2.7 km easy at 6:52-7:33/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
       "weekday": "tue"
      },
      {
@@ -271,21 +278,21 @@
       "hard_or_long": false,
       "key": "20261203-run",
       "km": 4.2,
-      "minutes": 29,
-      "pace": "6:31-7:26",
+      "minutes": 30,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 4200,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "4.2 km easy at 6:31-7:26/km",
+      "structure": "4.2 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -293,21 +300,21 @@
       "hard_or_long": true,
       "key": "20261206-run",
       "km": 8.3,
-      "minutes": 58,
-      "pace": "6:31-7:26",
+      "minutes": 59,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 8300,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "8.3 km long at 6:31-7:26/km",
+      "structure": "8.3 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -320,23 +327,23 @@
     "kind": "normal",
     "long_km": 9.0,
     "phase": "base",
-    "planned_km": 18.0,
+    "planned_km": 17.9,
     "sessions": [
      {
       "date": "2026-12-08",
       "hard_or_long": false,
       "key": "20261208-run",
-      "km": 4.5,
+      "km": 4.4,
       "minutes": 30,
-      "pace": "6:31-7:26",
+      "pace": "6:52-7:33",
       "role": "strides",
       "steps": [
        {
         "distance_m": 3000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        },
@@ -360,7 +367,7 @@
         "type": "repeat"
        }
       ],
-      "structure": "3.0 km easy at 6:31-7:26/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
+      "structure": "3.0 km easy at 6:52-7:33/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
       "weekday": "tue"
      },
      {
@@ -368,21 +375,21 @@
       "hard_or_long": false,
       "key": "20261210-run",
       "km": 4.5,
-      "minutes": 31,
-      "pace": "6:31-7:26",
+      "minutes": 32,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 4500,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "4.5 km easy at 6:31-7:26/km",
+      "structure": "4.5 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -390,21 +397,21 @@
       "hard_or_long": true,
       "key": "20261213-run",
       "km": 9.0,
-      "minutes": 62,
-      "pace": "6:31-7:26",
+      "minutes": 64,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 9000,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "9.0 km long at 6:31-7:26/km",
+      "structure": "9.0 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -417,23 +424,23 @@
     "kind": "normal",
     "long_km": 9.7,
     "phase": "base",
-    "planned_km": 19.5,
+    "planned_km": 19.4,
     "sessions": [
      {
       "date": "2026-12-15",
       "hard_or_long": false,
       "key": "20261215-run",
-      "km": 4.9,
+      "km": 4.8,
       "minutes": 33,
-      "pace": "6:31-7:26",
+      "pace": "6:52-7:33",
       "role": "strides",
       "steps": [
        {
         "distance_m": 3400,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        },
@@ -457,7 +464,7 @@
         "type": "repeat"
        }
       ],
-      "structure": "3.4 km easy at 6:31-7:26/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
+      "structure": "3.4 km easy at 6:52-7:33/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
       "weekday": "tue"
      },
      {
@@ -465,21 +472,21 @@
       "hard_or_long": false,
       "key": "20261217-run",
       "km": 4.9,
-      "minutes": 34,
-      "pace": "6:31-7:26",
+      "minutes": 35,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 4900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "4.9 km easy at 6:31-7:26/km",
+      "structure": "4.9 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -487,21 +494,21 @@
       "hard_or_long": true,
       "key": "20261220-run",
       "km": 9.7,
-      "minutes": 67,
-      "pace": "6:31-7:26",
+      "minutes": 69,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 9700,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "9.7 km long at 6:31-7:26/km",
+      "structure": "9.7 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -521,16 +528,16 @@
       "hard_or_long": true,
       "key": "20261222-run",
       "km": 5.0,
-      "minutes": 33,
+      "minutes": 34,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -545,15 +552,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 1.0 km threshold at 5:03-5:22/km, 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 1.0 km threshold at 5:03-5:22/km, 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -561,21 +568,21 @@
       "hard_or_long": true,
       "key": "20261227-run",
       "km": 7.5,
-      "minutes": 52,
-      "pace": "6:31-7:26",
+      "minutes": 53,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 7500,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "7.5 km long at 6:31-7:26/km",
+      "structure": "7.5 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -595,16 +602,16 @@
       "hard_or_long": true,
       "key": "20261229-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -629,15 +636,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -645,21 +652,21 @@
       "hard_or_long": false,
       "key": "20261231-run",
       "km": 4.1,
-      "minutes": 28,
-      "pace": "6:31-7:26",
+      "minutes": 29,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 4100,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "4.1 km easy at 6:31-7:26/km",
+      "structure": "4.1 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -667,21 +674,21 @@
       "hard_or_long": true,
       "key": "20270103-run",
       "km": 10.5,
-      "minutes": 73,
-      "pace": "6:31-7:26",
+      "minutes": 75,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 10500,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "10.5 km long at 6:31-7:26/km",
+      "structure": "10.5 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -701,16 +708,16 @@
       "hard_or_long": true,
       "key": "20270105-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -735,15 +742,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -751,21 +758,21 @@
       "hard_or_long": false,
       "key": "20270107-run",
       "km": 5.0,
-      "minutes": 35,
-      "pace": "6:31-7:26",
+      "minutes": 36,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 5000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "5.0 km easy at 6:31-7:26/km",
+      "structure": "5.0 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -773,21 +780,21 @@
       "hard_or_long": true,
       "key": "20270110-run",
       "km": 11.3,
-      "minutes": 78,
-      "pace": "6:31-7:26",
+      "minutes": 80,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 11300,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "11.3 km long at 6:31-7:26/km",
+      "structure": "11.3 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -807,16 +814,16 @@
       "hard_or_long": true,
       "key": "20270112-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -841,15 +848,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -857,21 +864,21 @@
       "hard_or_long": false,
       "key": "20270114-run",
       "km": 5.9,
-      "minutes": 41,
-      "pace": "6:31-7:26",
+      "minutes": 42,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 5900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "5.9 km easy at 6:31-7:26/km",
+      "structure": "5.9 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -879,21 +886,21 @@
       "hard_or_long": true,
       "key": "20270117-run",
       "km": 12.2,
-      "minutes": 85,
-      "pace": "6:31-7:26",
+      "minutes": 87,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 12200,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "12.2 km long at 6:31-7:26/km",
+      "structure": "12.2 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -913,16 +920,16 @@
       "hard_or_long": true,
       "key": "20270119-run",
       "km": 5.0,
-      "minutes": 33,
+      "minutes": 34,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -937,15 +944,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 1.0 km threshold at 5:03-5:22/km, 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 1.0 km threshold at 5:03-5:22/km, 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -953,21 +960,21 @@
       "hard_or_long": false,
       "key": "20270121-run",
       "km": 4.6,
-      "minutes": 32,
-      "pace": "6:31-7:26",
+      "minutes": 33,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 4600,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "4.6 km easy at 6:31-7:26/km",
+      "structure": "4.6 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -975,21 +982,21 @@
       "hard_or_long": true,
       "key": "20270124-run",
       "km": 9.5,
-      "minutes": 66,
-      "pace": "6:31-7:26",
+      "minutes": 68,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 9500,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "9.5 km long at 6:31-7:26/km",
+      "structure": "9.5 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1009,16 +1016,16 @@
       "hard_or_long": true,
       "key": "20270126-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1043,15 +1050,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1059,21 +1066,21 @@
       "hard_or_long": false,
       "key": "20270128-run",
       "km": 6.9,
-      "minutes": 48,
-      "pace": "6:31-7:26",
+      "minutes": 50,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 6900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "6.9 km easy at 6:31-7:26/km",
+      "structure": "6.9 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1081,21 +1088,21 @@
       "hard_or_long": true,
       "key": "20270131-run",
       "km": 13.2,
-      "minutes": 92,
-      "pace": "6:31-7:26",
+      "minutes": 94,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 13200,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "13.2 km long at 6:31-7:26/km",
+      "structure": "13.2 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1115,16 +1122,16 @@
       "hard_or_long": true,
       "key": "20270202-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1149,15 +1156,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1165,21 +1172,21 @@
       "hard_or_long": false,
       "key": "20270204-run",
       "km": 7.9,
-      "minutes": 55,
-      "pace": "6:31-7:26",
+      "minutes": 57,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 7900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "7.9 km easy at 6:31-7:26/km",
+      "structure": "7.9 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1187,21 +1194,21 @@
       "hard_or_long": true,
       "key": "20270207-run",
       "km": 14.3,
-      "minutes": 99,
-      "pace": "6:31-7:26",
+      "minutes": 102,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 14300,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "14.3 km long at 6:31-7:26/km",
+      "structure": "14.3 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1221,16 +1228,16 @@
       "hard_or_long": true,
       "key": "20270209-run",
       "km": 7.6,
-      "minutes": 48,
+      "minutes": 49,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1255,15 +1262,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1271,21 +1278,21 @@
       "hard_or_long": false,
       "key": "20270211-run",
       "km": 7.9,
-      "minutes": 55,
-      "pace": "6:31-7:26",
+      "minutes": 57,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 7900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "7.9 km easy at 6:31-7:26/km",
+      "structure": "7.9 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1293,21 +1300,21 @@
       "hard_or_long": true,
       "key": "20270214-run",
       "km": 15.4,
-      "minutes": 107,
-      "pace": "6:31-7:26",
+      "minutes": 109,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 15400,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "15.4 km long at 6:31-7:26/km",
+      "structure": "15.4 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1327,16 +1334,16 @@
       "hard_or_long": true,
       "key": "20270216-run",
       "km": 6.4,
-      "minutes": 41,
+      "minutes": 42,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1361,15 +1368,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 2 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1377,21 +1384,21 @@
       "hard_or_long": false,
       "key": "20270218-run",
       "km": 5.7,
-      "minutes": 40,
-      "pace": "6:31-7:26",
+      "minutes": 41,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 5700,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "5.7 km easy at 6:31-7:26/km",
+      "structure": "5.7 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1399,21 +1406,21 @@
       "hard_or_long": true,
       "key": "20270221-run",
       "km": 12.0,
-      "minutes": 83,
-      "pace": "6:31-7:26",
+      "minutes": 85,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 12000,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "12.0 km long at 6:31-7:26/km",
+      "structure": "12.0 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1433,16 +1440,16 @@
       "hard_or_long": true,
       "key": "20270223-run",
       "km": 7.6,
-      "minutes": 48,
+      "minutes": 49,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1467,15 +1474,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1483,21 +1490,21 @@
       "hard_or_long": false,
       "key": "20270225-run",
       "km": 9.1,
-      "minutes": 63,
-      "pace": "6:31-7:26",
+      "minutes": 65,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 9100,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "9.1 km easy at 6:31-7:26/km",
+      "structure": "9.1 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1505,21 +1512,21 @@
       "hard_or_long": true,
       "key": "20270228-run",
       "km": 16.7,
-      "minutes": 116,
-      "pace": "6:31-7:26",
+      "minutes": 119,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 16700,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "16.7 km long at 6:31-7:26/km",
+      "structure": "16.7 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1532,23 +1539,23 @@
     "kind": "normal",
     "long_km": 13.3,
     "phase": "peak",
-    "planned_km": 31.5,
+    "planned_km": 31.1,
     "sessions": [
      {
       "date": "2027-03-02",
       "hard_or_long": true,
       "key": "20270302-run",
       "km": 7.6,
-      "minutes": 48,
+      "minutes": 49,
       "pace": "5:03-5:22",
       "role": "threshold",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1573,37 +1580,37 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 3 x (1.0 km threshold at 5:03-5:22/km, 90 s jog), 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
       "date": "2027-03-04",
       "hard_or_long": false,
       "key": "20270304-run",
-      "km": 10.6,
-      "minutes": 74,
-      "pace": "6:31-7:26",
+      "km": 10.2,
+      "minutes": 73,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
-        "distance_m": 10600,
-        "pace": "6:31-7:26",
+        "distance_m": 10200,
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "10.6 km easy at 6:31-7:26/km",
+      "structure": "10.2 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1611,26 +1618,26 @@
       "hard_or_long": true,
       "key": "20270307-run",
       "km": 13.3,
-      "minutes": 92,
-      "pace": "6:31-7:26",
+      "minutes": 95,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 13300,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "13.3 km long at 6:31-7:26/km",
+      "structure": "13.3 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
     "start": "2027-03-01",
-    "target_km": 36.1,
+    "target_km": 33.5,
     "week": 14
    },
    {
@@ -1645,16 +1652,16 @@
       "hard_or_long": true,
       "key": "20270309-run",
       "km": 8.0,
-      "minutes": 51,
+      "minutes": 52,
       "pace": "5:50-6:01",
       "role": "mp",
       "steps": [
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "warmup"
        },
@@ -1669,15 +1676,15 @@
        },
        {
         "distance_m": 2000,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "cooldown"
        }
       ],
-      "structure": "2.0 km warm-up at 6:31-7:26/km, 4.0 km mp at 5:50-6:01/km, 2.0 km cool-down at 6:31-7:26/km",
+      "structure": "2.0 km warm-up at 6:52-7:33/km, 4.0 km mp at 5:50-6:01/km, 2.0 km cool-down at 6:52-7:33/km",
       "weekday": "tue"
      },
      {
@@ -1685,21 +1692,21 @@
       "hard_or_long": true,
       "key": "20270314-run",
       "km": 11.6,
-      "minutes": 81,
-      "pace": "6:31-7:26",
+      "minutes": 82,
+      "pace": "6:43-7:33",
       "role": "long",
       "steps": [
        {
         "distance_m": 11600,
-        "pace": "6:31-7:26",
+        "pace": "6:43-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.479
         ],
         "type": "interval"
        }
       ],
-      "structure": "11.6 km long at 6:31-7:26/km",
+      "structure": "11.6 km long at 6:43-7:33/km",
       "weekday": "sun"
      }
     ],
@@ -1712,23 +1719,23 @@
     "kind": "race",
     "long_km": null,
     "phase": "race",
-    "planned_km": 12.8,
+    "planned_km": 12.7,
     "sessions": [
      {
       "date": "2027-03-16",
       "hard_or_long": false,
       "key": "20270316-run",
-      "km": 6.4,
-      "minutes": 43,
-      "pace": "6:31-7:26",
+      "km": 6.3,
+      "minutes": 44,
+      "pace": "6:52-7:33",
       "role": "strides",
       "steps": [
        {
         "distance_m": 4900,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        },
@@ -1752,7 +1759,7 @@
         "type": "repeat"
        }
       ],
-      "structure": "4.9 km easy at 6:31-7:26/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
+      "structure": "4.9 km easy at 6:52-7:33/km, 6 x (100 m strides at 4:44-4:58/km, 60 s jog)",
       "weekday": "tue"
      },
      {
@@ -1760,21 +1767,21 @@
       "hard_or_long": false,
       "key": "20270318-run",
       "km": 6.4,
-      "minutes": 44,
-      "pace": "6:31-7:26",
+      "minutes": 46,
+      "pace": "6:52-7:33",
       "role": "easy",
       "steps": [
        {
         "distance_m": 6400,
-        "pace": "6:31-7:26",
+        "pace": "6:52-7:33",
         "speed_mps": [
-         2.24,
-         2.56
+         2.209,
+         2.425
         ],
         "type": "interval"
        }
       ],
-      "structure": "6.4 km easy at 6:31-7:26/km",
+      "structure": "6.4 km easy at 6:52-7:33/km",
       "weekday": "thu"
      },
      {
@@ -1807,17 +1814,19 @@
   ],
   "what_if": [
    {
-    "delta_peak_km": -6.7,
-    "delta_peak_long_km": -6.5,
+    "delta_peak_km": -4.8,
+    "delta_peak_long_km": -6.7,
     "goal_time": null,
     "invariants_ok": true,
     "long_share": 0.35,
-    "peak_km": 29.4,
-    "peak_long_km": 10.2,
+    "peak_km": 28.7,
+    "peak_long_km": 10.0,
     "variant": "long_share_0.35",
     "verdict": "ambitious",
     "warnings_added": [],
-    "warnings_removed": []
+    "warnings_removed": [
+     "peak_capped"
+    ]
    },
    {
     "delta_peak_km": 0.0,
@@ -1825,7 +1834,7 @@
     "goal_time": null,
     "invariants_ok": true,
     "long_share": 0.45,
-    "peak_km": 36.1,
+    "peak_km": 33.5,
     "peak_long_km": 15.0,
     "variant": "long_share_0.45",
     "verdict": "ambitious",

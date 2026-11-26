@@ -113,9 +113,9 @@ The Claude project instructions repeat this ([recipes/coach-project/instructions
     before it, and they are checked again. Load is never raised. When the model does not track Garmin, or
     there is no recorded load or Garmin ratio to compare, nothing is cut: `acwr.enforced` is false with the
     reason (warning `acwr_not_enforced`) and days above 1.3 only warn (`acwr_high`). Overrides that only
-    reduce load (`easy`, `cap_km`, `rest`, `cap_week_km`) never make the cap cut anything: the cap keeps
-    counting the sessions they changed or removed as they were before (so easing a run, which lowers the
-    chronic load of the weeks after it, changes nothing else) and never cuts those sessions. After an
+    reduce load (`easy`, `cap_km`, `cap_long`, `rest`, `cap_week_km`) never make the cap cut anything: the cap
+    keeps counting the sessions they changed or removed as they were before (so easing a run, which lowers
+    the chronic load of the weeks after it, changes nothing else) and never cuts those sessions. After an
     override that moves a session, the weeks are cut again where the edit raised a day's ratio.
     `acwr.planned_max` and `days_over` cover every day after today and before the A race on the plan as it
     is; `acwr.cap_max` is the highest ratio on the days the cap acts on, as the cap counts it.
@@ -160,10 +160,13 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    `peak_capped` gives the numbers. After every 3 normal weeks comes a deload at 0.78 x the last normal
    week. A reduced week is never made up afterwards. Taper: 0.70 x the peak week; race week: 0.45 x the
    peak week, pro rata to the days before the race, the race not counted (the peak week as planned too).
+   A half marathon has its own, lower ceiling (`rules.by_distance`): max(1.2 x the biggest full week,
+   km0 + 18 km).
 3. Long run in a normal week: at most min(max(0.50 x the week's km, the longest run of the last 8 weeks),
-   3 h at the slow edge of its pace band, the last normal week's long run as placed + 2 km (21 or more days
-   out, a shortened one included, so a week cut to 23 km is followed by at most 25 km; one rule 7 holds around a
-   B race does not count; before any, the longest run of the last 8 weeks), `max_long_km`, 32 km).
+   3 h at 0.70 x LT, the last normal week's long run as placed + 2 km (21 or more days out, a shortened one
+   included, ratio cuts too, so a week cut to 23 km is followed by at most 25 km; one rule 7 holds around a
+   B race does not count; before any, the longest run of the last 8 weeks), `max_long_km`, 32 km; 24 km for a
+   half marathon).
    Reduced weeks scale it. Within 21 days of the A race no long run is longer than 0.80 x the peak long run
    (the longest long run of a normal week 21 days or more out; before there is one, the longest run so far:
    the longest of the last 8 weeks or a long run placed before it). The cap applies on the day the long run
@@ -171,8 +174,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    a normal or deload week with no long run that has a blocked run day or no run at all (travel, a week
    off), the first normal week's long run returns to the last normal week's long run before the gap, with
    no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
-   nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km. `long_step` checks the
-   same sequence on the finished plan, so an override that empties a week (`cap_week_km` 0) is refused until
+   nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km (with no ratio cut; a
+   ratio cut of the return week's long run, rule 12, lowers the next week's step base with it). `long_step`
+   checks the same sequence on the finished plan, so an override that empties a week (`cap_week_km` 0) is refused until
    the next normal week's long run is capped at the one before the gap (`cap_long`, listed first).
 4. Quality by phase: threshold, intervals, marathon pace, with dose caps (threshold 10%, intervals 8%,
    marathon pace 20% of the week's km) and at least 80% of the week's time easy. A week with a quality session
@@ -181,8 +185,30 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    session after the easy runs were sized, an easy run takes its km. Strides stay at 6 x 100 m, which
    `get_daily_status` classifies as easy.
 5. Pace bands are fractions of the lactate-threshold speed: easy and long 0.70-0.80, threshold 0.97-1.03,
-   intervals and strides 1.05-1.10, marathon pace from the goal (clamped to 0.85-0.96 of LT, with a
-   warning). Without an LT speed the steps have no pace target and `lt_speed` is listed as missing.
+   intervals and strides 1.05-1.10. Without an LT speed the steps have no pace target and `lt_speed` is
+   listed as missing. A band outside 1.5-7.0 m/s leaves its steps without a pace target too, listed as
+   `pace_targets.<band>` in `missing` with the warning `band_out_of_limits` (`bands_match_roles` fails a
+   band dropped without them).
+   - Garmin's marathon prediction (or the half's, converted by Riegel's formula) anchors the easy and long
+     bands, because a Garmin LT that reads fast puts 0.70-0.80 x LT close to marathon pace: easy 0.82-0.90
+     and long 0.82-0.92 x the speed of the marathon's corrected goal (the prediction, or the 0.93 x LT time
+     when that is slower, as feasibility's). Without those predictions the LT multiples stay. Whenever there
+     is a marathon pace (the MP sessions'), the easy band's fast end is at least 30 s/km slower than it and
+     the long band's at least 20 s/km (the slow end scales alike); `bands_match_roles` checks both.
+   - Garmin's 5K and 10K race predictions anchor the harder bands when there is one (a missing one is
+     converted from the other by Riegel's formula, t2 = t1 x (d2/d1)^1.06), because a Garmin LT close to
+     the 5K pace makes LT multiples faster than the athlete races: intervals run from the 5K pace to its
+     3K equivalent (never faster); a threshold band whose fast end is faster than the 10K pace moves down
+     until its fast end is the 10K pace (at most until its slow end is 0.91 x LT, so `get_daily_status`
+     still calls it hard), and its slow end is then no slower than the half-marathon pace. Without a 5K or
+     10K prediction the LT multiples stay. Strides keep 1.05-1.10.
+   - Marathon pace (the race pace of the MP sessions; a half's for a half) and the feasibility check use
+     one source. With a goal: the goal pace +-1.5%, clamped to 0.85-0.96 of LT (`mp_clamped`), but never
+     raised past the fastest goal feasibility accepts; a goal faster than that keeps its pace and warns
+     `goal_beyond_feasible` with the corrected goal. Without a goal: the pace of feasibility's
+     `corrected_goal_s` (Garmin's prediction, or the 0.93 x LT time when that is slower), never sped up to
+     the sanity band (`mp_below_band` says so instead). Without a goal or a prediction there are no MP
+     targets (`marathon_pace` missing).
 6. Placement: long run first, then Q1 and Q2, so that no two hard-or-long days touch, counting fixed
    calendar sessions, the races and the weeks before and after. When a session does not fit, a fallback
    (Q2 dropped, long run moved, Q1 as strides, long run dropped) warns with its dates; a long run off its
@@ -228,7 +254,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    planned weeks and the long run the 2 km step counts from, recomputed by the check) (`growth_cap`, `no_makeup`,
    `deload_cadence`, `deload_depth`, `long_cap`, `long_step`, `peak_long_timing`, `easy_share`,
    `no_adjacent_hard`, `bands_match_roles`, `b_windows`, `a_taper`, `last_quality`, `rest_days`,
-   `one_run_per_day`, `peak_ceiling`), plus `dto_valid` (upstream's workout checks pass on every workout JSON) and
+   `one_run_per_day`, `peak_ceiling`), plus `dto_valid` (upstream's workout checks pass on every workout
+   JSON, and every step's values are sane: a distance of 1 m to 50 km or a time of 1 s to 6 h, repeats 1 to
+   50 times, a pace target slower < faster within 1.5-7.0 m/s) and
    `cross_engine` (every session `get_daily_status` would call hard or long is one the plan marks so).
 10. What-if: the goal 5 minutes faster and slower, and a long-run share of 0.35 and 0.45, each with its peak,
     long run, verdict and warnings.

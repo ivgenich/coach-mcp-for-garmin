@@ -304,10 +304,8 @@ class Intensity(Mutation):
         s.steps = (dataclasses.replace(s.steps[0], band="mp"),)
         self.caught(plan, "bands_match_roles")
 
-    # KNOWN GAP: the speed-limit branch of bands_match_roles is dead: Paces.band() returns None for a band
-    # outside speed_limits_mps, and the check skips None, so a pace shifted out of range silently loses its
-    # target instead of failing.
-    @unittest.expectedFailure
+    # Was a known gap (Paces.band() hid a band outside speed_limits_mps): bands_match_roles reads raw_band and
+    # fails a band out of the limits unless it is listed as missing (pace_targets.<band>).
     def test_bands_match_roles_g1_bands_shifted_out_of_the_speed_limits(self):
         plan = self.start("G1", "bands_match_roles")
         plan["_check"]["ctx"].paces.lt = pe.MetersPerSecond(9.0)   # every band now above 7 m/s
@@ -494,9 +492,8 @@ class UpstreamChecks(unittest.TestCase):
     def test_dto_valid_g4_distance_end_with_the_time_id(self):
         self.assert_drift_caught("G4", plan_dto.END_CONDITIONS, {"distance": 2})
 
-    # KNOWN GAP: dto_valid runs only upstream's id/key consistency checks; no step value is checked, so a
-    # distance step of 0 m (a workout that ends at once) passes.
-    @unittest.expectedFailure
+    # Was a known gap (only upstream's id/key checks ran): dto_valid also checks every step's values
+    # (plan_dto.step_value_problems), so a 0 m distance step is caught.
     def test_dto_valid_g1_distance_step_with_no_distance(self):
         def edit(plan: Dict[str, Any]) -> None:
             first_of(plan, "easy")["steps"][0]["distance_m"] = 0

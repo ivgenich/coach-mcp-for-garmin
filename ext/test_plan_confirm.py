@@ -310,8 +310,9 @@ class State(NoThreadLeak):
         self.assertFalse(plan_confirm._state_matches(state, "key-b", "message-a"))
         self.assertFalse(plan_confirm._state_matches(state, "key-a", "message-b"))
         head, payload, mac = state.split(".")
+        last = "B" if mac.endswith("A") else "A"   # a changed last character, never the same one
         for bad in (None, 7, "", "pc1.", "pc1.x", f"{head}.{payload}", f"{head}.{payload}.", f"pc2.{payload}.{mac}",
-                    f"{head}.{payload}x.{mac}", f"{head}.{payload}.{mac[:-1]}A", state + "x", "pc1." + "A" * 2000):
+                    f"{head}.{payload}x.{mac}", f"{head}.{payload}.{mac[:-1]}{last}", state + "x", "pc1." + "A" * 2000):
             with self.subTest(bad=bad if not isinstance(bad, str) else bad[:40]):
                 self.assertFalse(plan_confirm._state_matches(bad, "key-a", "message-a"))
 

@@ -402,9 +402,10 @@ class Apply(unittest.TestCase):
 
     def test_done_km_count_against_a_week_cap(self):
         # without the B race: rule 7 holds the long runs before it short, so the week cap's long-run cut would
-        # lower the later long runs (long_step) and tip an 80%-easy week, which refuses the change
+        # lower the later long runs (long_step) and tip an 80%-easy week, which refuses the change; without
+        # predictions too: the easy band from the marathon prediction tips that week the same way
         self.body = stored(dataclasses.replace(self.inputs, b_races=()),
-                           snapshot(self.BUILT, PROFILES["owner40"], loads={}))
+                           snapshot(self.BUILT, PROFILES["owner40"], loads={}, predictions=()))
         nxt = D(2026, 12, 14)
         today = nxt + dt.timedelta(days=3)   # Thursday
         nw = next(w for w in self.body["weeks"] if w["start"] == nxt.isoformat())

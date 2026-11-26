@@ -32,6 +32,9 @@ class Garmin(tpw.FakeGarmin):
     def __init__(self):
         super().__init__()
         self.reads = tpt.FakeClient()
+        # no marathon or half prediction: these flows were written for the easy band on LT multiples (from the
+        # marathon prediction the first weeks place less and the reviews propose other changes)
+        self.reads.data["race_predictions"] = {"time5K": 1200}
         self.profile = 123456
 
     garmin_connect_activities = tpt.ACTIVITIES_PATH

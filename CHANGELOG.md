@@ -89,11 +89,42 @@ and so what a MAJOR, MINOR or PATCH release may change:
   B-race long runs in between change nothing); the `long_step` invariant checks that sequence (a
   travel week then a deload had let the long run jump 18.5 to 25.8 km with no check). A week with
   every run day blocked warns `no_runs_blocked` instead of `long_dropped` and `q1_to_strides`.
+- Plan rules v2, the planned ACWR cap: it acts on every day after today and before the A race with
+  a planned run in its 7 days (the series the `acwr_cap` invariant measures; it used to check only
+  some of them, so a plan said ok at 1.42), and only the week that owns a day is cut for it. Cuts
+  go in order: a quality session one rep shorter, the long run (only while the plan is built, so
+  later long runs step from it) or an easy run 5% of the week's target shorter, then an easy run
+  dropped; a week keeps one easy run and 80% easy time, never goes under 0.6 x its target, and a
+  day with nothing left to cut is held (`acwr.held`, warning `acwr_floor`; `acwr.cap_max`). The
+  warning `acwr_cut` says what each cut changed. Reduce-only overrides never make the cap cut
+  another session. While the ratio is not enforced, `acwr_cap` is listed in
+  `invariants.not_enforced` with the reason instead of passing. A week with quality or a long run
+  gets an easy run when a day and its target allow one (`easy_share` checks it). The +2 km
+  long-run step counts from the long run as placed after these cuts.
 - Plan overrides: `cap_long {date or key, km}` lowers one long run without cutting the rest of its
   week (refused above the planned km, under 4 km or on a day without a long run). `plan_preview`
   never stores a refused edit (the version keeps only the edits that applied), stores no new
   version when every edit for a stored `plan_id` is refused, and its `overrides` argument is
   checked before any Garmin call.
+- Plan rules v2, paces from the race predictions: Garmin's 5K and 10K predictions (a missing one
+  converted from the other by Riegel's formula) anchor the intervals, from the 5K pace to its 3K
+  equivalent and never faster, and check the threshold band: one whose fast end is faster than the
+  10K pace moves down to it (at most to a slow end of 0.91 x LT), its slow end then no slower than
+  the half-marathon pace. Without a 5K or 10K prediction the LT multiples stay. The marathon
+  prediction (or the half's) anchors the easy and long bands at 0.82-0.90 and 0.82-0.92 x the
+  marathon's corrected-goal speed, and with a marathon pace their fast ends stay at least 30 and
+  20 s/km slower than it (checked by `bands_match_roles`). Marathon pace and
+  the feasibility check share one source: without a goal, MP is the pace of `corrected_goal_s`
+  (Garmin's prediction, or slower), never sped up to 0.85 x LT (warning `mp_below_band`); with a
+  goal, the goal pace is never raised past the fastest goal feasibility accepts, and a goal beyond
+  it warns `goal_beyond_feasible`. A half marathon has its own volume rules: a peak ceiling of
+  max(1.2 x the biggest week, km0 + 18 km) and long runs of at most 24 km. `plan_assess` reads the
+  running VO2max from the training status (`mostRecentVO2Max`) when `get_max_metrics` has no
+  reading for today.
+- Plan invariants: a pace band outside the speed limits is listed as `pace_targets.<band>` in
+  `missing` with the warning `band_out_of_limits`, and `bands_match_roles` fails one dropped without
+  them; `dto_valid` also checks every step's values (distance 1 m to 50 km, time 1 s to 6 h,
+  repeats 1 to 50, pace targets slower < faster within 1.5-7.0 m/s).
 
 ### Changed
 

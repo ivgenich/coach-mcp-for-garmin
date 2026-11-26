@@ -95,6 +95,38 @@ class Dto(unittest.TestCase):
         self.assertEqual(dto, before)
 
 
+class StepValues(unittest.TestCase):
+    """dto_valid's own value checks (upstream checks ids and keys only)."""
+
+    def steps(self, dto):
+        return dto["workoutSegments"][0]["workoutSteps"]
+
+    def test_every_sample_dto_has_sane_values(self):
+        for _s, dto in plan_dto.session_dtos(sample_plan()):
+            self.assertEqual(plan_dto.step_value_problems(dto), [])
+
+    def test_bad_values_are_reported(self):
+        plan = sample_plan()
+        easy = plan_dto.workout_dto(first(plan, "easy"))
+        strides = plan_dto.workout_dto(first(plan, "strides"))
+        edits = {
+            "zero distance": (easy, lambda d: self.steps(d)[0].update(endConditionValue=0.0)),
+            "51 km": (easy, lambda d: self.steps(d)[0].update(endConditionValue=51_000.0)),
+            "pace min = max": (easy, lambda d: self.steps(d)[0].update(targetValueTwo=self.steps(d)[0]["targetValueOne"])),
+            "pace over 7 m/s": (easy, lambda d: self.steps(d)[0].update(targetValueTwo=7.5)),
+            "no steps": (easy, lambda d: d["workoutSegments"][0].update(workoutSteps=[])),
+            "zero repeats": (strides, lambda d: next(s for s in self.steps(d) if s["type"] == "RepeatGroupDTO")
+                             .update(numberOfIterations=0)),
+            "zero-second jog": (strides, lambda d: next(s for s in self.steps(d) if s["type"] == "RepeatGroupDTO")
+                                ["workoutSteps"][1].update(endConditionValue=0.0)),
+        }
+        for name, (dto, edit) in edits.items():
+            with self.subTest(edit=name):
+                bad = copy.deepcopy(dto)
+                edit(bad)
+                self.assertTrue(plan_dto.step_value_problems(bad))
+
+
 class WithoutUpstream(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.object(plan_dto, "_upstream", return_value=None)
@@ -145,6 +177,13 @@ class WithUpstream(unittest.TestCase):
                     s["hard_or_long"] = False
         check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.85)}
         self.assertFalse(check["cross_engine"]["ok"])
+
+    def test_dto_valid_catches_a_distance_step_of_0_m(self):
+        plan = sample_plan()
+        first(plan, "easy")["steps"][0]["distance_m"] = 0
+        check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.85)}
+        self.assertFalse(check["dto_valid"]["ok"])
+        self.assertIn("distance step", check["dto_valid"]["detail"])
 
     def test_selfcheck(self):
         plan_dto.selfcheck()

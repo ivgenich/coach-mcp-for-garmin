@@ -456,15 +456,22 @@ def predictions(payload: Any) -> Tuple[Tuple[str, int], ...]:
     if not isinstance(rec, dict):
         return ()
     out = []
-    for name, key in (("marathon", "timeMarathon"), ("half", "timeHalfMarathon")):
+    # (name, key, plausible seconds): the 5K and 10K anchor the interval and threshold bands
+    for name, key, lo, hi in (("marathon", "timeMarathon", 3600, 12 * 3600),
+                              ("half", "timeHalfMarathon", 3600, 12 * 3600),
+                              ("5k", "time5K", 600, 3 * 3600), ("10k", "time10K", 1200, 6 * 3600)):
         v = sc.num(rec.get(key))
-        if v is not None and 3600 <= v <= 12 * 3600:
+        if v is not None and lo <= v <= hi:
             out.append((name, int(v)))
     return tuple(out)
 
 
-def vo2max(payload: Any) -> Optional[float]:
+def vo2max(payload: Any, training_status: Any = None) -> Optional[float]:
+    """The running VO2max: get_max_metrics' record of today (Garmin answers [] on a day without a new
+    reading), else the training status' mostRecentVO2Max.generic (the last reading, as get_weekly_status
+    reads it)."""
     items = payload if isinstance(payload, list) else [payload]
+    items = items + [sc.dig(training_status, "mostRecentVO2Max")]
     for item in items:
         v = sc.num(sc.dig(item, "generic", "vo2MaxPreciseValue")) or sc.num(sc.dig(item, "generic", "vo2MaxValue"))
         if v is not None and 10 <= v <= 100:
@@ -545,7 +552,7 @@ async def fetch_snapshot(client: Any, today: dt.date, race_date: dt.date, course
     snap = pe.Snapshot(
         today=today, week_m=week_m, week_runs=runs, longest_run_8w_m=longest,
         lt_speed_mps=pe.MetersPerSecond(athlete["lt_speed_mps"]) if athlete.get("lt_speed_mps") else None,
-        vo2max=vo2max(data.get("max_metrics")), prediction_s=predictions(data.get("race_predictions")),
+        vo2max=vo2max(data.get("max_metrics"), data.get(load_call_name(0))), prediction_s=predictions(data.get("race_predictions")),
         fixed=fixed_sessions(entries, athlete, own_ids), activity_load=activity_loads(data.get("activities"), today),
         garmin_load=garmin, course=course,
         acwr=round(now.acute / now.chronic, 2) if now is not None and now.chronic > 0 else None)
