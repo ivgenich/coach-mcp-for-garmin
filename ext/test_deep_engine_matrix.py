@@ -129,6 +129,9 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
     e_lo, e_hi = _easy_band(inputs, snap, a["race"]["marathon_pace"], False) if lt else (0.0, 0.0)
     if lt and e_lo >= 1.5 and e_hi <= 7.0:
         easy_cap = min(easy_cap, int((e_lo + e_hi) / 2 * 74 * 60 / 100) / 10.0)   # 74 min at mid easy, 100 m steps
+        if (e_lo, e_hi) != _easy_band(inputs, snap, None, False):
+            easy_cap += 0.1   # held at MP + 30 s from the answer's MP, rounded to the second: one 100 m step
+
 
     hard: Dict[dt.date, str] = {}
     runs = collections.Counter()
