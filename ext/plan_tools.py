@@ -646,6 +646,29 @@ def carry_history(answer: Dict[str, Any], prior: Any, today: dt.date) -> None:
         answer["content_hash"] = pe.content_hash(pe.RULES_VERSION, answer["inputs"], weeks)
 
 
+def check_final_days(answer: Dict[str, Any]) -> None:
+    """one_run_per_day on the version as stored (after carry_history): a session key or a day twice fails the
+    invariant, so the preview gets no commit token (the engine checked only the weeks it planned)."""
+    keys: Dict[str, int] = {}
+    days: Dict[str, int] = {}
+    for s in _all_sessions(answer):
+        keys[str(s.get("key"))] = keys.get(str(s.get("key")), 0) + 1
+        days[str(s.get("date"))] = days.get(str(s.get("date")), 0) + 1
+    problems = ([f"{d}: {n} runs" for d, n in sorted(days.items()) if n > 1]
+                + [f"key {k}: {n} sessions" for k, n in sorted(keys.items()) if n > 1])
+    if not problems:
+        return
+    inv = answer.setdefault("invariants", {})
+    failed = [dict(i) for i in inv.get("failed") or [] if isinstance(i, dict)]
+    old = next((i for i in failed if i.get("id") == "one_run_per_day"), None)
+    detail = "; ".join(problems[:5])
+    if old is None:
+        failed.append({"id": "one_run_per_day", "ok": False, "detail": detail})
+    else:
+        old["detail"] = "; ".join(x for x in (old.get("detail"), detail) if x)
+    inv.update(ok=False, failed=failed)
+
+
 def local_day(stamp: Any) -> str:
     """A stored timestamp as the local date (REPORT_TZ, the zone "today" is in; UTC when it is not set)."""
     if not isinstance(stamp, dt.datetime):
@@ -765,6 +788,7 @@ class PlanService:
         answer = pe.plan_answer(plan)
         if prior is not None:
             carry_history(answer, prior, today)
+            check_final_days(answer)
         answer = with_dto_checks(answer, snap.lt_speed_mps)
         answer["window"] = window(answer, today)
         answer.update(_sources(failed))

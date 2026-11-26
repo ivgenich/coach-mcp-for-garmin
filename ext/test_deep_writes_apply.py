@@ -134,6 +134,38 @@ class ApplyDeep(unittest.TestCase):
         self.assertEqual(self.statuses(apply["change_ids"]), {"proposed"})
         self.assertEqual(self.store.tokens[ps.token_hash(apply["token"])]["status"], "issued")
 
+    def test_a_plan_changed_during_the_confirmation_stores_and_writes_nothing(self):
+        """The plan is read again under its lock after the confirmation: stopped, or a new version stored, while
+        the user was asked, the apply token writes nothing (plan_changed) and stays issued."""
+        for change in ("stop", "version"):
+            with self.subTest(change):
+                apply, ids = self.fresh_apply()
+                orig = self.writes._confirm
+
+                async def confirm(ctx, **summary):
+                    if change == "stop":
+                        self.store.move_plan(self.pid, "draft")
+                    else:
+                        plan = self.store.get_plan(self.store.account_fp("123456"), self.pid)
+                        v = plan["version_row"]
+                        self.store.save_preview(plan["account_fp"], self.pid, plan["race_date"], v["rules_version"],
+                                                v["inputs"], v["body"], "f" * 64)
+                    return "accepted"
+
+                self.writes._confirm = confirm
+                n, version = len(self.garmin.writes()), self.version()
+                try:
+                    out = self.once(apply["token"], ids)
+                finally:
+                    self.writes._confirm = orig
+                self.assertEqual((out["status"], out["reason"]), ("refused", "plan_changed"), out)
+                self.assertEqual(len(self.garmin.writes()), n)
+                self.assertEqual(self.version(), version + (change == "version"), "only the test's own version")
+                self.assertEqual(self.statuses(apply["change_ids"]), {"proposed"})
+                self.assertEqual(self.store.tokens[ps.token_hash(apply["token"])]["status"], "issued")
+                if change == "stop":
+                    self.store.move_plan(self.pid, "active")
+
     def test_first_use_boundary(self):
         apply, ids = self.fresh_apply()
         self.clock.advance(minutes=30)

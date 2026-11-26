@@ -140,6 +140,21 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ### Fixed
 
+- Training plans stored before the date session keys (`w01-e1`, `w03-long`) are converted once by
+  migration 004 (bodies, inputs, workout rows, feedback, review changes; open tokens that name an
+  old key expire). Before, a commit on such a plan created the days again and then stopped on the
+  old rows (two workouts a day, answer `unknown`), `plan_cancel` deleted nothing,
+  `--plan-cleanup` crashed and `log_feedback` refused the keys `plan_get` showed. `plan_cancel` and
+  `--plan-cleanup` now count a row with an unexpected key as failed and go on.
+- A commit never deletes or replaces a workout dated today or earlier except for a red-day change of
+  today's session (rule A8): after a swap and a rebuild, today's moved workout was deleted. A version
+  with one session key or day twice fails `one_run_per_day` on the version as stored, so it gets no
+  commit token.
+- `plan_commit`, `plan_apply_changes` and `plan_cancel` read the plan again under its lock after the
+  user's confirmation and write nothing (`plan_changed`) when a new version was stored or the plan
+  was started or stopped meanwhile.
+- `plan_activate` stop: the note says the links and feedback are kept while the plan exists (a
+  stopped plan is a draft, and drafts untouched for 30 days are deleted).
 - Weekly status: plan completion counts only the workouts already due. `completion_pct` is
   completed of due (it was completed of scheduled, so a week in progress read low in the text),
   and a workout still ahead that Garmin already linked counts in the new `plan.done_early`
