@@ -36,8 +36,9 @@ You may rely on these; only a MAJOR release breaks them:
    `Error: Garmin Connect did not answer`, `Error: Invalid input:`,
    `Error: Internal server error (ref` and `No data:`.
 9. **The plan JSON** of the training-plan tools (`plan_assess`, `plan_preview`, `plan_get`,
-   `plan_commit`, `plan_cancel`): every field name, the feasibility verdicts, the warning and
-   invariant names, the session roles, and the write statuses (`done`, `partial`, `unknown`,
+   `plan_commit`, `plan_cancel`, `plan_activate`, `log_feedback`, `plan_review_week`,
+   `plan_apply_changes`): every field name, the feasibility verdicts, the warning and
+   invariant names, the session roles, the review's change kinds, and the write statuses (`done`, `partial`, `unknown`,
    `refused`, `declined`) with what each means.
 10. **The plan `RULES_VERSION`**: every plan answer carries it as `rules_version`, separate from the
    status tools' one. Any change to a plan rule or number raises it, and the CHANGELOG lists the

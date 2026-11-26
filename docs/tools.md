@@ -1,11 +1,14 @@
 # Tools
 
-The server exposes only read-only tools, and the list is baked into the image from
+With every training-plan switch off (the default), the server exposes only read-only tools, and the list is baked into the image from
 `config/enabled-tools.txt`. At startup it checks every name against the read-only tools
 (upstream's plus this repo's), and it never registers one of upstream's tools that change
-data, whatever the settings say. No tool list or setting can turn on a write tool; the one
-exception is this repo's training-plan writes, which only their own switch turns on
-(`PLAN_WRITES=on`, off by default, [below](#training-plan-writes)). In `key` mode the server exposes
+data, whatever the settings say. No tool list or setting can turn on a write tool; the exceptions are this repo's training-plan
+tools that change data, which only their own switches turn on (each off by default): plan tracking
+(`PLAN_TRACKING=on`) adds `log_feedback` and `plan_activate`, which write only the app's own
+database, never Garmin; plan writes (`PLAN_WRITES=on`) add `plan_commit` and `plan_cancel`, which
+add and delete the plan's own workouts on the Garmin calendar
+([below](#training-plan-writes)), and with both switches on `plan_apply_changes` too. In `key` mode the server exposes
 only the tools marked `yes` in the `key` column below, the names in
 `config/enabled-tools-key.txt`; `GARMIN_ENABLED_TOOLS` can narrow that list further.
 

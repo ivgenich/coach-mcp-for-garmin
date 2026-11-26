@@ -7,8 +7,10 @@ An MCP server you deploy for yourself that lets Claude read your Garmin Connect 
 sleep, HRV, training load, planned workouts and more. MCP (Model Context Protocol) is the open
 standard Claude uses to call tools on servers like this one. Ask "How am I today?" in the Claude
 app on your phone, and Claude answers from your own numbers. Every tool is read-only unless you
-turn on training-plan writes (`PLAN_WRITES=on`, off by default), and the server has a sign-in of
-its own, so only you can connect it to Claude. On top of the tools of
+turn on a training-plan switch (each off by default): plan tracking (`PLAN_TRACKING=on`) adds
+`log_feedback` and `plan_activate`, which write only the server's own database, and plan writes
+(`PLAN_WRITES=on`) add tools that put the plan's own workouts on your Garmin calendar or delete
+them. The server has a sign-in of its own, so only you can connect it to Claude. On top of the tools of
 [Taxuspt/garmin_mcp](https://github.com/Taxuspt/garmin_mcp) it adds a daily status (a green,
 yellow or red level and a recommendation for today's workout, by fixed rules), a weekly status
 and a course climb profile.
