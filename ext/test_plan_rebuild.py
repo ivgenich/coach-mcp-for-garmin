@@ -52,22 +52,22 @@ class RebuildCase(unittest.TestCase):
 
 
 class MergedWeek(RebuildCase):
-    """Repro rebuild2: G1 rebuilt on Thursday 31 Dec with Tuesday to Sunday as run days and the long run on
+    """Repro rebuild2: G1 rebuilt on Thursday 30 Dec with Tuesday to Sunday as run days and the long run on
     Friday; the stored week had threshold Tue, easy Wed, MP Thu (today) and the long run on Sunday."""
 
     def setUp(self):
         inputs, snap = g("G1")
         self.first = pe.build_plan(inputs, snap, what_if_runs=False)
         self.body = stored(self.first)
-        self.today = D(2026, 12, 31)
+        self.today = D(2027, 12, 30)
         self.snap = dataclasses.replace(snap, today=self.today)
         self.new = dataclasses.replace(inputs, run_days=(1, 2, 3, 4, 5, 6), rest_days=(0,), long_run_day=4)
 
     def test_the_merged_week_keeps_every_rule(self):
         plan = pt.build_rebuilt(self.new, self.snap, self.body)
         answer = self.assert_merged_ok(plan)
-        w = week(answer, "2026-12-28")
-        self.assertEqual(w["sessions"][:3], week(self.body, "2026-12-28")["sessions"][:3], "the stored days stay")
+        w = week(answer, "2027-12-27")
+        self.assertEqual(w["sessions"][:3], week(self.body, "2027-12-27")["sessions"][:3], "the stored days stay")
         roles = [s["role"] for s in w["sessions"]]
         self.assertEqual(roles.count("mp"), 1, roles)
         self.assertEqual(roles.count("long"), 1, roles)
@@ -79,7 +79,7 @@ class MergedWeek(RebuildCase):
     def test_a_new_day_that_breaks_a_rule_against_the_kept_ones_fails(self):
         plan = pt.build_rebuilt(self.new, self.snap, self.body)
         weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
-        w = next(x for x in weeks if x.start == D(2026, 12, 28))
+        w = next(x for x in weeks if x.start == D(2027, 12, 27))
         new = next(s for s in w.sessions if s.date > self.today and s.role == "long")
         new.date = self.today + dt.timedelta(days=1)   # the long run the day after today's MP session
         self.assertEqual(ctx.snapshot.today, self.today)
@@ -89,34 +89,34 @@ class MergedWeek(RebuildCase):
         self.assertEqual(kept, [])
 
     def test_a_rule_only_the_kept_days_break_is_a_warning(self):
-        # Tuesday is a rest day now: the threshold run stored on Tuesday 29 Dec is history
+        # Tuesday is a rest day now: the threshold run stored on Tuesday 28 Dec is history
         new = dataclasses.replace(self.new, run_days=(2, 3, 4, 5, 6), rest_days=(0, 1))
         plan = pt.build_rebuilt(new, self.snap, self.body)
         self.assert_merged_ok(plan)
         self.assertEqual([k["id"] for k in plan["invariants"]["history"]], ["rest_days"])
-        self.assertIn("2026-12-29", plan["invariants"]["history"][0]["detail"])
+        self.assertIn("2027-12-28", plan["invariants"]["history"][0]["detail"])
         self.assertIn("history_rule", [w["id"] for w in plan["warnings"]])
 
     def test_an_edit_of_a_kept_day_is_refused(self):
-        new = dataclasses.replace(self.new, overrides=(pe.Override("easy", key="20261229-run"),
+        new = dataclasses.replace(self.new, overrides=(pe.Override("easy", key="20271228-run"),
                                                        pe.Override("rest", date=self.today)))
         plan = pt.build_rebuilt(new, self.snap, self.body)
         self.assertEqual([r["rule"] for r in plan["overrides"]["refused"]], ["past_day", "past_day"])
-        self.assertEqual(week(pe.plan_answer(plan), "2026-12-28")["sessions"][:3],
-                         week(self.body, "2026-12-28")["sessions"][:3])
+        self.assertEqual(week(pe.plan_answer(plan), "2027-12-27")["sessions"][:3],
+                         week(self.body, "2027-12-27")["sessions"][:3])
 
 
 class PastDaysAreNoRunDays(RebuildCase):
     def test_rule_4_never_asks_for_an_easy_run_on_a_day_up_to_today(self):
         # a property example: built on a Monday (week 1 from Tuesday), rebuilt on Tuesday with Tuesday as the
         # long-run day; Wednesday is the only day left, so the week has no easy run, and that keeps rule 4
-        inputs = pe.PlanInputs(race_date=D(2026, 12, 7), run_days=(0, 2, 3), rest_days=(1, 4, 5, 6), long_run_day=0,
+        inputs = pe.PlanInputs(race_date=D(2027, 12, 6), run_days=(0, 2, 3), rest_days=(1, 4, 5, 6), long_run_day=0,
                                quality_per_week=0, max_long_km=24.0)
-        snap = pe.Snapshot(today=D(2026, 11, 30), week_m=(8000.0,) * 8, week_runs=(4,) * 8,
+        snap = pe.Snapshot(today=D(2027, 11, 29), week_m=(8000.0,) * 8, week_runs=(4,) * 8,
                            longest_run_8w_m=pe.Meters(5000.0), prediction_s=(("marathon", 13200), ("half", 6300)))
         body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
         new = dataclasses.replace(inputs, run_days=(0, 1, 2), rest_days=(3, 4, 5, 6), long_run_day=1)
-        plan = pt.build_rebuilt(new, dataclasses.replace(snap, today=D(2026, 12, 1)), body)
+        plan = pt.build_rebuilt(new, dataclasses.replace(snap, today=D(2027, 11, 30)), body)
         self.assert_merged_ok(plan)
 
 
@@ -138,31 +138,31 @@ class SameInputs(RebuildCase):
 
 
 class BRaceReference(RebuildCase):
-    """Repro rebuild_b: G1 rebuilt the day after its half-distance triathlon (29 Jan 2027); the long run before
-    it was 20.3 km, so the first one after it is at most 0.75 x 20.3 = 15.2 km."""
+    """Repro rebuild_b: G1 rebuilt the day after its half-distance triathlon (28 Jan 2028); the long run before
+    it was 18.7 km, so the first one after it is at most 0.75 x 18.7 = 14.0 km."""
 
     def test_the_first_long_run_after_the_race_keeps_its_reference(self):
         inputs, snap = g("G1")
         body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
-        before = [s for s in runs(body) if s["role"] == "long" and s["date"] < "2027-01-29"][-1]
-        self.assertEqual(before["km"], 20.3)
+        before = [s for s in runs(body) if s["role"] == "long" and s["date"] < "2028-01-28"][-1]
+        self.assertEqual(before["km"], 18.7)
         # plan_preview takes only B races after today: the stored plan's B race still counts
         for b_races in (inputs.b_races, ()):
             with self.subTest(b_races=b_races):
                 plan = pt.build_rebuilt(dataclasses.replace(inputs, b_races=b_races),
-                                        dataclasses.replace(snap, today=D(2027, 1, 30)), body)
+                                        dataclasses.replace(snap, today=D(2028, 1, 29)), body)
                 answer = self.assert_merged_ok(plan)
-                after = next(s for s in runs(answer) if s["role"] == "long" and s["date"] > "2027-01-29")
-                self.assertLessEqual(after["km"], round(0.75 * 20.3, 1))
-                self.assertEqual(after["km"], 15.2)
-                self.assertIn("up to 15.2 km", after["note"])
-                self.assertEqual([b["date"] for b in answer["b_races"]], ["2027-01-29"])
+                after = next(s for s in runs(answer) if s["role"] == "long" and s["date"] > "2028-01-28")
+                self.assertLessEqual(after["km"], round(0.75 * 18.7, 1))
+                self.assertEqual(after["km"], 14.0)
+                self.assertIn("up to 14.0 km", after["note"])
+                self.assertEqual([b["date"] for b in answer["b_races"]], ["2028-01-28"])
                 self.assertEqual(answer["inputs"]["b_races"], [{"date": b.date.isoformat(), "kind": b.kind}
                                                                for b in b_races])
 
 
 class Volume(RebuildCase):
-    """Repro rebuild3: G4 rebuilt on Tuesday 29 Dec after the athlete ran weeks 0-4 as planned. The new
+    """Repro rebuild3: G4 rebuilt on Tuesday 28 Dec after the athlete ran weeks 0-4 as planned. The new
     snapshot's km0 and 8 weeks hold the plan's own weeks: the targets dropped (65.3 -> 58.0 km in week 5) and
     the peak rose past the original ceiling (73.0 -> 78.7 km)."""
 
@@ -170,11 +170,11 @@ class Volume(RebuildCase):
         self.inputs, self.snap = g("G4")
         self.first = pe.build_plan(self.inputs, self.snap, what_if_runs=False)
         self.body = stored(self.first)
-        done = [w["planned_km"] for w in self.body["weeks"] if w["start"] < "2026-12-28"]
+        done = [w["planned_km"] for w in self.body["weeks"] if w["start"] < "2027-12-27"]
         done[0] = 47.0
         self.week_m = tuple(pe.Meters(k * 1000.0) for k in ([45, 48, 40, 50, 46, 52, 44, 50] + done)[-8:])
-        longest = max(w["long_km"] or 0 for w in self.body["weeks"] if w["start"] < "2026-12-28")
-        self.later = dataclasses.replace(self.snap, today=D(2026, 12, 29), week_m=self.week_m,
+        longest = max(w["long_km"] or 0 for w in self.body["weeks"] if w["start"] < "2027-12-27")
+        self.later = dataclasses.replace(self.snap, today=D(2027, 12, 28), week_m=self.week_m,
                                          longest_run_8w_m=pe.Meters(longest * 1000.0))
 
     def test_the_volume_goes_on_from_the_stored_weeks(self):
@@ -199,25 +199,25 @@ class Volume(RebuildCase):
 class SwapThenRebuild(RebuildCase):
     """Repro test_swap_then_rebuild: the stored plan swapped Tuesday's run with Sunday's long run (each keeps the
     key of the day it was planned on); rebuilt on that Tuesday without the edit, the kept long run holds key
-    20270124-run, and the engine planned a second long run with that key on Sunday."""
+    20280123-run, and the engine planned a second long run with that key on Sunday."""
 
     def test_a_carried_key_wins_and_the_week_keeps_one_long_run(self):
         inputs, snap = g("G1")
         body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
-        monday = dataclasses.replace(snap, today=D(2027, 1, 18))
-        tue, sun = D(2027, 1, 19), D(2027, 1, 24)
+        monday = dataclasses.replace(snap, today=D(2028, 1, 17))
+        tue, sun = D(2028, 1, 18), D(2028, 1, 23)
         swapped = pt.build_rebuilt(dataclasses.replace(inputs, overrides=(pe.Override("swap", date=tue, date_b=sun),)),
                                    monday, body)
         self.assertEqual(len(swapped["overrides"]["applied"]), 1, swapped["overrides"])
         body2 = stored(swapped)
         on_tue = next(s for s in runs(body2) if s["date"] == tue.isoformat())
-        self.assertEqual((on_tue["key"], on_tue["role"]), ("20270124-run", "long"))
+        self.assertEqual((on_tue["key"], on_tue["role"]), ("20280123-run", "long"))
         plan = pt.build_rebuilt(inputs, dataclasses.replace(snap, today=tue), body2)
         answer = self.assert_merged_ok(plan)
-        w = week(answer, "2027-01-18")
+        w = week(answer, "2028-01-17")
         self.assertEqual([s["role"] for s in w["sessions"]].count("long"), 1)
         sunday = next(s for s in w["sessions"] if s["date"] == sun.isoformat())
-        self.assertEqual(sunday["key"], "20270119-run", "the stored version's key of that day")
+        self.assertEqual(sunday["key"], "20280118-run", "the stored version's key of that day")
 
 
 class PlanTools(unittest.TestCase):
@@ -230,15 +230,15 @@ class PlanTools(unittest.TestCase):
 
     def test_the_stored_born_day_wins(self):
         # built on a Sunday with no session on week 1's Monday (a blocked date): not a plan built that Monday
-        inputs = pe.PlanInputs(race_date=D(2027, 3, 21), blocked_dates=(D(2026, 11, 30),), run_days=(0, 1, 2, 3, 5, 6),
+        inputs = pe.PlanInputs(race_date=D(2028, 3, 19), blocked_dates=(D(2027, 11, 29),), run_days=(0, 1, 2, 3, 5, 6),
                                rest_days=(4,))
-        _i, snap = g("G1", today=D(2026, 11, 29))
+        _i, snap = g("G1", today=D(2027, 11, 28))
         plan = pe.build_plan(inputs, snap, what_if_runs=False)
         body = stored(plan)
-        self.assertFalse([s for s in runs(body) if s["date"] == "2026-11-30"])
-        self.assertEqual(pt.plan_born(body), D(2026, 11, 29))
-        self.assertEqual(pt.plan_born({k: v for k, v in body.items() if k != "basis"}), D(2026, 11, 30))
-        again = pt.build_rebuilt(inputs, dataclasses.replace(snap, today=D(2026, 12, 1)), body)
+        self.assertFalse([s for s in runs(body) if s["date"] == "2027-11-29"])
+        self.assertEqual(pt.plan_born(body), D(2027, 11, 28))
+        self.assertEqual(pt.plan_born({k: v for k, v in body.items() if k != "basis"}), D(2027, 11, 29))
+        again = pt.build_rebuilt(inputs, dataclasses.replace(snap, today=D(2027, 11, 30)), body)
         self.assertEqual(pe.plan_answer(again)["weeks"], body["weeks"])
 
 

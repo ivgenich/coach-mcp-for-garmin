@@ -266,7 +266,7 @@ class DeepBase(unittest.TestCase):
     def preview(self, sessions=None, plan_id=None, content="a", days=14, fixed=(), lt=None, store=None):
         st = store if store is not None else self.store
         answer_ = plan_answer(sessions if sessions is not None else default_sessions(), content)
-        pid, version, _changed = st.save_preview(self.fp, plan_id, dt.date(2027, 2, 26), 1, {"x": 1}, answer_,
+        pid, version, _changed = st.save_preview(self.fp, plan_id, dt.date(2027, 3, 5), 1, {"x": 1}, answer_,
                                                  answer_["content_hash"])
         snap = types.SimpleNamespace(fixed=fixed, lt_speed_mps=lt)
         commit = pw.commit_section(st, answer_, snap, {"plan_id": pid, "version": version}, TODAY, days,

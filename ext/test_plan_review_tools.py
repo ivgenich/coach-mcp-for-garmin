@@ -20,10 +20,10 @@ import plan_writes as pw
 import test_plan_tools as tpt
 import test_plan_writes as tpw
 
-BUILT = tpt.TODAY                       # 2026-11-25, a Wednesday: the plan is built and committed
-REVIEW = dt.date(2026, 12, 7)           # the Monday after week 1 (2026-11-30): nothing was run in it
-WEEK = dt.date(2026, 11, 30)
-T0 = dt.datetime(2026, 11, 25, 7, 0, tzinfo=dt.timezone.utc)
+BUILT = tpt.TODAY                       # 2027-11-24, a Wednesday: the plan is built and committed
+REVIEW = dt.date(2027, 12, 6)           # the Monday after week 1 (2027-11-29): nothing was run in it
+WEEK = dt.date(2027, 11, 29)
+T0 = dt.datetime(2027, 11, 24, 7, 0, tzinfo=dt.timezone.utc)
 
 
 class Garmin(tpw.FakeGarmin):
@@ -74,7 +74,7 @@ class Flow(unittest.TestCase):
     # extra preview arguments per test: week 2 capped under week 1, so pain in week 1 leaves nothing to hold
     # (the planned ACWR cap decides which of the two weeks is lighter; the cap only reduces, so it changes nothing else)
     PLAN_ARGS = {"test_advice_only_stores_no_version_and_gives_no_token": {
-        "overrides": json.dumps([{"kind": "cap_week_km", "week_start": "2026-12-07", "km": 38}])}}
+        "overrides": json.dumps([{"kind": "cap_week_km", "week_start": "2027-12-06", "km": 38}])}}
 
     def setUp(self):
         garmin_paths.allow_plan_writes(set(garmin_paths.WRITE_PATHS))
@@ -139,8 +139,8 @@ class Flow(unittest.TestCase):
 
     def test_review_proposes_and_nothing_changes_until_approved(self):
         writes_before = len(self.garmin.writes())
-        out = self.review(week_start="2026-11-30")
-        self.assertEqual((out["kind"], out["rules_version"], out["week_start"]), ("plan_review", 1, "2026-11-30"))
+        out = self.review(week_start="2027-11-29")
+        self.assertEqual((out["kind"], out["rules_version"], out["week_start"]), ("plan_review", 1, "2027-11-29"))
         rules = {c["rule"] for c in out["changes"]}
         self.assertIn("A4", rules)          # easy RPE 6 two weeks running
         self.assertEqual(out["metrics"]["completion_pct"], 0.0)
@@ -165,7 +165,7 @@ class Flow(unittest.TestCase):
             return real(store, plan, activities, scheduled, **kw)
 
         with unittest.mock.patch.object(prt.plan_tracking, "refresh_plan", spy):
-            out = self.review(week_start="2026-11-30")
+            out = self.review(week_start="2027-11-29")
         self.assertEqual(len(seen), 1)
         return out, seen[0]
 
@@ -180,7 +180,7 @@ class Flow(unittest.TestCase):
 
     def test_a_full_activity_page_is_passed_as_cut(self):
         self.garmin.reads.data["activities"] = [
-            {"activityId": 9000 + i, "activityType": {"typeKey": "walking"}, "startTimeLocal": "2026-11-20 08:00:00",
+            {"activityId": 9000 + i, "activityType": {"typeKey": "walking"}, "startTimeLocal": "2027-11-19 08:00:00",
              "distance": 1000.0, "duration": 600.0} for i in range(prt.ACTIVITY_LIMIT)]
         _out, (activities, cut) = self._refresh_args()
         self.assertEqual(len(activities), prt.ACTIVITY_LIMIT)
@@ -190,14 +190,14 @@ class Flow(unittest.TestCase):
         self.assertEqual((activities, cut), ([], False))
 
     def test_bad_week_and_no_plan(self):
-        self.assertIn("Monday", run(self.review_svc.review(plan_id=self.pid, week_start="2026-12-01")))
-        self.assertIn("begun", run(self.review_svc.review(plan_id=self.pid, week_start="2026-12-14")))
+        self.assertIn("Monday", run(self.review_svc.review(plan_id=self.pid, week_start="2027-11-30")))
+        self.assertIn("begun", run(self.review_svc.review(plan_id=self.pid, week_start="2027-12-13")))
         self.assertIn("not a week of this plan",
                       run(self.review_svc.review(plan_id=self.pid, week_start="2025-12-01")))
         self.assertTrue(run(self.review_svc.review(plan_id="f" * 32)).startswith("No data"))
 
     def test_accept_changes_builds_a_checked_version(self):
-        out = self.review(week_start="2026-11-30")
+        out = self.review(week_start="2027-11-29")
         ids = [c["change_id"] for c in out["changes"]]
         acc = json.loads(run(self.plans.preview(plan_id=self.pid, accept_changes=",".join(ids + ["c" + "0" * 16]))))
         self.assertTrue(acc["invariants"]["ok"], acc["invariants"]["failed"])
@@ -210,7 +210,7 @@ class Flow(unittest.TestCase):
         self.assertTrue(run(self.plans.preview(plan_id=self.pid, accept_changes="x")).startswith("Error: Invalid"))
 
     def test_apply_writes_once_and_replays(self):
-        out = self.review(week_start="2026-11-30")
+        out = self.review(week_start="2027-11-29")
         apply = out["apply"]
         ids = ",".join(apply["change_ids"])
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], "c" + "0" * 16)))["reason"],
@@ -231,7 +231,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(today_writes, [])
 
     def test_apply_refusals(self):
-        apply = self.review(week_start="2026-11-30")["apply"]
+        apply = self.review(week_start="2027-11-29")["apply"]
         ids = ",".join(apply["change_ids"])
         self.may_write = False
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], ids)))["reason"],
@@ -241,7 +241,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], ids)))["reason"], "expired")
         # superseded: another version stored after the review (accepting the same changes would store the
         # version the token carries: that one resumes instead)
-        apply = self.review(week_start="2026-11-30")["apply"]
+        apply = self.review(week_start="2027-11-29")["apply"]
         ids = ",".join(apply["change_ids"])
         run(self.plans.preview(**{**tpt.ARGS, "goal_time": "3:20:00"}, plan_id=self.pid))
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], ids)))["reason"], "superseded")
@@ -249,7 +249,7 @@ class Flow(unittest.TestCase):
         self.assertTrue(run(self.writes.apply(self.pid, apply["token"], "")).startswith("Error: Invalid"))
 
     def test_declined_writes_nothing(self):
-        apply = self.review(week_start="2026-11-30")["apply"]
+        apply = self.review(week_start="2027-11-29")["apply"]
         self.confirm_answer = "declined"
         n = len(self.garmin.writes())
         out = json.loads(run(self.writes.apply(self.pid, apply["token"], ",".join(apply["change_ids"]))))
@@ -258,7 +258,7 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.confirm_calls[-1]["action"], "apply")
 
     def test_a_change_no_longer_proposed_supersedes_the_token(self):
-        apply = self.review(week_start="2026-11-30")["apply"]
+        apply = self.review(week_start="2027-11-29")["apply"]
         self.store.save_changes(self.pid, WEEK, [])     # a later review of the week proposes nothing
         out = json.loads(run(self.writes.apply(self.pid, apply["token"], ",".join(apply["change_ids"]))))
         self.assertEqual(out["reason"], "superseded")
@@ -269,7 +269,7 @@ class Flow(unittest.TestCase):
             self.store.save_feedback(self.pid, key, 3, 0, "none", False)
         week1 = [r for r in self.store.links(self.pid) if WEEK <= r["date_local"] < REVIEW]
         self.store.save_feedback(self.pid, str(week1[0]["workout_key"]), 3, 6, "calf", True)
-        out = self.review(week_start="2026-11-30")
+        out = self.review(week_start="2027-11-29")
         kinds = {c["kind"] for c in out["changes"]}
         self.assertIn("pain_advice", kinds)
         advice = [c["change_id"] for c in out["changes"] if c["kind"] == "pain_advice"]
@@ -286,53 +286,53 @@ class Flow(unittest.TestCase):
         self.store.move_plan(self.pid, "cancelled")
         draft = json.loads(run(self.plans.preview(**tpt.ARGS)))["stored"]["plan_id"]
         self.assertEqual(self.store.get_plan(self.store.account_fp("123456"), draft)["status"], "draft")
-        self.assertEqual(run(self.review_svc.review(plan_id=draft, week_start="2026-11-30")), pt.TEXT_DRAFT)
+        self.assertEqual(run(self.review_svc.review(plan_id=draft, week_start="2027-11-29")), pt.TEXT_DRAFT)
         self.assertEqual(run(self.review_svc.review(plan_id="", week_start="")), pt.TEXT_DRAFT)
         self.assertEqual((self.store.links(draft), self.store.changes_of(draft)), ([], []))
 
     def test_without_writes_no_apply(self):
         self.review_svc.apply_hook = None
-        out = self.review(week_start="2026-11-30")
+        out = self.review(week_start="2027-11-29")
         self.assertNotIn("apply", out)
         self.assertNotIn("plan_apply_changes", out["note"])
 
 
 class RedDay(Flow):
-    """A8 end to end: 21 days on Garmin; on the threshold day (2026-12-15) the daily level is red."""
+    """A8 end to end: 21 days on Garmin; on the threshold day (2027-12-14) the daily level is red."""
 
     COMMIT_DAYS = 21
 
     def test_apply_eases_only_todays_workout(self):
         for r in self.store.feedback(self.pid):    # no other rule fires
             self.store.save_feedback(self.pid, r["workout_key"], 3, 0, "none", False)
-        self.today = dt.date(2026, 12, 15)
+        self.today = dt.date(2027, 12, 14)
         self.clock.advance(days=8)
         self.level = "red"
         before = {r["workout_key"]: (r["date_local"], r["role"], r["dto_hash"]) for r in self.store.write_rows(self.pid)
                   if "~" not in r["workout_key"]}
-        self.assertEqual(before.get("20261215-run", (None, None))[1], "threshold")
-        out = self.review(week_start="2026-11-30")
+        self.assertEqual(before.get("20271214-run", (None, None))[1], "threshold")
+        out = self.review(week_start="2027-11-29")
         self.assertEqual([c["rule"] for c in out["changes"]], ["A8"])
         apply = out["apply"]
-        self.assertEqual(apply["dates"], ["2026-12-15"])
+        self.assertEqual(apply["dates"], ["2027-12-14"])
         done = self.apply(apply["token"], ",".join(apply["change_ids"]))
         self.assertEqual(done["status"], "done", done)
         after = {r["workout_key"]: (r["date_local"], r["role"], r["dto_hash"]) for r in self.store.write_rows(self.pid)
                  if "~" not in r["workout_key"] and r["state"] in ("uploaded", "scheduled")}
-        self.assertEqual(after["20261215-run"][1], "easy")
+        self.assertEqual(after["20271214-run"][1], "easy")
         for key, row in before.items():
-            if key != "20261215-run" and key in after:
+            if key != "20271214-run" and key in after:
                 self.assertEqual(after[key], row, key)
         fp = self.store.account_fp("123456")
         body = self.store.get_plan(fp, self.pid)["version_row"]["body"]
-        q = next(s for w in body["weeks"] for s in w["sessions"] if s["key"] == "20261215-run")
+        q = next(s for w in body["weeks"] for s in w["sessions"] if s["key"] == "20271214-run")
         self.assertEqual(q["role"], "easy")
 
 
 class Units(unittest.TestCase):
     def test_default_week_and_change_ids(self):
-        self.assertEqual(prt.default_week(dt.date(2026, 12, 7)), dt.date(2026, 11, 30))
-        self.assertEqual(prt.default_week(dt.date(2026, 12, 6)), dt.date(2026, 11, 30))
+        self.assertEqual(prt.default_week(dt.date(2027, 12, 6)), dt.date(2027, 11, 29))
+        self.assertEqual(prt.default_week(dt.date(2027, 12, 5)), dt.date(2027, 11, 29))
         self.assertEqual(pw.parse_change_ids("c%016x, c%016x" % (2, 1)), ["c%016x" % 1, "c%016x" % 2])
         for bad in ("", "c12", ",".join("c%016x" % i for i in range(21))):
             with self.assertRaises(pw.BadInput):
@@ -348,7 +348,7 @@ class Units(unittest.TestCase):
         self.assertTrue(check["plan_apply_changes"]["apply_token"][0]("at1." + "A" * 32))
         self.assertFalse(check["plan_apply_changes"]["apply_token"][0]("ct1." + "A" * 32))
         self.assertTrue(check["plan_review_week"]["week_start"][0](""))
-        self.assertTrue(check["plan_review_week"]["week_start"][0]("2026-11-30"))
+        self.assertTrue(check["plan_review_week"]["week_start"][0]("2027-11-29"))
         self.assertFalse(check["plan_review_week"]["week_start"][0]("30/11/2026"))
 
     def test_registration(self):

@@ -41,9 +41,9 @@ except ImportError:  # the class below is skipped; the shim only lets the module
 NEEDS_HYPOTHESIS = "needs hypothesis"
 PROPS = dict(max_examples=150, deadline=None, derandomize=True, database=None,
              suppress_health_check=[HealthCheck.too_slow])
-INPUTS = pe.PlanInputs(race_date=dt.date(2027, 2, 26), goal_time_s=3 * 3600 + 30 * 60,
-                       b_races=(pe.BRace(dt.date(2027, 1, 29), "tri_half"),))
-START = dt.date(2026, 11, 25)
+INPUTS = pe.PlanInputs(race_date=dt.date(2028, 2, 25), goal_time_s=3 * 3600 + 52 * 60,
+                       b_races=(pe.BRace(dt.date(2028, 1, 28), "tri_half"),))
+START = dt.date(2027, 11, 24)
 _STORED = {}
 
 

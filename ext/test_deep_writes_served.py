@@ -125,7 +125,7 @@ class ServedConfirmation(UpstreamCase):
 
     def preview(self, content="a"):
         answer = b.plan_answer(b.default_sessions(), content)
-        pid, version, _ = self.store.save_preview(self.fp, None, dt.date(2027, 2, 26), 1, {"x": 1}, answer,
+        pid, version, _ = self.store.save_preview(self.fp, None, dt.date(2027, 3, 5), 1, {"x": 1}, answer,
                                                   answer["content_hash"])
         snap = types.SimpleNamespace(fixed=(), lt_speed_mps=None)
         commit = pw.commit_section(self.store, answer, snap, {"plan_id": pid, "version": version}, b.TODAY, 14,

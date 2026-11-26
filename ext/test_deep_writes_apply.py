@@ -34,7 +34,7 @@ class ApplyDeep(unittest.TestCase):
         return json.loads(run(self.writes.apply(self.pid, token, ids)))
 
     def fresh_apply(self):
-        out = self.review(week_start="2026-11-30")
+        out = self.review(week_start="2027-11-29")
         apply = out["apply"]
         self.assertTrue(apply["token"], apply)
         self.assertTrue(apply["token"].startswith("at1."))
@@ -223,7 +223,7 @@ class ApplyDeep(unittest.TestCase):
         self.assertEqual(summary["dates"], sorted({o["date"] for o in adds}))
         self.assertEqual(summary.get("removes", 0), len(drops))
         self.assertEqual(len(self.confirm_calls), mark + 1)
-        self.assertTrue(all(d > dt.date(2026, 12, 7).isoformat() for d in summary["dates"]), "never today")
+        self.assertTrue(all(d > dt.date(2027, 12, 6).isoformat() for d in summary["dates"]), "never today")
 
 
 if __name__ == "__main__":

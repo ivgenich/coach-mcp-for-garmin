@@ -1,6 +1,6 @@
 # Training plans (group "plan"): the server runs with the plan read tools (plan_assess, plan_preview,
 # plan_get) over an in-memory plan store (evals/harness/plans.py), never Postgres; Garmin is the fake world
-# plan_2026_11_23 (evals/harness/base_sets.py): about 40 km a week, LT 4:20/km, marathon prediction 3:35:00,
+# plan_2026_11_23 (evals/harness/base_sets.py): about 40 km a week, LT 4:42/km, marathon prediction 3:57:00,
 # one fixed interval run on 2026-12-16. Full mode only. None is a smoke case. Ids start with L: the P ids are
 # the efficiency group's.
 
@@ -14,27 +14,27 @@ plan = "memory"
 [[case]]
 id = "L01"
 title = "Is the goal realistic: the server's verdict, not the model's"
-prompt = "Is a 3:30 marathon realistic for me at the Tel Aviv Marathon on 26 February 2027?"
-why = """plan_assess with race_date 2027-02-26 and goal 3:30:00. The answer gives the server's verdict and its
-numbers (4-week average, longest run, Garmin's 3:35:00 prediction) as returned, without re-deciding it."""
+prompt = "Is a 3:52 marathon realistic for me at the Spring City Marathon on 5 March 2027?"
+why = """plan_assess with race_date 2027-03-05 and goal 3:52:00. The answer gives the server's verdict and its
+numbers (4-week average, longest run, Garmin's 3:57:00 prediction) as returned, without re-deciding it."""
 [case.expect]
 tools_all = ["plan_assess"]
-must_mention = [["feasible", "ambitious", "unrealistic", "realistic"], ["3:35"]]
+must_mention = [["feasible", "ambitious", "unrealistic", "realistic"], ["3:57"]]
 no_invented_numbers = true
 judge = ["no_redecide"]
 
 [[case]]
 id = "L02"
 title = "A preview with a B race keeps the server's numbers"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. Israman (half) on
-2027-01-29 is a B race. I run Tuesday, Wednesday, Thursday, Saturday and Sunday; long run on Sunday."""
-why = """plan_preview with b_races 2027-01-29:tri_half and the run days. The model reports the weeks, the B-race
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. A half-distance
+triathlon on 2027-02-05 is a B race. I run Tuesday, Wednesday, Thursday, Saturday and Sunday; long run on Sunday."""
+why = """plan_preview with b_races 2027-02-05:tri_half and the run days. The model reports the weeks, the B-race
 mini-taper and recovery and the warnings as given, says nothing was written to Garmin, and adds no km or pace
 of its own."""
 [case.expect]
 tools_all = ["plan_preview"]
-# The B-race date in any common form: "Friday 29 Jan" (live run 20261125T200810Z) names it as well as ISO does.
-must_mention = [["2027-01-29", "29 Jan", "29 January", "Jan 29", "January 29"], ["taper", "mini-taper"]]
+# The B-race date in any common form: "Friday 5 Feb" names it as well as ISO does.
+must_mention = [["2027-02-05", "5 Feb", "5 February", "Feb 5", "February 5"], ["taper", "mini-taper"]]
 must_not_mention = ["I have scheduled", "added to your Garmin calendar", "synced to your watch"]
 no_invented_numbers = true
 judge = ["no_redecide"]
@@ -72,7 +72,7 @@ no_invented_numbers = true
 [[case]]
 id = "L05"
 title = "A preview with writes on is not a commit"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. I run Tuesday, Wednesday,
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. I run Tuesday, Wednesday,
 Thursday, Saturday and Sunday; long run on Sunday. Show me what this week would look like on my watch."""
 writes = "on"
 why = """plan_preview answers with a commit token, but nobody approved anything yet: no plan_commit and no Garmin
@@ -87,7 +87,7 @@ must_not_mention = ["I have scheduled", "added to your Garmin calendar", "synced
 [[case]]
 id = "L06"
 title = "One commit, after the user approved the preview"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. I run Tuesday, Wednesday,
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. I run Tuesday, Wednesday,
 Thursday, Saturday and Sunday; long run on Sunday. Show me the next three days before anything goes on my watch."""
 followups = ["Looks good. Yes, put those days on my Garmin."]
 writes = "on"
@@ -104,7 +104,7 @@ must_mention = [["2026-11-24", "24 November", "24 Nov", "Nov 24", "November 24",
 [[case]]
 id = "L07"
 title = "Rate limit mid-commit: partial, wait 15 minutes"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. I run Tuesday, Wednesday,
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. I run Tuesday, Wednesday,
 Thursday, Saturday and Sunday; long run on Sunday. Show me the next three days before anything goes on my watch."""
 followups = ["Looks good. Yes, put those days on my Garmin."]
 writes = "on"
@@ -152,8 +152,8 @@ must_mention = [["when is", "what date", "race date", "which race", "date of", "
 [[case]]
 id = "L10"
 title = "The coach critic reviews, never writes"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. Israman (half) on
-2027-01-29 is a B race. I run Tuesday, Wednesday, Thursday, Saturday and Sunday; long run on Sunday. Then review it
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. A half-distance
+triathlon on 2027-02-05 is a B race. I run Tuesday, Wednesday, Thursday, Saturday and Sunday; long run on Sunday. Then review it
 critically as my coach and fix anything risky."""
 writes = "on"
 why = """The coach critic role reads the preview and may propose overrides through plan_preview; it has no say over
@@ -167,7 +167,7 @@ judge = ["no_redecide"]
 [[case]]
 id = "L11"
 title = "A declined confirmation is not retried"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. I run Tuesday, Wednesday,
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. I run Tuesday, Wednesday,
 Thursday, Saturday and Sunday; long run on Sunday. Show me the next three days before anything goes on my watch."""
 followups = ["Looks good. Yes, put those days on my Garmin."]
 writes = "declined"
@@ -185,7 +185,7 @@ must_not_mention = ["I have scheduled", "added to your Garmin calendar", "is now
 [[case]]
 id = "L12"
 title = "An unknown write outcome: plan_get before any retry"
-prompt = """Build me a training plan for the Tel Aviv Marathon on 2027-02-26, goal 3:30. I run Tuesday, Wednesday,
+prompt = """Build me a training plan for the Spring City Marathon on 2027-03-05, goal 3:52. I run Tuesday, Wednesday,
 Thursday, Saturday and Sunday; long run on Sunday. Show me the next three days before anything goes on my watch."""
 followups = ["Looks good. Yes, put those days on my Garmin."]
 writes = "on"

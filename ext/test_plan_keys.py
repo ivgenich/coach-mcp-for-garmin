@@ -22,8 +22,8 @@ import plan_writes as pw
 import test_plan_tools as tpt
 import test_plan_writes as tpw
 
-BUILT = tpt.TODAY                       # 2026-11-25, a Wednesday
-T0 = dt.datetime(2026, 11, 25, 7, 0, tzinfo=dt.timezone.utc)
+BUILT = tpt.TODAY                       # 2027-11-24, a Wednesday
+T0 = dt.datetime(2027, 11, 24, 7, 0, tzinfo=dt.timezone.utc)
 
 
 class Garmin(tpw.FakeGarmin):
@@ -138,7 +138,7 @@ class Rebuilds(unittest.TestCase):
         common = sorted(set(before) & set(after))
         self.assertTrue(common)
         self.assertEqual({d: before[d] for d in common}, {d: after[d] for d in common})
-        self.go_to(dt.date(2026, 12, 1))   # a Tuesday: the rest of this week is week 0 now
+        self.go_to(dt.date(2027, 11, 30))   # a Tuesday: the rest of this week is week 0 now
         third = self.preview()
         again = self.runs(third)
         keys = [s["key"] for w in third["weeks"] for s in w["sessions"]]
@@ -171,7 +171,7 @@ class Rebuilds(unittest.TestCase):
         first = self.preview(days=7)
         self.commit(first)
         pid = first["stored"]["plan_id"]
-        today = dt.date(2026, 12, 1)
+        today = dt.date(2027, 11, 30)
         for n, row in enumerate(self.store.write_rows(pid)):
             if row["date_local"] < today:   # done: tracking linked each past session to its run
                 self.store.put_workout(pid, {**row, "linked_activity_id": 5000 + n})
@@ -241,7 +241,7 @@ class WeekGrid(Rebuilds):
 
     def test_a_mid_week_rebuild_keeps_the_planned_week_and_writes_nothing(self):
         self.extra = {"long_run_day": "fri", "run_days": "tue,wed,thu,fri,sun", "rest_days": "mon,sat"}
-        sunday, wednesday = dt.date(2026, 11, 29), dt.date(2026, 12, 2)
+        sunday, wednesday = dt.date(2027, 11, 28), dt.date(2027, 12, 1)
         self.go_to(sunday)
         first = self.preview(days=14)
         self.assertEqual(self.week_of(first, wednesday)["week"], 1)
@@ -255,13 +255,13 @@ class WeekGrid(Rebuilds):
         self.assertEqual([o for o in ops if thu.isoformat() <= o["date"] <= sun.isoformat()], [], ops)
         self.assertEqual(ops, [], "nothing at all changed")
         friday = [s for s in self.sessions_of(second, thu, sun) if s["role"] == "long"]
-        self.assertEqual([s["date"] for s in friday], ["2026-12-04"], "the long run on Friday stays")
+        self.assertEqual([s["date"] for s in friday], ["2027-12-03"], "the long run on Friday stays")
         # the days up to today are the stored version's, and every later day of the week is as planned
         self.assertEqual(self.sessions_of(second, sunday, sun), self.sessions_of(first, sunday, sun))
 
     def test_a_plan_built_on_a_monday_rebuilt_the_next_day_writes_nothing(self):
         self.extra = {"b_races": ""}
-        monday = dt.date(2027, 2, 1)
+        monday = dt.date(2028, 1, 31)
         self.go_to(monday)
         first = self.preview(days=7)
         self.assertEqual(self.week_of(first, monday)["week"], 1)
@@ -273,9 +273,9 @@ class WeekGrid(Rebuilds):
                          self.sessions_of(first, monday, monday + dt.timedelta(days=7)))
 
     def test_the_new_version_keeps_the_past_weeks_and_todays_session(self):
-        first = self.preview(days=7)   # a Wednesday: week 0, then week 1 from Monday 30 Nov
+        first = self.preview(days=7)   # a Wednesday: week 0, then week 1 from Monday 29 Nov
         self.commit(first)
-        day = dt.date(2026, 12, 3)
+        day = dt.date(2027, 12, 2)
         self.go_to(day)
         second = self.preview()
         old = self.sessions_of(first, BUILT, day)
@@ -285,10 +285,10 @@ class WeekGrid(Rebuilds):
         self.assertEqual(second["weeks"][0], first["weeks"][0], "week 0 is history, kept whole")
 
     def test_a_new_plan_built_mid_week_starts_with_week_0(self):
-        self.go_to(dt.date(2026, 12, 2))
+        self.go_to(dt.date(2027, 12, 1))
         out = self.preview()
         self.assertEqual([(w["week"], w["kind"], w["start"]) for w in out["weeks"][:2]],
-                         [(0, "week0", "2026-11-30"), (1, out["weeks"][1]["kind"], "2026-12-07")])
+                         [(0, "week0", "2027-11-29"), (1, out["weeks"][1]["kind"], "2027-12-06")])
 
 
 class UnscheduleFirst(tpw.Base):
@@ -344,7 +344,7 @@ class UnscheduleFirst(tpw.Base):
         later = tpw.TODAY + dt.timedelta(days=4)
         with self.garmin.lock:
             self.garmin.library[701] = {"workoutId": 701, "workoutName": "Coach Easy",
-                                        "description": f"coach-mcp {tag} {pid} 20261205-run h12345678"}
+                                        "description": f"coach-mcp {tag} {pid} 20271204-run h12345678"}
             self.garmin.calendar.append({"workoutId": 701, "scheduleDate": later.isoformat(),
                                          "scheduledWorkoutId": 7011, "workoutName": "Coach Easy",
                                          "workoutType": "running"})
@@ -408,15 +408,15 @@ class KeyShape(unittest.TestCase):
                     self.assertTrue(ps.key_ok(s["key"], retired=False))
 
     def test_key_checks(self):
-        for good in ("20261206-run", "20270226-race", "20270129-b", "20240229-run"):
+        for good in ("20271205-run", "20280225-race", "20280128-b", "20240229-run"):
             self.assertTrue(ps.key_ok(good, retired=False), good)
-        self.assertTrue(ps.key_ok("20261206-run~0123abcd"))
-        self.assertTrue(ps.key_ok("20261206-run~0123abcd-2"))
-        for bad in ("20261206-run~0123abcd", "20261306-run", "20250229-run", "20261206-long", "w03-long", "",
-                    "2026-12-06-run", None, 20261206):
+        self.assertTrue(ps.key_ok("20271205-run~0123abcd"))
+        self.assertTrue(ps.key_ok("20271205-run~0123abcd-2"))
+        for bad in ("20271205-run~0123abcd", "20261306-run", "20250229-run", "20271205-long", "w03-long", "",
+                    "2027-12-05-run", None, 20261206):
             self.assertFalse(ps.key_ok(bad, retired=False), bad)
         with self.assertRaises(ValueError):
-            pe.session_key(dt.date(2026, 12, 6), "long")
+            pe.session_key(dt.date(2027, 12, 5), "long")
 
 
 class Windows(tpw.Base):
@@ -463,17 +463,17 @@ class OursById(unittest.TestCase):
     """A calendar workout is the plan's own by its Garmin workout id, never by its name: the user's own hard
     session named "Coach ..." counts for spacing and calendar_changed."""
 
-    ENTRY = {"scheduleDate": "2026-12-16", "workoutName": "Coach VO2 intervals", "workoutType": "running",
+    ENTRY = {"scheduleDate": "2027-12-15", "workoutName": "Coach VO2 intervals", "workoutType": "running",
              "estimatedDurationInSecs": 3600, "isRestDay": False, "workoutId": 4711}
 
     def test_fixed_sessions_count_a_users_workout_named_coach(self):
-        athlete = {"lt_speed_mps": 3.85, "lt_hr": None, "ftp_w": None}
-        ours = dict(self.ENTRY, workoutId=4712, scheduleDate="2026-12-18")
+        athlete = {"lt_speed_mps": 3.55, "lt_hr": None, "ftp_w": None}
+        ours = dict(self.ENTRY, workoutId=4712, scheduleDate="2027-12-17")
         fixed = pt.fixed_sessions([self.ENTRY, ours], athlete, own_ids={4712})
-        self.assertEqual([f.date.isoformat() for f in fixed], ["2026-12-16"])
+        self.assertEqual([f.date.isoformat() for f in fixed], ["2027-12-15"])
 
     def test_calendar_changed_sees_a_users_workout_named_coach(self):
-        ops = [{"op": "create", "date": "2026-12-17", "hard_or_long": True}]
+        ops = [{"op": "create", "date": "2027-12-16", "hard_or_long": True}]
         payload = {"fixed_hard": [], "lt_speed_mps": None}
         entry = dict(self.ENTRY, workoutName="Coach Long run", estimatedDistanceInMeters=30000)
         self.assertTrue(pw._calendar_changed(ops, [entry], set(), payload))

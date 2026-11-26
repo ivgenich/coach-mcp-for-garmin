@@ -288,7 +288,7 @@ STATUSES = (None, "done", "done_early", "done_late", "partial", "partial_late", 
 
 @st.composite
 def review_case(draw: Any) -> Tuple[Dict[str, Any], dt.date, dt.date, Any, Any, Any, Any, pr.Health]:
-    body = stored(draw(st.sampled_from(("beginner15", "owner40", "runner60", "no_lt"))),
+    body = stored(draw(st.sampled_from(("beginner15", "club40", "runner60", "no_lt"))),
                   draw(st.sampled_from((0, 5, 12))), draw(st.integers(0, 2)))
     sessions = pr.sessions_of(body)
     first = pe.monday(min(s.date for s in sessions))

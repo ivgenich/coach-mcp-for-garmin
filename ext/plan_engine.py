@@ -3610,19 +3610,19 @@ def sample_loads(today: dt.date, week_m: Sequence[float], *, garmin_gap: float =
     return tuple(acts), tuple(garmin)
 
 
-def sample_snapshot(today: dt.date = dt.date(2026, 11, 25)) -> Snapshot:
+def sample_snapshot(today: dt.date = dt.date(2027, 11, 24)) -> Snapshot:
     weeks = tuple(Meters(m) for m in (36000.0, 41000.0, 38000.0, 44000.0, 39000.0, 42000.0, 37000.0, 42000.0))
     acts, garmin = sample_loads(today, weeks)
     return Snapshot(today=today, week_m=weeks, week_runs=(4, 5, 4, 5, 4, 5, 4, 5),
-                    longest_run_8w_m=Meters(20900.0), lt_speed_mps=MetersPerSecond(3.85),
-                    prediction_s=(("marathon", 3 * 3600 + 35 * 60), ("half", 3600 + 42 * 60)),
+                    longest_run_8w_m=Meters(19600.0), lt_speed_mps=MetersPerSecond(3.55),
+                    prediction_s=(("marathon", 3 * 3600 + 57 * 60), ("half", 3600 + 53 * 60)),
                     activity_load=acts, garmin_load=garmin)
 
 
 def selfcheck() -> None:
     """A sample plan (marathon with a B race) builds, is deterministic and passes every invariant."""
-    inputs = PlanInputs(race_date=dt.date(2027, 2, 26), goal_time_s=3 * 3600 + 30 * 60,
-                        b_races=(BRace(dt.date(2027, 1, 29), "tri_half"),))
+    inputs = PlanInputs(race_date=dt.date(2028, 2, 25), goal_time_s=3 * 3600 + 52 * 60,
+                        b_races=(BRace(dt.date(2028, 1, 28), "tri_half"),))
     a = build_plan(inputs, sample_snapshot(), what_if_runs=False)
     b = build_plan(inputs, sample_snapshot(), what_if_runs=False)
     if a["content_hash"] != b["content_hash"]:

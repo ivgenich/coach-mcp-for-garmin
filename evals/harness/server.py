@@ -245,7 +245,7 @@ def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S, history="off",
     plans.TRACKED_PLAN; "drafted" the same with that plan a draft only (plan_activate starts it); "reviewed" the same over plans.REVIEWED_PLAN with feedback stored (the weekly review).
     writes (needs plan="memory"): "on", "declined" or "committed" serves the real plan_commit and plan_cancel
     as PLAN_WRITES=on does (plans.py: "declined" declines every confirmation form, "committed" has the next 7 days
-    of the Tel Aviv plan on Garmin before the first call).
+    of the marathon plan on Garmin before the first call).
     Yields a Server: .tools, .instructions, .call(name, args), .calls."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")

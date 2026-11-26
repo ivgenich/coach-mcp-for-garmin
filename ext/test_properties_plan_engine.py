@@ -377,11 +377,11 @@ class AcwrProperties(unittest.TestCase):
         self.assertEqual(a["acwr"], b["acwr"])
 
 
-# --- owner-like plans: a travel gap, a B race, easy overrides (the owner's test of 2026-11-26) -------------------
+# --- travel-gap plans: a travel gap, a B race, easy overrides (a real-data test of 2026-11-26) ------------------
 
 @st.composite
 def owner_like_case(draw):
-    """Owner-like inputs: 4 run days with the long run on one, a marathon in 10-16 weeks with a B race, a travel
+    """Travel-gap inputs: 4 run days with the long run on one, a marathon in 10-16 weeks with a B race, a travel
     gap (blocked dates, often a week, and sometimes a gap in the recorded history too), a load model that
     tracks Garmin, and 0-3 easy overrides drawn from the plan's own sessions (the property draws them)."""
     today = TODAY + dt.timedelta(days=draw(st.integers(0, 6)))
@@ -534,7 +534,7 @@ def pace_case(draw):
 
 @unittest.skipUnless(HAVE_HYPOTHESIS, NEEDS_HYPOTHESIS)
 class PaceProperties(unittest.TestCase):
-    """Marathon pace, the anchored bands and the half's projection (the owner's real-data test, 2026-11-26)."""
+    """Marathon pace, the anchored bands and the half's projection (a real-data test, 2026-11-26)."""
 
     @settings(**PACE_PROPS)
     @given(pace_case())

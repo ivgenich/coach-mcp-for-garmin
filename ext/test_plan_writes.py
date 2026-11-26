@@ -226,7 +226,7 @@ class Base(unittest.TestCase):
 
     def preview(self, sessions=None, plan_id=None, content="a", days=14, fixed=(), lt=None):
         answer = plan_answer(sessions if sessions is not None else default_sessions(), content)
-        pid, version, changed = self.store.save_preview(self.fp, plan_id, dt.date(2027, 2, 26), 1, {"x": 1}, answer,
+        pid, version, changed = self.store.save_preview(self.fp, plan_id, dt.date(2027, 3, 5), 1, {"x": 1}, answer,
                                                         answer["content_hash"])
         snap = types.SimpleNamespace(fixed=fixed, lt_speed_mps=lt)
         commit = pw.commit_section(self.store, answer, snap, {"plan_id": pid, "version": version}, TODAY, days,
@@ -1154,7 +1154,7 @@ class ServedWithContext(unittest.TestCase):
         tools = {t.name: t for t in asyncio.run(app.list_tools())}
         self.assertEqual(set(tools["plan_commit"].input_schema["properties"]), {"plan_id", "commit_token"})
         self.assertEqual(set(tools["plan_cancel"].input_schema["properties"]), {"plan_id", "cancel_token"})
-        pid, version, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 2, 26), 1, {}, {}, "a" * 64)
+        pid, version, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 3, 5), 1, {}, {}, "a" * 64)
         token, _ = store.issue_token(pid, version, "commit", {"ops": [
             {"op": "create", "key": "20261202-run", "date": "2026-12-02", "role": "easy"}]})
         result = asyncio.run(app.call_tool("plan_commit", {"plan_id": pid, "commit_token": token}))
@@ -1204,7 +1204,7 @@ class Tokens(unittest.TestCase):
         clock = Clock()
         store = ps.MemoryPlanStore(clock=clock)
         fp = store.account_fp(1)
-        pid, version, _ = store.save_preview(fp, None, dt.date(2027, 2, 26), 1, {}, {"a": 1}, "a" * 64)
+        pid, version, _ = store.save_preview(fp, None, dt.date(2027, 3, 5), 1, {}, {"a": 1}, "a" * 64)
         token, expires = store.issue_token(pid, version, "commit", {"ops": []})
         self.assertRegex(token, r"^ct1\.[A-Za-z0-9_-]{32}$")
         self.assertEqual(expires, T0 + dt.timedelta(minutes=30))
@@ -1231,7 +1231,7 @@ class Tokens(unittest.TestCase):
 
     def test_workout_rows_are_checked(self):
         store = ps.MemoryPlanStore()
-        pid, _, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 2, 26), 1, {}, {}, "a" * 64)
+        pid, _, _ = store.save_preview(store.account_fp(1), None, dt.date(2027, 3, 5), 1, {}, {}, "a" * 64)
         good = {"workout_key": "20261202-run", "version": 1, "date_local": TODAY, "role": "easy", "dto_hash": "b" * 64,
                 "state": "pending"}
         store.put_workout(pid, good)

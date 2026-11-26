@@ -18,7 +18,7 @@ import plan_tools as pt
 import plan_tracking as tr
 
 UTC = dt.timezone.utc
-RACE = dt.date(2027, 2, 26)
+RACE = dt.date(2027, 3, 5)
 WEEK1 = dt.date(2026, 11, 30)
 WEEK2 = dt.date(2026, 12, 7)
 WEEK3 = dt.date(2026, 12, 14)

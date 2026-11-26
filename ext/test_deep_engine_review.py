@@ -307,7 +307,7 @@ class Apply(unittest.TestCase):
     BUILT = D(2026, 11, 25)
 
     def setUp(self) -> None:
-        snap = snapshot(self.BUILT, PROFILES["owner40"], loads={})
+        snap = snapshot(self.BUILT, PROFILES["club40"], loads={})
         self.inputs = pe.PlanInputs(race_date=D(2027, 3, 21), goal_time_s=12600,
                                     b_races=(pe.BRace(D(2027, 1, 16), "tri_half"),))
         self.body = stored(self.inputs, snap)
@@ -405,7 +405,7 @@ class Apply(unittest.TestCase):
         # lower the later long runs (long_step) and tip an 80%-easy week, which refuses the change; without
         # predictions too: the easy band from the marathon prediction tips that week the same way
         self.body = stored(dataclasses.replace(self.inputs, b_races=()),
-                           snapshot(self.BUILT, PROFILES["owner40"], loads={}, predictions=()))
+                           snapshot(self.BUILT, PROFILES["club40"], loads={}, predictions=()))
         nxt = D(2026, 12, 14)
         today = nxt + dt.timedelta(days=3)   # Thursday
         nw = next(w for w in self.body["weeks"] if w["start"] == nxt.isoformat())

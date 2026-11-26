@@ -420,7 +420,7 @@ CASES = {
                       "xt1." + TOKEN_BODY[:31] + "+", "XT1." + TOKEN_BODY)),
     "apply_token": (("at1." + TOKEN_BODY,),
                     ("", "ct1." + TOKEN_BODY, "xt1." + TOKEN_BODY, "at1." + TOKEN_BODY[:31], "at1." + TOKEN_BODY[:31] + ".")),
-    "workout_key": (("20261206-run", "20270226-race", "20270129-b", "20261130-run"),
+    "workout_key": (("20261206-run", "20270305-race", "20270205-b", "20261130-run"),
                     ("w03-long", "2026126-run", "202612060-run", "20261206-", "20261206-long", "20261206-RUN",
                      "20261206_run", "20261206-ru n", "20261206-run\n", "20261206-run~0123abcd", "", "x0261206-run",
                      "2026-12-06-run", 20261206)),

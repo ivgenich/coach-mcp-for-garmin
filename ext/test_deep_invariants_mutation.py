@@ -40,7 +40,7 @@ WORK = (pe.Meters(6000.0), pe.Meters(2000.0))   # a quality session's work and r
 
 
 def _blocked_g1() -> pe.PlanInputs:
-    return dataclasses.replace(GOLDEN["G1"]["inputs"], blocked_dates=(D(2027, 1, 6),))
+    return dataclasses.replace(GOLDEN["G1"]["inputs"], blocked_dates=(D(2028, 1, 5),))
 
 
 CASES = {
@@ -140,22 +140,22 @@ ENGINE_INVARIANTS = ("growth_cap", "no_makeup", "deload_cadence", "deload_depth"
 class Volume(Mutation):
     def test_growth_cap_g1_easy_run_pushes_the_week_over_8_percent(self):
         plan = self.start("G1", "growth_cap")
-        remake(plan, "20270106-run", add_km=10)   # week 6 follows normal week 5
+        remake(plan, "20280105-run", add_km=10)   # week 6 follows normal week 5
         self.caught(plan, "growth_cap")
 
     def test_growth_cap_g4_easy_run_pushes_the_week_over_8_percent(self):
         plan = self.start("G4", "growth_cap")
-        remake(plan, "20261209-run", add_km=8)
+        remake(plan, "20271208-run", add_km=8)
         self.caught(plan, "growth_cap")
 
     def test_no_makeup_g1_week_after_the_deload_makes_up_its_km(self):
         plan = self.start("G1", "no_makeup")
-        remake(plan, "20261230-run", add_km=12)   # week 5 follows deload week 4
+        remake(plan, "20271229-run", add_km=12)   # week 5 follows deload week 4
         self.caught(plan, "no_makeup")
 
     def test_no_makeup_g4_week_after_the_deload_makes_up_its_km(self):
         plan = self.start("G4", "no_makeup")
-        remake(plan, "20270127-run", add_km=12)   # week 9 follows deload week 8
+        remake(plan, "20280126-run", add_km=12)   # week 9 follows deload week 8
         self.caught(plan, "no_makeup")
 
     def test_deload_cadence_g4_deload_relabelled_normal(self):
@@ -170,80 +170,80 @@ class Volume(Mutation):
 
     def test_deload_depth_g1_deload_week_at_full_volume(self):
         plan = self.start("G1", "deload_depth")
-        remake(plan, "20261223-run", add_km=10)
+        remake(plan, "20271222-run", add_km=10)
         self.caught(plan, "deload_depth")
 
     def test_deload_depth_g4_deload_week_at_full_volume(self):
         plan = self.start("G4", "deload_depth")
-        remake(plan, "20270120-run", add_km=12)
+        remake(plan, "20280119-run", add_km=12)
         self.caught(plan, "deload_depth")
 
     def test_peak_ceiling_g4_peak_week_over_the_ceiling(self):
         plan = self.start("G4", "peak_ceiling")
-        remake(plan, "20270224-run", add_km=10)   # week 13 is at the 73 km ceiling
+        remake(plan, "20280223-run", add_km=10)   # week 13 is at the 73 km ceiling
         self.caught(plan, "peak_ceiling")
 
     def test_peak_ceiling_g1_peak_week_over_the_ceiling(self):
         plan = self.start("G1", "peak_ceiling")
-        remake(plan, "20270210-run", add_km=10)   # week 11 is at the 65 km ceiling
+        remake(plan, "20280209-run", add_km=10)   # week 11 is at the 65 km ceiling
         self.caught(plan, "peak_ceiling")
 
 
 class LongRuns(Mutation):
     def test_long_cap_g1_long_run_5_km_over_its_cap(self):
         plan = self.start("G1", "long_cap")
-        remake(plan, "20270110-run", add_km=5)
+        remake(plan, "20280109-run", add_km=5)
         self.caught(plan, "long_cap")
 
     def test_long_cap_g4_long_run_over_max_long_km_only(self):
         plan = self.start("G4", "long_cap")
-        remake(plan, "20270131-run", km=33.5)   # 32 km max_long_km; the 2 km step (34 km) still allows it
+        remake(plan, "20280130-run", km=33.5)   # 32 km max_long_km; the 2 km step (34 km) still allows it
         self.caught(plan, "long_cap")
 
     def test_long_step_g1_long_run_3_km_over_the_longest_so_far(self):
         plan = self.start("G1", "long_step")
-        remake(plan, "20261213-run", km=21.6 + 3)   # week 1's 21.6 km is the longest before it
+        remake(plan, "20271212-run", km=21.6 + 3)   # week 1's 21.6 km is the longest before it
         self.caught(plan, "long_step")
 
     def test_long_step_g4_deload_long_run_over_the_peak_long_run(self):
         plan = self.start("G4", "long_step")
-        remake(plan, "20270124-run", km=34.0)   # a reduced week's long run above every normal week's
+        remake(plan, "20280123-run", km=34.0)   # a reduced week's long run above every normal week's
         self.caught(plan, "long_step")
 
     # Was a known gap (long_step compared with the longest long run so far): the step now counts from the
     # last normal week's long run as placed, so a 39% jump after a short week is caught.
     def test_long_step_g4_39_percent_jump_after_a_travel_gap_week(self):
         plan = self.start("G4", "long_step")
-        remake(plan, "20270207-run", km=23.0)   # a short week (travel): long run 23 km
-        self.assertAlmostEqual(session(plan, "20270214-run").distance / 23000.0, 32.0 / 23.0)   # +39% next week
+        remake(plan, "20280206-run", km=23.0)   # a short week (travel): long run 23 km
+        self.assertAlmostEqual(session(plan, "20280213-run").distance / 23000.0, 32.0 / 23.0)   # +39% next week
         self.caught(plan, "long_step")
 
     def test_peak_long_timing_g1_long_run_in_the_last_21_days(self):
         plan = self.start("G1", "peak_long_timing")
-        remake(plan, "20270221-run", km=30.0)   # 5 days before the race
+        remake(plan, "20280220-run", km=30.0)   # 5 days before the race
         self.caught(plan, "peak_long_timing")
 
     def test_peak_long_timing_g4_long_run_in_the_last_21_days(self):
         plan = self.start("G4", "peak_long_timing")
-        remake(plan, "20270307-run", km=32.0)   # 12 days before the race
+        remake(plan, "20280305-run", km=32.0)   # 12 days before the race
         self.caught(plan, "peak_long_timing")
 
     def test_peak_long_timing_g1_long_run_inside_the_b_window(self):
         plan = self.start("G1", "peak_long_timing")
-        remake(plan, "20270131-run", role="long", km=16.0)   # the day after the recovery starts
+        remake(plan, "20280130-run", role="long", km=16.0)   # the day after the recovery starts
         self.caught(plan, "peak_long_timing")
 
 
 class Intensity(Mutation):
     def test_easy_share_g1_easy_runs_turned_threshold(self):
         plan = self.start("G1", "easy_share")
-        for key in ("20270106-run", "20270109-run"):
+        for key in ("20280105-run", "20280108-run"):
             remake(plan, key, role="threshold")
         self.caught(plan, "easy_share")
 
     def test_easy_share_g4_easy_runs_turned_threshold(self):
         plan = self.start("G4", "easy_share")
-        for key in ("20270203-run", "20270206-run"):
+        for key in ("20280202-run", "20280205-run"):
             remake(plan, key, role="threshold")
         self.caught(plan, "easy_share")
 
@@ -263,44 +263,44 @@ class Intensity(Mutation):
 
     def test_no_adjacent_hard_g1_threshold_the_day_before_the_long_run(self):
         plan = self.start("G1", "no_adjacent_hard")
-        remake(plan, "20270109-run", role="threshold")   # Saturday, long run on Sunday
+        remake(plan, "20280108-run", role="threshold")   # Saturday, long run on Sunday
         self.caught(plan, "no_adjacent_hard")
 
     def test_no_adjacent_hard_g4_threshold_the_day_after_intervals(self):
         plan = self.start("G4", "no_adjacent_hard")
-        remake(plan, "20270113-run", role="threshold")   # Wednesday between Tuesday's and Thursday's quality
+        remake(plan, "20280112-run", role="threshold")   # Wednesday between Tuesday's and Thursday's quality
         self.caught(plan, "no_adjacent_hard")
 
     def test_no_adjacent_hard_g5_threshold_next_to_a_fixed_hard_session(self):
         plan = self.start("G5", "no_adjacent_hard")
-        remake(plan, "20261217-run", role="threshold")   # Thu 17 Dec, the fixed hard run is on Wed 16 Dec
+        remake(plan, "20271216-run", role="threshold")   # Thu 16 Dec, the fixed hard run is on Wed 15 Dec
         self.caught(plan, "no_adjacent_hard")
 
     def test_no_adjacent_hard_g1_threshold_the_day_after_the_b_race(self):
         plan = self.start("G1", "no_adjacent_hard")
-        remake(plan, "20270130-run", role="threshold")   # Sat 30 Jan, Israman on Fri 29 Jan
+        remake(plan, "20280129-run", role="threshold")   # Sat 29 Jan, the B race on Fri 28 Jan
         self.caught(plan, "no_adjacent_hard")
 
     def test_no_adjacent_hard_g1_threshold_the_day_before_the_a_race(self):
         plan = self.start("G1", "no_adjacent_hard")
-        remake(plan, "20270225-run", role="threshold")
+        remake(plan, "20280224-run", role="threshold")
         self.caught(plan, "no_adjacent_hard")
 
     def test_bands_match_roles_g1_threshold_step_in_an_easy_run(self):
         plan = self.start("G1", "bands_match_roles")
-        s = session(plan, "20270106-run")
+        s = session(plan, "20280105-run")
         s.steps = (dataclasses.replace(s.steps[0], band="threshold"),)
         self.caught(plan, "bands_match_roles")
 
     def test_bands_match_roles_g4_easy_work_in_a_threshold_session(self):
         plan = self.start("G4", "bands_match_roles")
-        s = session(plan, "20261229-run")
+        s = session(plan, "20271228-run")
         s.steps = tuple(_rebanded(st, "easy") for st in s.steps)
         self.caught(plan, "bands_match_roles")
 
     def test_bands_match_roles_g1_mp_step_in_a_long_run(self):
         plan = self.start("G1", "bands_match_roles")
-        s = session(plan, "20270110-run")
+        s = session(plan, "20280109-run")
         s.steps = (dataclasses.replace(s.steps[0], band="mp"),)
         self.caught(plan, "bands_match_roles")
 
@@ -313,113 +313,113 @@ class Intensity(Mutation):
 
     def test_last_quality_g1_threshold_two_days_before_the_race(self):
         plan = self.start("G1", "last_quality")
-        remake(plan, "20270224-run", role="threshold")   # Wed 24 Feb, race Fri 26 Feb
+        remake(plan, "20280223-run", role="threshold")   # Wed 23 Feb, race Fri 25 Feb
         self.caught(plan, "last_quality")
 
     def test_last_quality_g4_threshold_two_days_before_the_race(self):
         plan = self.start("G4", "last_quality")
-        remake(plan, "20270317-run", role="threshold")   # Wed 17 Mar, race Fri 19 Mar
+        remake(plan, "20280315-run", role="threshold")   # Wed 15 Mar, race Fri 17 Mar
         self.caught(plan, "last_quality")
 
 
 class Calendar(Mutation):
     def test_rest_days_g1_run_moved_to_a_monday(self):
         plan = self.start("G1", "rest_days")
-        remake(plan, "20270106-run", date=D(2027, 1, 4))
+        remake(plan, "20280105-run", date=D(2028, 1, 3))
         self.caught(plan, "rest_days")
 
     def test_rest_days_g4_run_moved_to_a_friday(self):
         plan = self.start("G4", "rest_days")
-        remake(plan, "20270109-run", date=D(2027, 1, 8))
+        remake(plan, "20280108-run", date=D(2028, 1, 7))
         self.caught(plan, "rest_days")
 
     def test_rest_days_g1_run_on_a_blocked_date(self):
         plan = self.start("G1-blocked", "rest_days")
-        self.assertFalse([s for w in plan["_check"]["weeks"] for s in w.sessions if s.date == D(2027, 1, 6)])
-        add(plan, 6, pe.session_key(D(2027, 1, 6)), D(2027, 1, 6), "easy", 5.0)
+        self.assertFalse([s for w in plan["_check"]["weeks"] for s in w.sessions if s.date == D(2028, 1, 5)])
+        add(plan, 6, pe.session_key(D(2028, 1, 5)), D(2028, 1, 5), "easy", 5.0)
         self.caught(plan, "rest_days")
 
     def test_one_run_per_day_g1_second_run_on_a_day(self):
         plan = self.start("G1", "one_run_per_day")
-        add(plan, 6, pe.session_key(D(2027, 1, 6)), D(2027, 1, 6), "easy", 5.0)   # an easy run is already on Wed 6 Jan
+        add(plan, 6, pe.session_key(D(2028, 1, 5)), D(2028, 1, 5), "easy", 5.0)   # an easy run is already on Wed 5 Jan
         self.caught(plan, "one_run_per_day")
 
     def test_one_run_per_day_g4_second_run_on_a_day(self):
         plan = self.start("G4", "one_run_per_day")
-        remake(plan, "20270109-run", date=D(2027, 1, 6))   # onto the Wednesday easy run's day
+        remake(plan, "20280108-run", date=D(2028, 1, 5))   # onto the Wednesday easy run's day
         self.caught(plan, "one_run_per_day")
 
     def test_one_run_per_day_g5_run_on_the_fixed_run_day(self):
         plan = self.start("G5", "one_run_per_day")
-        remake(plan, "20261215-run", date=D(2026, 12, 16))   # the fixed TrainingPeaks run
+        remake(plan, "20271214-run", date=D(2027, 12, 15))   # the fixed TrainingPeaks run
         self.caught(plan, "one_run_per_day")
 
 
 class BRaceAndTaper(Mutation):
     def test_b_windows_g1_long_run_inside_the_b_window(self):
         plan = self.start("G1", "b_windows")
-        remake(plan, "20270131-run", role="long", km=16.0)
+        remake(plan, "20280130-run", role="long", km=16.0)
         self.caught(plan, "b_windows")
 
     def test_b_windows_g1_quality_in_the_mini_taper(self):
         plan = self.start("G1", "b_windows")
-        remake(plan, "20270126-run", role="threshold")
+        remake(plan, "20280125-run", role="threshold")
         self.caught(plan, "b_windows")
 
     def test_b_windows_g1_easy_run_over_the_mini_taper_cap(self):
         plan = self.start("G1", "b_windows")
-        remake(plan, "20270126-run", role="easy", km=12.0)   # Tue 26 Jan, in the mini-taper before Israman
+        remake(plan, "20280125-run", role="easy", km=12.0)   # Tue 25 Jan, in the mini-taper before the B race
         self.caught(plan, "b_windows")
 
     def test_b_windows_g1_long_run_too_soon_after_the_b_race(self):
         plan = self.start("G1", "b_windows")
-        remake(plan, "20270202-run", date=D(2027, 2, 7))   # the long run's Sunday and Tuesday change places:
-        remake(plan, "20270207-run", date=D(2027, 2, 2))   # 4 days after Israman
+        remake(plan, "20280201-run", date=D(2028, 2, 6))   # the long run's Sunday and Tuesday change places:
+        remake(plan, "20280206-run", date=D(2028, 2, 1))   # 4 days after the B race
         self.caught(plan, "b_windows")
 
     def test_a_taper_g1_taper_week_at_full_volume(self):
         plan = self.start("G1", "a_taper")
-        remake(plan, "20270217-run", add_km=15)
+        remake(plan, "20280216-run", add_km=15)
         self.caught(plan, "a_taper")
 
     def test_a_taper_g4_race_week_at_full_volume(self):
         plan = self.start("G4", "a_taper")
-        remake(plan, "20270317-run", add_km=15)
+        remake(plan, "20280315-run", add_km=15)
         self.caught(plan, "a_taper")
 
 
 class Acwr(Mutation):
     def test_acwr_cap_g5_easy_run_raises_a_free_weeks_ratio(self):
         plan = self.start("G5", "acwr_cap")
-        remake(plan, "20270116-run", km=14.0)
+        remake(plan, "20280115-run", km=14.0)
         self.caught(plan, "acwr_cap")
 
     def test_acwr_cap_g1_easy_run_raises_a_free_weeks_ratio(self):
         plan = self.start("G1", "acwr_cap")
-        remake(plan, "20270210-run", add_km=25)   # week 11 is neither held nor at its floor
+        remake(plan, "20280209-run", add_km=25)   # week 11 is neither held nor at its floor
         self.caught(plan, "acwr_cap")
 
     # Was a known gap (check_acwr skipped held weeks): a held day is exempt only while nothing is left to cut.
     def test_acwr_cap_g1_ratio_raising_day_in_a_held_week(self):
         plan = self.start("G1", "acwr_cap")
         self.assertTrue(week(plan, 9).acwr_held)
-        remake(plan, "20270126-run", add_km=6)   # Tue 26 Jan, the mini-taper before Israman
+        remake(plan, "20280125-run", add_km=6)   # Tue 25 Jan, the mini-taper before the B race
         self.caught(plan, "acwr_cap")
 
     # As above, G5's held week 3 (the heavy TrainingPeaks week).
     def test_acwr_cap_g5_ratio_raising_day_in_a_held_week(self):
         plan = self.start("G5", "acwr_cap")
         self.assertTrue(week(plan, 3).acwr_held)
-        remake(plan, "20261220-run", add_km=10)
+        remake(plan, "20271219-run", add_km=10)
         self.caught(plan, "acwr_cap")
 
     # Was a known gap (a plain ok while not enforced): the entry now says not_enforced.
     def test_acwr_cap_g4_not_enforced_ratio_far_over_the_cap(self):
         plan = self.start("G4", "acwr_cap")
-        remake(plan, "20270203-run", add_km=25)
+        remake(plan, "20280202-run", add_km=25)
         ctx = plan["_check"]["ctx"]
         loads = pe.day_loads(plan["_check"]["weeks"], ctx)
-        top = max(pe.acwr_on(D(2027, 2, 3) + dt.timedelta(days=i), loads, ctx.rules) or 0.0 for i in range(5))
+        top = max(pe.acwr_on(D(2028, 2, 2) + dt.timedelta(days=i), loads, ctx.rules) or 0.0 for i in range(5))
         self.assertGreater(top, float(ctx.rules["acwr"]["max"]))
         entry = results(plan)["acwr_cap"]
         self.assertTrue(entry["ok"] is not True or _says_not_enforced(entry), entry)

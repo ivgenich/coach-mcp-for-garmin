@@ -264,8 +264,8 @@ def selfcheck() -> None:
         raise RuntimeError("plan_dto: upstream KNOWN_TARGET_TYPE_IDS changed")
     import datetime as dt
 
-    inputs = pe.PlanInputs(race_date=dt.date(2027, 2, 26), goal_time_s=3 * 3600 + 30 * 60,
-                           b_races=(pe.BRace(dt.date(2027, 1, 29), "tri_half"),))
+    inputs = pe.PlanInputs(race_date=dt.date(2028, 2, 25), goal_time_s=3 * 3600 + 52 * 60,
+                           b_races=(pe.BRace(dt.date(2028, 1, 28), "tri_half"),))
     snap = pe.sample_snapshot()
     plan = pe.plan_answer(pe.build_plan(inputs, snap, what_if_runs=False))
     failed = [c for c in check_plan(plan, snap.lt_speed_mps) if not c["ok"]]

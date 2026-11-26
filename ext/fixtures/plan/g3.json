@@ -34,7 +34,7 @@
    }
   },
   "b_races": [],
-  "content_hash": "beeb443cd99c9c5548fd69028c96e4568252e0027431575b37747b0ca7c42ae3",
+  "content_hash": "612d7befb7922462cbee21ba4cc92f36247b3e540fab766648688a2e9d3ae929",
   "feasibility": {
    "checks": [
     {
@@ -101,7 +101,7 @@
    "max_long_km": 32.0,
    "overrides": [],
    "quality_per_week": 2,
-   "race_date": "2026-12-31",
+   "race_date": "2027-12-30",
    "race_distance": "half",
    "rest_days": [
     "mon",
@@ -152,7 +152,7 @@
    "refused": []
   },
   "race": {
-   "date": "2026-12-31",
+   "date": "2027-12-30",
    "distance": "half",
    "goal_time": "1:45:00",
    "marathon_pace": "4:59"
@@ -177,16 +177,16 @@
   ],
   "weeks": [
    {
-    "end": "2026-11-29",
+    "end": "2027-11-28",
     "kind": "week0",
     "long_km": null,
     "phase": "base",
     "planned_km": 19.2,
     "sessions": [
      {
-      "date": "2026-11-26",
+      "date": "2027-11-25",
       "hard_or_long": false,
-      "key": "20261126-run",
+      "key": "20271125-run",
       "km": 6.4,
       "minutes": 38,
       "pace": "5:43-6:16",
@@ -206,9 +206,9 @@
       "weekday": "thu"
      },
      {
-      "date": "2026-11-28",
+      "date": "2027-11-27",
       "hard_or_long": false,
-      "key": "20261128-run",
+      "key": "20271127-run",
       "km": 6.4,
       "minutes": 38,
       "pace": "5:43-6:16",
@@ -228,9 +228,9 @@
       "weekday": "sat"
      },
      {
-      "date": "2026-11-29",
+      "date": "2027-11-28",
       "hard_or_long": false,
-      "key": "20261129-run",
+      "key": "20271128-run",
       "km": 6.4,
       "minutes": 38,
       "pace": "5:43-6:16",
@@ -250,21 +250,21 @@
       "weekday": "sun"
      }
     ],
-    "start": "2026-11-23",
+    "start": "2027-11-22",
     "target_km": 19.2,
     "week": 0
    },
    {
-    "end": "2026-12-06",
+    "end": "2027-12-05",
     "kind": "normal",
     "long_km": 17.4,
     "phase": "base",
     "planned_km": 34.5,
     "sessions": [
      {
-      "date": "2026-12-01",
+      "date": "2027-11-30",
       "hard_or_long": false,
-      "key": "20261201-run",
+      "key": "20271130-run",
       "km": 4.2,
       "minutes": 24,
       "pace": "5:43-6:16",
@@ -303,9 +303,9 @@
       "weekday": "tue"
      },
      {
-      "date": "2026-12-02",
+      "date": "2027-12-01",
       "hard_or_long": false,
-      "key": "20261202-run",
+      "key": "20271201-run",
       "km": 4.3,
       "minutes": 26,
       "pace": "5:43-6:16",
@@ -325,9 +325,9 @@
       "weekday": "wed"
      },
      {
-      "date": "2026-12-03",
+      "date": "2027-12-02",
       "hard_or_long": false,
-      "key": "20261203-run",
+      "key": "20271202-run",
       "km": 4.3,
       "minutes": 26,
       "pace": "5:43-6:16",
@@ -347,9 +347,9 @@
       "weekday": "thu"
      },
      {
-      "date": "2026-12-05",
+      "date": "2027-12-04",
       "hard_or_long": false,
-      "key": "20261205-run",
+      "key": "20271204-run",
       "km": 4.3,
       "minutes": 26,
       "pace": "5:43-6:16",
@@ -369,9 +369,9 @@
       "weekday": "sat"
      },
      {
-      "date": "2026-12-06",
+      "date": "2027-12-05",
       "hard_or_long": true,
-      "key": "20261206-run",
+      "key": "20271205-run",
       "km": 17.4,
       "minutes": 103,
       "pace": "5:35-6:16",
@@ -391,21 +391,21 @@
       "weekday": "sun"
      }
     ],
-    "start": "2026-11-30",
+    "start": "2027-11-29",
     "target_km": 34.8,
     "week": 1
    },
    {
-    "end": "2026-12-13",
+    "end": "2027-12-12",
     "kind": "normal",
     "long_km": 13.9,
     "phase": "base",
     "planned_km": 37.6,
     "sessions": [
      {
-      "date": "2026-12-08",
+      "date": "2027-12-07",
       "hard_or_long": true,
-      "key": "20261208-run",
+      "key": "20271207-run",
       "km": 7.8,
       "minutes": 41,
       "pace": "4:09-4:24",
@@ -453,9 +453,9 @@
       "weekday": "tue"
      },
      {
-      "date": "2026-12-09",
+      "date": "2027-12-08",
       "hard_or_long": false,
-      "key": "20261209-run",
+      "key": "20271208-run",
       "km": 5.3,
       "minutes": 32,
       "pace": "5:43-6:16",
@@ -475,9 +475,9 @@
       "weekday": "wed"
      },
      {
-      "date": "2026-12-10",
+      "date": "2027-12-09",
       "hard_or_long": false,
-      "key": "20261210-run",
+      "key": "20271209-run",
       "km": 5.3,
       "minutes": 32,
       "pace": "5:43-6:16",
@@ -497,9 +497,9 @@
       "weekday": "thu"
      },
      {
-      "date": "2026-12-12",
+      "date": "2027-12-11",
       "hard_or_long": false,
-      "key": "20261212-run",
+      "key": "20271211-run",
       "km": 5.3,
       "minutes": 32,
       "pace": "5:43-6:16",
@@ -519,9 +519,9 @@
       "weekday": "sat"
      },
      {
-      "date": "2026-12-13",
+      "date": "2027-12-12",
       "hard_or_long": true,
-      "key": "20261213-run",
+      "key": "20271212-run",
       "km": 13.9,
       "minutes": 82,
       "pace": "5:35-6:16",
@@ -541,21 +541,21 @@
       "weekday": "sun"
      }
     ],
-    "start": "2026-12-07",
+    "start": "2027-12-06",
     "target_km": 37.6,
     "week": 2
    },
    {
-    "end": "2026-12-20",
+    "end": "2027-12-19",
     "kind": "normal",
     "long_km": 13.9,
     "phase": "build",
     "planned_km": 40.6,
     "sessions": [
      {
-      "date": "2026-12-15",
+      "date": "2027-12-14",
       "hard_or_long": true,
-      "key": "20261215-run",
+      "key": "20271214-run",
       "km": 8.5,
       "minutes": 44,
       "pace": "4:09-4:24",
@@ -603,9 +603,9 @@
       "weekday": "tue"
      },
      {
-      "date": "2026-12-16",
+      "date": "2027-12-15",
       "hard_or_long": false,
-      "key": "20261216-run",
+      "key": "20271215-run",
       "km": 4.6,
       "minutes": 28,
       "pace": "5:43-6:16",
@@ -625,9 +625,9 @@
       "weekday": "wed"
      },
      {
-      "date": "2026-12-17",
+      "date": "2027-12-16",
       "hard_or_long": true,
-      "key": "20261217-run",
+      "key": "20271216-run",
       "km": 9.0,
       "minutes": 49,
       "pace": "4:54-5:03",
@@ -665,9 +665,9 @@
       "weekday": "thu"
      },
      {
-      "date": "2026-12-19",
+      "date": "2027-12-18",
       "hard_or_long": false,
-      "key": "20261219-run",
+      "key": "20271218-run",
       "km": 4.6,
       "minutes": 28,
       "pace": "5:43-6:16",
@@ -687,9 +687,9 @@
       "weekday": "sat"
      },
      {
-      "date": "2026-12-20",
+      "date": "2027-12-19",
       "hard_or_long": true,
-      "key": "20261220-run",
+      "key": "20271219-run",
       "km": 13.9,
       "minutes": 82,
       "pace": "5:35-6:16",
@@ -709,21 +709,21 @@
       "weekday": "sun"
      }
     ],
-    "start": "2026-12-14",
+    "start": "2027-12-13",
     "target_km": 40.6,
     "week": 3
    },
    {
-    "end": "2026-12-27",
+    "end": "2027-12-26",
     "kind": "deload",
     "long_km": 13.5,
     "phase": "build",
     "planned_km": 31.7,
     "sessions": [
      {
-      "date": "2026-12-22",
+      "date": "2027-12-21",
       "hard_or_long": true,
-      "key": "20261222-run",
+      "key": "20271221-run",
       "km": 7.8,
       "minutes": 41,
       "pace": "4:09-4:24",
@@ -771,9 +771,9 @@
       "weekday": "tue"
      },
      {
-      "date": "2026-12-23",
+      "date": "2027-12-22",
       "hard_or_long": false,
-      "key": "20261223-run",
+      "key": "20271222-run",
       "km": 5.2,
       "minutes": 31,
       "pace": "5:43-6:16",
@@ -793,9 +793,9 @@
       "weekday": "wed"
      },
      {
-      "date": "2026-12-24",
+      "date": "2027-12-23",
       "hard_or_long": false,
-      "key": "20261224-run",
+      "key": "20271223-run",
       "km": 5.2,
       "minutes": 31,
       "pace": "5:43-6:16",
@@ -815,9 +815,9 @@
       "weekday": "thu"
      },
      {
-      "date": "2026-12-27",
+      "date": "2027-12-26",
       "hard_or_long": true,
-      "key": "20261227-run",
+      "key": "20271226-run",
       "km": 13.5,
       "minutes": 80,
       "pace": "5:35-6:16",
@@ -837,21 +837,21 @@
       "weekday": "sun"
      }
     ],
-    "start": "2026-12-21",
+    "start": "2027-12-20",
     "target_km": 31.7,
     "week": 4
    },
    {
-    "end": "2027-01-03",
+    "end": "2028-01-02",
     "kind": "race",
     "long_km": null,
     "phase": "race",
     "planned_km": 7.7,
     "sessions": [
      {
-      "date": "2026-12-29",
+      "date": "2027-12-28",
       "hard_or_long": false,
-      "key": "20261229-run",
+      "key": "20271228-run",
       "km": 7.7,
       "minutes": 45,
       "pace": "5:43-6:16",
@@ -890,9 +890,9 @@
       "weekday": "tue"
      },
      {
-      "date": "2026-12-31",
+      "date": "2027-12-30",
       "hard_or_long": true,
-      "key": "20261231-race",
+      "key": "20271230-race",
       "km": 21.1,
       "minutes": 105,
       "pace": "4:54-5:03",
@@ -912,7 +912,7 @@
       "weekday": "thu"
      }
     ],
-    "start": "2026-12-28",
+    "start": "2027-12-27",
     "target_km": 7.8,
     "week": 5
    }
