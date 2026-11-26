@@ -22,6 +22,7 @@ first call answers like the status tools ("Error: <source phrase>"); a database 
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as dt
 import json
 import logging
@@ -567,6 +568,72 @@ def with_dto_checks(answer: Dict[str, Any], lt_speed: Optional[float]) -> Dict[s
     return answer
 
 
+def plan_born(body: Any) -> Optional[dt.date]:
+    """The day a stored plan counts as first built, for its week grid (plan_engine.build_plan(born=...)): the
+    Sunday before its week 1, or week 1's Monday itself when the plan was built that Monday (no week 0 and no
+    session on that Monday: a plan built on a Monday plans from the Tuesday). None without a week 1."""
+    weeks = [w for w in (body.get("weeks") if isinstance(body, dict) else None) or [] if isinstance(w, dict)]
+    try:
+        first = next(dt.date.fromisoformat(str(w["start"])) for w in weeks if w.get("week") == 1)
+    except (StopIteration, KeyError, ValueError):
+        return None
+    early = any(w.get("week") == 0 for w in weeks) or any(s.get("date") == first.isoformat()
+                                                          for s in _all_sessions(body))
+    return first - dt.timedelta(days=1) if early else first
+
+
+def _week_with(week: Dict[str, Any], sessions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if sessions == week.get("sessions"):
+        return week
+    longs = [float(s.get("km") or 0) for s in sessions if s.get("role") == "long"]
+    return {**week, "sessions": sessions,
+            "planned_km": round(sum(float(s.get("km") or 0) for s in sessions
+                                    if s.get("role") not in ("race", "b_race")), 1),
+            "long_km": max(longs) if longs else None}
+
+
+def carry_history(answer: Dict[str, Any], prior: Any, today: dt.date) -> None:
+    """An existing plan rebuilt: the days up to today stay as the stored version has them, so the new version
+    holds the plan's whole history and tracking, log_feedback and plan_review_week still find today's and the
+    past weeks' sessions. A stored week before this one is kept whole; in this week (and any new week that
+    starts by today) the stored sessions dated up to today replace the engine's. The engine's invariants ran on
+    the weeks it planned; the kept days are history and are not checked again. The content hash covers it all."""
+    t = today.isoformat()
+    old = [w for w in (prior.get("weeks") if isinstance(prior, dict) else None) or []
+           if isinstance(w, dict) and str(w.get("start", "")) <= t]
+    old_by_start = {str(w.get("start")): w for w in old}
+    new_starts = {str(w.get("start")) for w in answer["weeks"]}
+
+    def kept(week: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [copy.deepcopy(s) for s in (week or {}).get("sessions") or []
+                if isinstance(s, dict) and str(s.get("date", "")) <= t]
+
+    weeks = [_week_with(copy.deepcopy(w), kept(w)) for w in old if str(w.get("start")) not in new_starts]
+    for w in answer["weeks"]:
+        if str(w.get("start")) <= t:
+            mine = kept(old_by_start.get(str(w.get("start"))))
+            fresh = [s for s in w["sessions"] if str(s.get("date")) > t]
+            w = _week_with(w, sorted(mine + fresh, key=lambda s: (str(s.get("date")), str(s.get("key")))))
+        weeks.append(w)
+    weeks.sort(key=lambda w: str(w.get("start")))
+    if weeks != answer["weeks"]:
+        answer["weeks"] = weeks
+        answer["content_hash"] = pe.content_hash(pe.RULES_VERSION, answer["inputs"], weeks)
+
+
+def local_day(stamp: Any) -> str:
+    """A stored timestamp as the local date (REPORT_TZ, the zone "today" is in; UTC when it is not set)."""
+    if not isinstance(stamp, dt.datetime):
+        return str(stamp or "")[:10]
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=dt.timezone.utc)
+    try:
+        zone: dt.tzinfo = sc.zone()
+    except ValueError:
+        zone = dt.timezone.utc
+    return stamp.astimezone(zone).date().isoformat()
+
+
 def _all_sessions(body: Any) -> List[Dict[str, Any]]:
     weeks = body.get("weeks") if isinstance(body, dict) else None
     if not isinstance(weeks, list):
@@ -653,11 +720,15 @@ class PlanService:
                                                          await self._own_ids())
         except sc.SystemicFailure as exc:
             return f"Error: {exc}"
+        prior = await asyncio.to_thread(self._prior, pid, profile) if pid is not None else None
         try:
-            plan = pe.build_plan(inputs, snap)
+            plan = pe.build_plan(inputs, snap, born=plan_born(prior))
         except pe.PlanError as exc:
             return bad_input_text(str(exc))
-        answer = with_dto_checks(pe.plan_answer(plan), snap.lt_speed_mps)
+        answer = pe.plan_answer(plan)
+        if prior is not None:
+            carry_history(answer, prior, today)
+        answer = with_dto_checks(answer, snap.lt_speed_mps)
         answer["window"] = window(answer, today)
         answer.update(_sources(failed))
         saved = await asyncio.to_thread(self._save, answer, inputs, pid, profile)
@@ -667,6 +738,22 @@ class PlanService:
         answer = _slim(answer)
         answer["note"] = NOTE + (" " + NOTE_NOT_SAVED.format(why=saved["why"]) if saved.get("why") else "")
         return sc.compact_json(answer)
+
+    def _prior(self, pid: str, profile: Optional[str]) -> Optional[Dict[str, Any]]:
+        """The stored body of open plan `pid` of this account (None: none, or the store did not answer; the
+        save then says why)."""
+        if profile is None:
+            return None
+        try:
+            store = self._store()
+            row = store.get_plan(store.account_fp(profile), pid)
+        except (ps.StoreError, ValueError) as exc:
+            log.warning("plans: the stored plan could not be read (%s)", type(exc).__name__)
+            return None
+        if row is None or row.get("status") not in ps.OPEN_STATUSES or not row.get("version_row"):
+            return None
+        body = row["version_row"].get("body")
+        return body if isinstance(body, dict) else None
 
     async def _accept(self, plan_id: Any, commit_days: Any, accept_changes: Any, today: dt.date) -> str:
         """plan_preview(accept_changes=...): a new version of the stored plan with the approved changes."""
@@ -792,7 +879,7 @@ class PlanService:
             return TEXT_NOT_FOUND if pid else TEXT_NO_PLAN
         v = row["version_row"]
         created = v.get("created_at")
-        day = created.date().isoformat() if isinstance(created, dt.datetime) else str(created or "")[:10]
+        day = local_day(created)
         answer = _slim(dict(v["body"]))
         answer["stored"] = {"plan_id": row["plan_id"], "version": v["version"], "status": row["status"],
                             "built_on": day, "rules_version": v["rules_version"]}

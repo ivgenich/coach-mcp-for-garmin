@@ -635,6 +635,12 @@ class Sim:
         self.step = f"plan_apply_changes {apply['change_ids']}"
         ids = ",".join(apply["change_ids"])
         self._run_token("apply", lambda: self.writes.apply(self.pid, apply["token"], ids), window)
+        # the watch now has the applied version's sessions after today (as after a preview)
+        today = self.today().isoformat()
+        self.seen = {d: v for d, v in self.seen.items() if d <= today}
+        for s in self.sessions():
+            if s["date"] > today:
+                self.seen.setdefault(s["date"], []).append(s)
         return out
 
     def cancel(self) -> None:
@@ -939,7 +945,10 @@ class PlanDays(unittest.TestCase):
 
     def test_4_override_review_blocked_dates(self):
         """An override after days are committed, a weekly-review change applied, travel dates blocked mid-plan."""
-        sim = self.sim("override, review, travel", history_until=dt.date(2027, 1, 17))
+        # no B race: the week after the reviewed one then has quality sessions for the pain change to drop (with
+        # the B race it is the lighter B week, and the review is advice only, with no apply token)
+        sim = self.sim("override, review, travel", inputs={"race_date": "2027-02-26", "goal_time": "3:30:00"},
+                       history_until=dt.date(2027, 1, 17))
         first = sim.morning(dt.date(2027, 1, 18))
         sim.run_session(dt.date(2027, 1, 18))
         # the next morning: rest on an easy day of the committed window and the quality session made easy

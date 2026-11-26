@@ -98,7 +98,7 @@ class Rebuilds(unittest.TestCase):
         self.assertTrue(pw.join_write_threads(10))
 
     def preview(self, days=None):
-        args = dict(tpt.ARGS)
+        args = {**tpt.ARGS, **getattr(self, "extra", {})}
         if days is not None:
             args["commit_days"] = days
         if getattr(self, "pid", None):
@@ -203,6 +203,87 @@ class Rebuilds(unittest.TestCase):
         if ops:
             self.commit(second)
         self.assertEqual(self.calendar_days(), cal, "every committed day is still on Garmin")
+
+
+class WeekGrid(Rebuilds):
+    """A rebuild of an existing plan keeps the plan's week grid (week 1 from the day it was first built) and its
+    days up to today; a new plan still starts on next Monday with a week 0 before it (rule 1). The history moves
+    by whole weeks with the clock (activities too), so every preview starts from the same weekly km, and Garmin
+    reports no training load, so the planned-ACWR cap (which reads the recorded days up to today) stays off."""
+
+    def setUp(self):
+        super().setUp()
+        self.garmin.get_training_status = lambda d: {}
+
+    def go_to(self, day):
+        self.clock.advance(days=(day - self.today).days)
+        self.today = day
+        shift = pe.monday(day) - pe.monday(BUILT)
+        self.garmin.move_to(BUILT + shift)
+        acts = copy.deepcopy(self.garmin.reads.data["activities"])
+        for a in acts:
+            when = dt.datetime.fromisoformat(a["startTimeLocal"]) + shift
+            a["startTimeLocal"] = when.strftime("%Y-%m-%d %H:%M:%S")
+        self.garmin.reads.data["activities"] = acts
+
+    @staticmethod
+    def week_of(out, day):
+        return next(w for w in out["weeks"] if w["start"] <= day.isoformat() <= w["end"])
+
+    @staticmethod
+    def sessions_of(out, first, last):
+        return [s for w in out["weeks"] for s in w["sessions"] if first.isoformat() <= s["date"] <= last.isoformat()]
+
+    def test_a_mid_week_rebuild_keeps_the_planned_week_and_writes_nothing(self):
+        self.extra = {"long_run_day": "fri", "run_days": "tue,wed,thu,fri,sun", "rest_days": "mon,sat"}
+        sunday, wednesday = dt.date(2026, 11, 29), dt.date(2026, 12, 2)
+        self.go_to(sunday)
+        first = self.preview(days=14)
+        self.assertEqual(self.week_of(first, wednesday)["week"], 1)
+        self.commit(first)
+        self.go_to(wednesday)
+        second = self.preview()
+        week = self.week_of(second, wednesday)
+        self.assertEqual((week["week"], week["kind"]), (1, self.week_of(first, wednesday)["kind"]))
+        thu, sun = wednesday + dt.timedelta(days=1), wednesday + dt.timedelta(days=4)
+        ops = second["commit"].get("ops") or []
+        self.assertEqual([o for o in ops if thu.isoformat() <= o["date"] <= sun.isoformat()], [], ops)
+        self.assertEqual(ops, [], "nothing at all changed")
+        friday = [s for s in self.sessions_of(second, thu, sun) if s["role"] == "long"]
+        self.assertEqual([s["date"] for s in friday], ["2026-12-04"], "the long run on Friday stays")
+        # the days up to today are the stored version's, and every later day of the week is as planned
+        self.assertEqual(self.sessions_of(second, sunday, sun), self.sessions_of(first, sunday, sun))
+
+    def test_a_plan_built_on_a_monday_rebuilt_the_next_day_writes_nothing(self):
+        self.extra = {"b_races": ""}
+        monday = dt.date(2027, 2, 1)
+        self.go_to(monday)
+        first = self.preview(days=7)
+        self.assertEqual(self.week_of(first, monday)["week"], 1)
+        self.commit(first)
+        self.go_to(monday + dt.timedelta(days=1))
+        second = self.preview(days=7)
+        self.assertEqual(second["commit"].get("ops") or [], [])
+        self.assertEqual(self.sessions_of(second, monday, monday + dt.timedelta(days=7)),
+                         self.sessions_of(first, monday, monday + dt.timedelta(days=7)))
+
+    def test_the_new_version_keeps_the_past_weeks_and_todays_session(self):
+        first = self.preview(days=7)   # a Wednesday: week 0, then week 1 from Monday 30 Nov
+        self.commit(first)
+        day = dt.date(2026, 12, 3)
+        self.go_to(day)
+        second = self.preview()
+        old = self.sessions_of(first, BUILT, day)
+        self.assertTrue(any(s["date"] == day.isoformat() for s in old))
+        self.assertEqual(self.sessions_of(second, BUILT, day), old)
+        self.assertEqual([w["week"] for w in second["weeks"][:2]], [0, 1])
+        self.assertEqual(second["weeks"][0], first["weeks"][0], "week 0 is history, kept whole")
+
+    def test_a_new_plan_built_mid_week_starts_with_week_0(self):
+        self.go_to(dt.date(2026, 12, 2))
+        out = self.preview()
+        self.assertEqual([(w["week"], w["kind"], w["start"]) for w in out["weeks"][:2]],
+                         [(0, "week0", "2026-11-30"), (1, out["weeks"][1]["kind"], "2026-12-07")])
 
 
 class UnscheduleFirst(tpw.Base):
