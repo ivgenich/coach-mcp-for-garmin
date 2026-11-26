@@ -70,6 +70,18 @@ row is kept as `<key>~<hash8>` (or `~<hash8>-<n>`) until it is deleted from Garm
 keys. Every key is checked (`plan_store.key_ok`: the shape and a real date) where it comes in: `log_feedback`,
 `overrides`, the stored rows and links, and the argument check before a tool runs.
 
+Plans stored before the date keys carry week-numbered keys (`w03-long`, `w00-e1`, `w05-race`, `w04-b`; a
+retired row `w03-long~<hash8>`). Migration `004_date_session_keys.sql` turns each into the date key of its
+session or row once: a version body's sessions by their date (and the same key in its inputs, so a stored
+override follows), the rows by their `date_local` (a retired row keeps its suffix), then the feedback (by its
+row, else by the current version's session) and the review changes. Two rows of one plan that land on one key
+(the old scheme's duplicate of a day) keep the date key for the linked row, else the one that may be on Garmin,
+else the newest; the other becomes a retired key (`<date key>~<md5 of the old key, 8 hex>`), so the next commit
+deletes that duplicate workout from Garmin like any replaced one. Feedback that names no row or session is
+deleted, and an open token whose ops name an old key expires (preview again). `plan_cancel` and
+`--plan-cleanup` never stop on a row whose key the store does not take: it is logged with a fixed text, left as
+it is and counted as failed, and the other workouts go on.
+
 ## AI roles
 
 The tool descriptions give the chat model two roles; neither decides a number.
@@ -337,7 +349,8 @@ local-only, like `log_feedback`; only the switch adds it.
   (runs from before it never do).
 - `action` `stop` turns the active plan back into a draft: nothing follows it any more, `plan_get` still
   shows it, `plan_activate` can start it again (activated anew), and its links and feedback are kept
-  (retention then treats it as a draft: 30 days untouched). A draft rather than `cancelled`, so a stop can be
+  while the plan exists (it is a draft again, and retention deletes a draft untouched for 30 days with its
+  links and feedback). A draft rather than `cancelled`, so a stop can be
   undone and is not destructive. It is refused with a fixed text while the plan has workouts on the Garmin
   calendar (rows a Garmin write made): `plan_cancel` (`PLAN_WRITES=on`) deletes those and cancels the plan,
   or the server owner runs `launch.py --plan-cleanup`. Stopping a draft answers `changed: false`.
@@ -446,7 +459,8 @@ keep the lower one that passes: a refused lower cap leaves the other to apply.
 ## What is stored
 
 Migration `003_training_plans.sql` creates every table the plan stages need (`plans`, `plan_versions`,
-`plan_workouts`, `plan_tokens`, `plan_feedback`, `plan_changes`); the previews fill `plans` and
+`plan_workouts`, `plan_tokens`, `plan_feedback`, `plan_changes`; `004_date_session_keys.sql` converts old
+session keys, [Session keys](#session-keys)); the previews fill `plans` and
 `plan_versions`, `plan_commit` and `plan_cancel` fill `plan_workouts` (our own Garmin workout and calendar-entry ids, dates, roles, states) and `plan_tokens` (SHA-256 only); with `PLAN_TRACKING=on` tracking fills `plan_workouts` too (a `local` row per tracked session without a Garmin workout: date, role, link status and the linked activity's id) and `log_feedback` fills `plan_feedback` (numbers and the location only); `plan_review_week` fills `plan_changes` (the change's kind, from and to values, the machine edits, the fixed reason text and the evidence numbers; its status). Stored: the account fingerprint (the history's HMAC, never the profile id), dates, the
 rules version, the inputs and the plan JSON (numbers, enums and dates; no names or notes). A preview with
 the same content as the current version stores nothing new (it only marks the draft as used).
@@ -527,7 +541,11 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    or whose session left the plan (deleted). A shorter window than an earlier commit's leaves the later days
    alone. A rebuilt plan never plans today (it keeps the stored session, rule 1), so today's workout is never
    removed by a commit (only replaced by a
-   red-day change, rule A8). Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
+   red-day change, rule A8: today's session, still on today, with new content). No commit op deletes or
+   replaces a workout dated today or earlier on any other path: a session whose key's workout sits on today
+   but which the version now places on another day (a moved session) writes nothing, and a version that has one
+   session key or one day twice fails `one_run_per_day` (checked again on the version as stored, the kept
+   days included), so it gets no token. Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
    token while an invariant fails, nor when there is nothing to write.
 2. `plan_commit(plan_id, commit_token)`: when the client declares MCP form elicitation, the user confirms a
    summary the server builds (the workouts to add and those to remove, each with dates and roles) by
@@ -561,7 +579,10 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    `retry_after_s` 180; the next call settles it from
    Garmin once the request's thread has ended and 2 minutes have passed; a create is adopted by its
    marker in the library, a schedule from the calendar), `refused` (`reason`), `declined`. A started token
-   resumes for 24 hours; a new plan version makes it `superseded`. One write call per plan runs at a time
+   resumes for 24 hours; a new plan version makes it `superseded`. The plan is read again under the plan's
+   lock after the confirmation: when a new version was stored or the plan was started or stopped while the
+   user was asked, nothing is written (`plan_changed`, for commit, apply and cancel tokens alike; call
+   plan_preview again). One write call per plan runs at a time
    (`busy`), also after the client cancelled the call: the lock belongs to the thread doing the writes. A
    replaced workout always goes: one left on Garmin by an earlier call is deleted by the next commit.
 4. `plan_cancel(plan_id)` answers what it would delete (the plan's own workouts from today on, not linked to

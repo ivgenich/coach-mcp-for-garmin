@@ -289,6 +289,103 @@ class WriteContract(StoreContract):
         self.store.move_plan(other, "active")
 
 
+    # --- migration 004: old session keys become date keys (one contract for the SQL and upgrade_keys) ---
+
+    def rekey(self, table, pid, new, old):
+        raise NotImplementedError
+
+    def upgrade_keys(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def old_body(content):
+        return {"content": content, "weeks": [
+            {"week": 1, "start": "2026-11-30", "sessions": [
+                {"key": "w01-e1", "date": "2026-12-02", "role": "easy"},
+                {"key": "w01-e2", "date": "2026-12-03", "role": "easy"},
+                {"key": "w01-long", "date": "2026-12-06", "role": "long"}]},
+            {"week": 9, "start": "2027-01-25", "sessions": [
+                {"key": "w09-b", "date": "2027-01-29", "role": "b_race"},
+                {"key": "w09-e1", "date": "2027-01-30", "role": "easy"}]},
+            {"week": 13, "start": "2027-02-22", "sessions": [
+                {"key": "w13-race", "date": "2027-02-26", "role": "race"}]}],
+            "overrides": {"applied": [{"kind": "easy", "key": "w01-long"}], "refused": []}}
+
+    def test_old_session_keys_become_date_keys(self):
+        inputs = {"race_date": RACE.isoformat(), "overrides": [{"kind": "easy", "key": "w01-long"}]}
+        pid, _, _ = self.store.save_preview(self.fp, None, RACE, 1, inputs, self.old_body("v1"), h("v1"))
+        moved = self.old_body("v2")
+        moved["weeks"][0]["sessions"][0]["date"] = "2026-12-01"   # v2 moved w01-e1 a day earlier
+        self.store.save_preview(self.fp, pid, RACE, 1, inputs, moved, h("v2"))
+
+        def put(key, day, state, wid=None, linked=None):
+            row = {"workout_key": key, "version": 1, "date_local": day, "role": "easy", "dto_hash": h(key),
+                   "state": state, "garmin_workout_id": wid}
+            self.store.put_workout(pid, row)
+            if linked:
+                self.store.save_links(pid, 1, [{"workout_key": key, "date_local": day, "role": "easy",
+                                                "dto_hash": h(key), "linked_activity_id": linked,
+                                                "link_status": "done"}])
+            self.later()
+
+        d = dt.date
+        put("20261202-run", d(2026, 12, 2), "scheduled", 11)              # -> old w01-e1
+        put("20261206-run~abcdef01", d(2026, 12, 6), "deleted", 12)       # -> old retired w01-long~abcdef01
+        put("20261203-run", d(2026, 12, 3), "scheduled", 21)              # a date-key row made after the upgrade
+        put("20261204-run", d(2026, 12, 3), "scheduled", 22)              # -> old w00-e2, same day: a duplicate
+        put("20261205-run", d(2026, 12, 4), "deleted", 31)                # -> old w01-e3 (unlinked, newer)
+        put("20261207-run", d(2026, 12, 4), "uploaded", 32, linked=9001)  # -> old w00-e3 (linked)
+        for new, old in (("20261202-run", "w01-e1"), ("20261206-run~abcdef01", "w01-long~abcdef01"),
+                         ("20261204-run", "w00-e2"), ("20261205-run", "w01-e3"), ("20261207-run", "w00-e3")):
+            self.rekey("plan_workouts", pid, new, old)
+        for key, rpe in (("20261202-run", 4), ("20261206-run", 5), ("20261208-run", 6), ("20261203-run", 7),
+                         ("20261209-run", 2)):
+            self.store.save_feedback(pid, key, rpe, 0, "none", False)
+        for new, old in (("20261202-run", "w01-e1"), ("20261206-run", "w01-long"), ("20261208-run", "w09-e9"),
+                         ("20261209-run", "w00-e2")):
+            self.rekey("plan_feedback", pid, new, old)
+        change = {"change_id": "c%016x" % 7, "kind": "repeat_volume", "from_value": {"key": "w01-long", "km": 16},
+                  "to_value": {"key": "w01-long", "km": 14}, "reason": "The long run is shorter.", "evidence": {}}
+        self.store.save_changes(pid, dt.date(2026, 11, 30), [change])
+        old_token, _ = self.store.issue_token(pid, 2, "commit", {"ops": [{"op": "create", "key": "w01-e1"}]})
+        new_token, _ = self.store.issue_token(pid, 2, "commit", {"ops": [{"op": "create", "key": "20261202-run"}]})
+
+        self.upgrade_keys()
+        self.upgrade_keys()   # a second run changes nothing
+
+        plan = self.store.get_plan(self.fp, pid)
+        keys = [(s["key"], s["date"]) for w in plan["version_row"]["body"]["weeks"] for s in w["sessions"]]
+        self.assertEqual(keys, [("20261201-run", "2026-12-01"), ("20261203-run", "2026-12-03"),
+                                ("20261206-run", "2026-12-06"), ("20270129-b", "2027-01-29"),
+                                ("20270130-run", "2027-01-30"), ("20270226-race", "2027-02-26")])
+        self.assertEqual(plan["version_row"]["body"]["overrides"]["applied"][0]["key"], "20261206-run")
+        self.assertEqual(plan["version_row"]["inputs"]["overrides"][0]["key"], "20261206-run")
+        rows = {r["workout_key"]: (r["date_local"], r["garmin_workout_id"]) for r in self.store.write_rows(pid)}
+        dup = "20261203-run~" + hashlib.md5(b"w00-e2").hexdigest()[:8]
+        unlinked = "20261204-run~" + hashlib.md5(b"w01-e3").hexdigest()[:8]
+        self.assertEqual(rows, {"20261202-run": (d(2026, 12, 2), 11),
+                                "20261206-run~abcdef01": (d(2026, 12, 6), 12),
+                                "20261203-run": (d(2026, 12, 3), 21),
+                                dup: (d(2026, 12, 3), 22),
+                                "20261204-run": (d(2026, 12, 4), 32),
+                                unlinked: (d(2026, 12, 4), 31)})
+        self.assertTrue(all(ps.key_ok(k) for k in rows))
+        self.assertEqual({r["workout_key"]: r["linked_activity_id"] for r in self.store.links(pid)}["20261204-run"],
+                         9001, "the linked row keeps the date key")
+        feedback = {r["workout_key"]: r["rpe"] for r in self.store.feedback(pid)}
+        self.assertEqual(feedback, {"20261202-run": 4, "20261206-run": 5, "20261203-run": 7},
+                         "moved by row, by the current body, an unknown one dropped, a taken key kept")
+        stored = self.store.changes_of(pid)[0]
+        self.assertEqual((stored["from_value"]["key"], stored["to_value"]["key"]), ("20261206-run", "20261206-run"))
+        with self.assertRaises(ps.TokenRefused) as cm:
+            self.store.token_row(old_token, pid, "commit")
+        self.assertEqual(cm.exception.reason, "expired")
+        self.assertEqual(self.store.token_row(new_token, pid, "commit")["status"], "issued")
+        # The first version keeps its own dates (w01-e1 on Dec 2 there).
+        if isinstance(self.store, ps.MemoryPlanStore):
+            first = self.store.versions[(pid, 1)]["body"]["weeks"][0]["sessions"][0]["key"]
+            self.assertEqual(first, "20261202-run")
+
     def test_a_plan_whose_race_passed_is_finished_and_blocks_nothing(self):
         race = dt.date(2026, 11, 1)
         old, _, _ = self.save(content="x", race=race)
@@ -441,6 +538,14 @@ class MemoryStore(WriteContract, unittest.TestCase):
     def set_meta(self, key, value):
         self.store.meta[key] = value
 
+    def rekey(self, table, pid, new, old):
+        rows = self.store.workout_rows if table == "plan_workouts" else self.store.feedback_rows
+        row = rows.pop((pid, new))
+        rows[(pid, old)] = {**row, "workout_key": old}
+
+    def upgrade_keys(self):
+        self.store.upgrade_keys()
+
     def test_retention_drops_old_drafts_and_ended_plans(self):
         old, _, _ = self.save(content="old")
         self.clock.now += dt.timedelta(days=ps.DRAFT_DAYS + 1)
@@ -569,6 +674,18 @@ class Migration(unittest.TestCase):
     def test_memory_history_store_migrates_it(self):
         self.assertIn(3, [v for v, _n, _p in hs.migration_files()])
 
+    def test_004_matches_plan_store(self):
+        with open(os.path.join(HERE, "history_sql", "004_date_session_keys.sql"), encoding="ascii") as fh:
+            sql = fh.read()
+        self.assertIn(4, [v for v, _n, _p in hs.migration_files()])
+        code = "\n".join(line.split("--")[0] for line in sql.splitlines())
+        self.assertNotIn("DROP ", code.upper())
+        live = re.search(r"live +text\[\] := ARRAY\[([^\]]+)\]", sql).group(1)
+        self.assertEqual(tuple(x.strip(" '") for x in live.split(",")), ps.LIVE_STATES)
+        # The SQL's key patterns are plan_store's (without the capture groups Python uses).
+        self.assertIn("'^" + ps.OLD_KEY_RE.pattern.replace("([a-z0-9]{1,8})", "[a-z0-9]{1,8}") + "$'", sql)
+        self.assertIn("'^" + ps.OLD_SESSION_KEY_RE.pattern.replace("([a-z0-9]{1,8})", "[a-z0-9]{1,8}") + "$'", sql)
+
 
 @unittest.skipUnless(DB_URL and HAVE_PSYCOPG, PG_SKIP)
 class PostgresStore(WriteContract, unittest.TestCase):
@@ -585,6 +702,17 @@ class PostgresStore(WriteContract, unittest.TestCase):
 
     def set_meta(self, key, value):
         self.history.meta_set(key, value)
+
+    def rekey(self, table, pid, new, old):
+        with self.store.transaction() as c:
+            c.execute(f"UPDATE history.{table} SET workout_key = %s WHERE plan_id = %s AND workout_key = %s",
+                      (old, pid, new))
+
+    def upgrade_keys(self):
+        with open(os.path.join(HERE, "history_sql", "004_date_session_keys.sql"), encoding="ascii") as fh:
+            sql = fh.read()
+        with self.store.transaction() as c:
+            c.execute(sql)
 
     def test_not_ready_before_migration(self):
         hs.PgHistoryStore(DB_URL).forget_all()
