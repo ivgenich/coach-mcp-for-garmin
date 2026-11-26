@@ -83,6 +83,21 @@ class StoreContract:
         self.assertEqual((pid2, version, changed), (pid, 2, True))
         self.assertEqual(self.store.get_plan(self.fp, pid)["version_row"]["body"]["content"], "b")
 
+    def test_same_content_stores_a_missing_basis_once(self):
+        # a plan stored before plan_basis: the first rebuild with the same weeks stores its basis on that version
+        # (no new version), and a later basis never replaces it
+        pid, _, _ = self.save()
+        body = {"weeks": [], "content": "a", "basis": {"km0_m": 40000.0}}
+        self.assertEqual(self.store.save_preview(self.fp, pid, RACE, 1, {"race_date": RACE.isoformat()}, body,
+                                                 h("a")), (pid, 1, False))
+        row = self.store.get_plan(self.fp, pid)["version_row"]
+        self.assertEqual(row["body"]["basis"], {"km0_m": 40000.0})
+        self.assertEqual((row["body"]["content"], row["content_hash"]), ("a", h("a")))
+        body["basis"] = {"km0_m": 1.0}
+        self.assertEqual(self.store.save_preview(self.fp, pid, RACE, 1, {"race_date": RACE.isoformat()}, body,
+                                                 h("a")), (pid, 1, False))
+        self.assertEqual(self.store.get_plan(self.fp, pid)["version_row"]["body"]["basis"], {"km0_m": 40000.0})
+
     def test_same_content_keeps_the_draft_alive(self):
         pid, _, _ = self.save()
         before = self.store.get_plan(self.fp, pid)["updated_at"]

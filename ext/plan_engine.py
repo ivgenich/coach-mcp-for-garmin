@@ -613,6 +613,12 @@ class Week:
     history: bool = False
     raw: Optional[Dict[str, Any]] = None
     base_known: bool = False
+    # plan_review's accepted cap of this week (plan_basis "cap_m", the days after "cap_from" cut to it): a rebuilt
+    # week keeps it, and review_cut (the metres it took off) counts as planned, so the weeks after grow from the
+    # week at its cut size
+    review_cap: Optional[Meters] = None
+    review_from: Optional[dt.date] = None
+    review_cut: float = 0.0
 
     @property
     def end(self) -> dt.date:
@@ -750,7 +756,12 @@ class Context:
     # built (plan_ceiling; None: from this snapshot), and the stored version's session key of each day after today
     ceiling: Optional[Tuple[Meters, Meters]] = None
     keys_after: Dict[dt.date, str] = dataclasses.field(default_factory=dict)
+    # a plan stored before plan_basis: the stored version's (kind, target km) of each week, which a past week's
+    # base is derived from (_derived_base), and the first week plan_review changed (no derivation from it on)
+    stored_targets: Dict[dt.date, Tuple[str, float]] = dataclasses.field(default_factory=dict)
+    derive_until: Optional[dt.date] = None
     born: Optional[dt.date] = None   # the day the plan counts as first built (its week grid; plan_basis stores it)
+    rebuilt: bool = False            # build_plan(history=...): invariants are merged_invariants'
 
     def window_factor(self, day: dt.date) -> Optional[float]:
         for w in self.windows:
@@ -1033,8 +1044,14 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
             if w.acwr_from[0] > got:
                 got, n_got = w.acwr_from
             got += w.b_cut   # nor is what rule 7 took off a long run before or after a B race
+            # plan_review's cut of a rebuilt week does count: the week grows the next ones at its cut size
+            # (review_cut is added back for week_base's rounding allowance, then taken off)
             if not (w.history and w.base_known):
-                w.base = week_base(w.target, got, n_got, cap_km)
+                w.base = week_base(w.target, got + w.review_cut, n_got, cap_km)
+                if w.review_cut > 0:   # at most what the week has after the cut
+                    w.base = Meters(max(0.0, min(w.base - w.review_cut, got)))
+                if w.history and ctx.stored_targets and (ctx.derive_until is None or w.start < ctx.derive_until):
+                    w.base = _derived_base(w, ctx, ceiling)
             last_normal = w.base
             peak = Meters(max(peak, w.base))
         if longs and w.kind == "normal":
@@ -1744,6 +1761,10 @@ class _History:
     keys_after: Dict[dt.date, str]
     b_races: Tuple[BRace, ...]   # the stored plan's B races up to today (no longer in the inputs)
     first: Optional[dt.date]     # the stored plan's first week
+    # plan_review's caps of the weeks after today (week start -> (metres, the day the days after it were cut))
+    caps: Dict[dt.date, Tuple[Meters, dt.date]] = dataclasses.field(default_factory=dict)
+    targets: Dict[dt.date, Tuple[str, float]] = dataclasses.field(default_factory=dict)   # (kind, target km)
+    reviewed: Optional[dt.date] = None   # the first week plan_review changed (plan_basis "review_cut_m")
 
 
 def _history_of(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> _History:
@@ -1753,11 +1774,30 @@ def _history_of(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> 
     carried: List[Session] = []
     keys_after: Dict[dt.date, str] = {}
     starts: List[dt.date] = []
+    caps: Dict[dt.date, Tuple[Meters, dt.date]] = {}
+    targets: Dict[dt.date, Tuple[str, float]] = {}
+    reviewed: Optional[dt.date] = None
     for raw in body.get("weeks") or []:
         w = history_week(raw, weeks_basis)
         if w is None:
             continue
         starts.append(w.start)
+        target_km = _number(raw.get("target_km"))
+        if target_km is not None:
+            targets[w.start] = (w.kind, target_km)
+        own = weeks_basis.get(w.start.isoformat()) if isinstance(weeks_basis, Mapping) else None
+        if isinstance(own, Mapping):
+            if (_number(own.get("review_cut_m")) or 0.0) > 0 and (reviewed is None or w.start < reviewed):
+                reviewed = w.start
+            cap = _number(own.get("cap_m"))
+            try:
+                cap_from = dt.date.fromisoformat(str(own.get("cap_from")))
+            except ValueError:
+                cap_from = None
+            if cap is not None and cap >= 0 and cap_from is not None:
+                caps[w.start] = (Meters(cap), cap_from)
+                if reviewed is None or w.start < reviewed:
+                    reviewed = w.start
         if w.end <= today:
             past.append(w)
             continue
@@ -1778,7 +1818,8 @@ def _history_of(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> 
             b_races.append(BRace(day, kind))
     past.sort(key=lambda w: w.start)
     carried.sort(key=lambda x: (x.date, x.key))
-    return _History(past, carried, keys_after, tuple(b_races), min(starts) if starts else None)
+    return _History(past, carried, keys_after, tuple(b_races), min(starts) if starts else None, caps, targets,
+                    reviewed)
 
 
 def history_b_races(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs) -> Tuple[BRace, ...]:
@@ -1787,38 +1828,155 @@ def history_b_races(body: Mapping[str, Any], today: dt.date, inputs: PlanInputs)
     return _history_of(body, today, inputs).b_races
 
 
-def _rebase(ctx: Context, body: Mapping[str, Any], first: Optional[dt.date]) -> None:
-    """A rebuilt plan grows from where it was first built: its km0, longest run and peak ceiling (plan_basis),
-    not this snapshot's, which hold weeks the plan itself planned. A plan stored before plan_basis: its start
-    block's km0 and longest run (this snapshot's when they round to the same), and the ceiling from this
-    snapshot's weeks before the plan began."""
+def _chain_factor(ctx: Context, kind: str, start: dt.date) -> Optional[float]:
+    """The factor a week of `kind` starting on `start` takes of the last normal week's base (assign_targets);
+    None for a week whose target does not come from it (taper, race, week 0)."""
+    r = ctx.rules
+    if kind == "normal":
+        return 1 + float(r["growth_max"])
+    if kind == "deload":
+        return float(r["deload_factor"])
+    if kind == "b_race":
+        factors = [ctx.window_factor(start + dt.timedelta(days=i)) for i in range(7)]
+        return sum(1.0 if f is None else f for f in factors) / 7.0
+    return None
+
+
+def _next_target(ctx: Context, kind: str, start: dt.date, base: float, ceiling: float) -> Optional[float]:
+    f = _chain_factor(ctx, kind, start)
+    if f is None:
+        return None
+    return min(base * f, ceiling) if kind == "normal" else base * f
+
+
+def _ceiling_of(ctx: Context, km0: float, biggest: float) -> Meters:
+    """peak_ceiling from a km0 and a biggest week, with this race distance's numbers (rules "by_distance")."""
+    pc = by_distance(ctx.rules, ctx.inputs.race_distance, "peak_ceiling")
+    return Meters(max(float(pc["of_max_week"]) * biggest, km0 + float(pc["over_km0_km"]) * 1000.0))
+
+
+def _rebase(ctx: Context, body: Mapping[str, Any], h: "_History") -> None:
+    """A rebuilt plan grows from where it was first built: its km0, longest run and biggest week (plan_basis),
+    not this snapshot's, which hold weeks the plan itself planned; the peak ceiling is the one of this race
+    distance from them (a rebuild to another distance never keeps the old distance's). A plan stored before
+    plan_basis: the numbers its stored weeks were built from (_derived_km0, _derived_ceiling)."""
     raw_basis, raw_start = body.get("basis"), body.get("start")
     basis: Mapping[str, Any] = raw_basis if isinstance(raw_basis, Mapping) else {}
     start: Mapping[str, Any] = raw_start if isinstance(raw_start, Mapping) else {}
-
-    def pick(name: str, stored_km: Any, now: Meters) -> Meters:
-        exact = _number(basis.get(name))
-        if exact is not None and exact > 0:
-            return Meters(exact)
-        old = _number(stored_km)
-        if old is not None and old > 0 and km(now) != round(old, 1):
-            return Meters(old * 1000.0)
-        return now
-
-    ctx.km0 = pick("km0_m", start.get("km0"), ctx.km0)
-    ctx.longest = pick("longest_m", start.get("longest_run_8w_km"), ctx.longest)
-    ceiling, biggest = _number(basis.get("ceiling_m")), _number(basis.get("biggest_m"))
-    if ceiling is not None and ceiling > 0 and biggest is not None:
-        ctx.ceiling = (Meters(ceiling), Meters(biggest))
-        return
     snap = ctx.snapshot
     weeks = list(snap.week_m)
     this = monday(snap.today)
-    # week i of week_m (oldest first) starts len - i weeks before this one: only those before the plan began
-    before = [m for i, m in enumerate(weeks)
-              if first is None or this - dt.timedelta(days=7 * (len(weeks) - i)) < first]
-    ctx.ceiling = peak_ceiling(dataclasses.replace(snap, week_m=tuple(before)), ctx.km0, ctx.rules,
-                               ctx.inputs.race_distance)
+    cutoff = monday(ctx.born or snap.today)
+    # week i of week_m (oldest first) starts len - i weeks before this one: the weeks the plan was built on are
+    # the full weeks before the week it was first built in
+    before = [m for i, m in enumerate(weeks) if this - dt.timedelta(days=7 * (len(weeks) - i)) < cutoff]
+    longest = _number(basis.get("longest_m"))
+    if longest is not None and longest > 0:
+        ctx.longest = Meters(longest)
+    else:
+        old = _number(start.get("longest_run_8w_km"))
+        if old is not None and old > 0 and km(ctx.longest) != round(old, 1):
+            ctx.longest = Meters(old * 1000.0)
+    km0, biggest = _number(basis.get("km0_m")), _number(basis.get("biggest_m"))
+    if km0 is not None and km0 > 0:
+        ctx.km0 = Meters(km0)
+        if biggest is not None and biggest >= 0:
+            ctx.ceiling = (_ceiling_of(ctx, km0, biggest), Meters(biggest))
+            return
+    else:
+        ctx.km0 = _derived_km0(ctx, start, before, h)
+    ctx.ceiling = _derived_ceiling(ctx, body, before, h)
+
+
+def _first_chain_week(h: "_History") -> Optional[dt.date]:
+    return min((d for d, (kind, _t) in h.targets.items() if kind != "week0"), default=None)
+
+
+def _derived_km0(ctx: Context, start: Mapping[str, Any], before: Sequence[float], h: "_History") -> Meters:
+    """A plan stored before plan_basis: the km0 its stored numbers allow (_km0_range: the rounded start km0 and
+    the first weeks' targets that grew from it): the mean of the weeks it was built on while this snapshot still
+    holds them, else this snapshot's or the rounded one, the first inside the range; else its middle."""
+    n = int(ctx.rules["km0_weeks"])
+    old = _number(start.get("km0"))
+    lo, hi = _km0_range(ctx, old, h)
+    if hi <= lo:
+        return Meters(old * 1000.0) if old is not None and old > 0 else ctx.km0
+    exact = [sum(before[-n:]) / n] if len(before) >= n else []
+    for c in exact + [float(ctx.km0), (old or 0.0) * 1000.0]:
+        if lo <= c < hi:
+            return Meters(c)
+    return Meters((lo + hi) / 2.0)
+
+
+def _km0_range(ctx: Context, old: Optional[float], h: "_History") -> Tuple[float, float]:
+    """[lo, hi) of the km0 that gives the stored start km0 (rounded) and the stored targets of the first weeks,
+    followed while each week grows from the last one's whole target and the range stays open."""
+    lo, hi = (old * 1000.0 - 50.0, old * 1000.0 + 50.0) if old is not None and old > 0 else (0.0, math.inf)
+    mult = 1.0   # the last normal week's base as a multiple of km0
+    for day in sorted(d for d, (kind, _t) in h.targets.items() if kind != "week0"):
+        kind, target_km = h.targets[day]
+        f = _chain_factor(ctx, kind, day)
+        if f is None:
+            break
+        m = mult * f
+        new_lo, new_hi = max(lo, (target_km * 1000.0 - 50.0) / m), min(hi, (target_km * 1000.0 + 50.0) / m)
+        if new_hi <= new_lo:
+            break
+        lo, hi = new_lo, new_hi
+        if kind == "normal":
+            mult = m
+    return lo, hi
+
+
+def _derived_ceiling(ctx: Context, body: Mapping[str, Any], before: Sequence[float],
+                     h: "_History") -> Tuple[Meters, Meters]:
+    """A plan stored before plan_basis: peak_ceiling from this snapshot's weeks before the plan began, held to
+    the stored plan's own numbers: the target of the week it capped (warning peak_capped), or above every
+    normal week's target when it capped none."""
+    biggest = Meters(max(list(before)[-int(ctx.rules["history_weeks"]):], default=0.0))
+    ceiling = _ceiling_of(ctx, ctx.km0, biggest)
+    capped: Optional[float] = None
+    for w in body.get("warnings") or []:
+        if isinstance(w, Mapping) and w.get("id") == "peak_capped" and w.get("dates"):
+            try:
+                day = dt.date.fromisoformat(str(w["dates"][0]))
+            except (TypeError, ValueError):
+                continue
+            if day in h.targets:
+                capped = h.targets[day][1]
+                break
+    if capped is not None:
+        pc = by_distance(ctx.rules, ctx.inputs.race_distance, "peak_ceiling")
+        over = Meters(ctx.km0 + float(pc["over_km0_km"]) * 1000.0)
+        if km(ceiling) != round(capped, 1):
+            ceiling = over if km(over) == round(capped, 1) else Meters(capped * 1000.0)
+    else:
+        top = max((t for kind, t in h.targets.values() if kind == "normal"), default=0.0) * 1000.0
+        if ceiling < top - 50.0:
+            ceiling = Meters(top + 50.0)
+    return ceiling, biggest
+
+
+def _derived_base(w: Week, ctx: Context, ceiling: float) -> Meters:
+    """A past normal week of a plan stored before plan_basis: the base its stored next week's target came from
+    (a rule-7 cut, an ACWR cut or a calendar week placed less, and the stored plan does not say so): the base
+    from what it placed, or its whole target, the first that gives the next week its stored target; with
+    neither, the base that target came from."""
+    nxt = w.start + dt.timedelta(days=7)
+    stored = ctx.stored_targets.get(nxt)
+    if stored is None:
+        return w.base
+    kind, target_km = stored
+    for b in (float(w.base), float(w.target)):
+        t = _next_target(ctx, kind, nxt, b, ceiling)
+        if t is None:
+            return w.base
+        if km(t) == round(target_km, 1):
+            return Meters(b)
+    f = _chain_factor(ctx, kind, nxt)
+    if not f or (kind == "normal" and target_km * 1000.0 >= ceiling - 50.0):
+        return w.base
+    return Meters(min(float(w.target), target_km * 1000.0 / f))
 
 
 def plan_basis(plan: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1840,6 +1998,10 @@ def plan_basis(plan: Mapping[str, Any]) -> Dict[str, Any]:
         built = {k: float(op[1]) for k, op in sorted(w.acwr_ops.items()) if float(op[1]) > float(op[2])}
         if built:
             entry["built_m"] = built
+        if w.review_cap is not None and w.review_from is not None:
+            entry.update(cap_m=float(w.review_cap), cap_from=w.review_from.isoformat())
+        if w.review_cut > 0:
+            entry["review_cut_m"] = float(w.review_cut)
         if entry:
             weeks[w.start.isoformat()] = entry
     born = ctx.born or ctx.snapshot.today
@@ -1893,6 +2055,7 @@ def _fill_current(w: Week, ctx: Context, hard: Set[dt.date], index: Dict[str, in
     today = ctx.snapshot.today
     hard_before, n_warnings, index_before = set(hard), len(ctx.warnings), dict(index)
     fill_week(w, ctx, hard, index)
+    _review_cap(w, ctx)
     mine = [s for s in w.sessions if s.date <= today]
     if _same_days(mine, carried):
         w.sessions = sorted(list(carried) + [s for s in w.sessions if s.date > today], key=lambda s: (s.date, s.key))
@@ -1910,7 +2073,21 @@ def _fill_current(w: Week, ctx: Context, hard: Set[dt.date], index: Dict[str, in
             fill_week(w, ctx, hard, index, carried=carried, past_m=past_m)
         finally:
             ctx.opens_after = opens
+        _review_cap(w, ctx, carried)
     _own_keys(w, ctx)
+
+
+def _review_cap(w: Week, ctx: Context, frozen: Sequence[Session] = ()) -> None:
+    """plan_review's accepted cap of a rebuilt week (Week.review_cap): its days after the review day are cut
+    to it as the review cut them (_cap_week, the order plan_review's cap follows); review_cut: the metres it
+    took off, which count as planned (the weeks after grow from the week at its cut size)."""
+    w.review_cut = 0.0
+    if w.review_cap is None:
+        return
+    before = sum(s.distance for s in w.sessions if s.counts)
+    keep = list(frozen) + [s for s in w.sessions if w.review_from is not None and s.date <= w.review_from]
+    _cap_week(w, w.review_cap, ctx, keep)
+    w.review_cut = max(0.0, before - sum(s.distance for s in w.sessions if s.counts))
 
 
 def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
@@ -1935,6 +2112,7 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
         # chain, rule 3's step and rule 7's references go on from them; today's week keeps its stored days up
         # to today and plans only the days after today around them; the merged plan is checked whole.
         h = _history_of(history, today, inputs)
+        ctx.rebuilt = True
         past, carried, ctx.keys_after = h.weeks, h.carried, h.keys_after
         for s in carried + [s for w in past for s in w.sessions]:
             # the stored km are rounded to 0.1: the metres the steps give at this plan's paces when they round
@@ -1943,10 +2121,16 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
                 exact = Meters(round(sum(step_distance(st, ctx.paces) for st in s.steps), 0))
                 if km(exact) == km(s.distance):
                     s.distance = exact
-        _rebase(ctx, history, h.first)
+        _rebase(ctx, history, h)
+        raw_basis = history.get("basis")
+        if not (isinstance(raw_basis, Mapping) and _number(raw_basis.get("km0_m"))):
+            ctx.stored_targets, ctx.derive_until = h.targets, h.reviewed
     if born is not None and anchored:
         weeks = [w for w in weeks if w.end > today]
         ctx.opens_after = max(min(born, today), monday(today) - dt.timedelta(days=1))
+    if history is not None:
+        for w in past + weeks:   # a past week keeps it too (rule 4 counts its room from it)
+            w.review_cap, w.review_from = h.caps.get(w.start, (None, None))
     past = [w for w in past if not weeks or w.start < weeks[0].start]
     hard: Set[dt.date] = {s.date for w in past for s in w.sessions if s.hard_or_long}
     index: Dict[str, int] = {}
@@ -1972,6 +2156,7 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
             _fill_current(w, ctx, hard, index, carried)
         else:
             fill_week(w, ctx, hard, index)
+            _review_cap(w, ctx)
 
     assign_targets([w for w in past if w.kind != "week0"] + weeks, ctx, place,
                    lambda w: _capacity(w, ctx, hard, index))
@@ -2586,8 +2771,10 @@ def _day_ok_for(s: Session, day: dt.date, w: Week, weeks: Sequence[Week], ctx: C
 
 def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """The coach critic's overrides, one at a time and in order. Each is checked by its own rule first; then
-    every invariant runs, and an edit that makes one fail that passed before is undone and refused with that
-    rule. ([applied edits], [{edit, rule, value, limit}])."""
+    every invariant runs, and an edit that adds a problem the plan did not have before it (any rule, any week:
+    a rule some other week already breaks never hides a new break of it; on a rebuilt plan the problems only
+    the days up to today cause are not the edit's) is undone and refused with that rule.
+    ([applied edits], [{edit, rule, value, limit}])."""
     applied: List[Dict[str, Any]] = []
     refused: List[Dict[str, Any]] = []
     for o in ctx.inputs.overrides:
@@ -2595,8 +2782,7 @@ def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any
         saved_from = [(w.acwr_from, w.acwr_held, copy.deepcopy(w.acwr_ops), w.acwr_first) for w in weeks]
         saved_cap = (dict(ctx.cap_as), dict(ctx.cap_ghosts))
         saved_warnings = len(ctx.warnings)
-        before = {i["id"] for i in check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules)
-                  if not i["ok"]}
+        before = _open_problems(weeks, ctx)
         was = {s.key: (w, s) for w in weeks for s in w.sessions}
         ok, no = _apply_one(weeks, ctx, o)
         if ok and o.kind in REDUCE_ONLY_OVERRIDES:
@@ -2612,20 +2798,30 @@ def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any
         elif ok:
             reenforce_acwr(weeks, ctx)   # a moved session can raise a later day's planned ratio
         if ok:
-            after = [i for i in check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules)
-                     if not i["ok"] and i["id"] not in before]
+            after = sorted(_open_problems(weeks, ctx) - before)
             if after:
                 for w, sessions, was_w in zip(weeks, saved, saved_from):
                     w.sessions = sessions
                     w.acwr_from, w.acwr_held, w.acwr_ops, w.acwr_first = was_w
                 ctx.cap_as, ctx.cap_ghosts = saved_cap
                 del ctx.warnings[saved_warnings:]
-                refused.append(_refuse(o, after[0]["id"], after[0]["detail"], "the plan's rules"))
+                rule = after[0][0]
+                refused.append(_refuse(o, rule, "; ".join([p for r, p in after if r == rule][:5]), "the plan's rules"))
                 continue
             ctx.applied_overrides.append(o)
         applied += ok
         refused += no
     return applied, refused
+
+
+def _open_problems(weeks: List[Week], ctx: Context) -> Set[Tuple[str, str]]:
+    """(rule, problem) of every failing invariant of the plan as it stands; a rebuilt plan's: the ones
+    merged_invariants fails it for (not the days up to today's own)."""
+    chk = {"_check": {"weeks": weeks, "ctx": ctx}}
+    if ctx.rebuilt:
+        return {(i["id"], p) for i, new, _old in _classified(chk, ctx.rules) for p in new}
+    return {(i["id"], p) for i in _invariant_problems(chk, ctx.rules) if not i["ok"]
+            for p in (i.get("problems") or [i["detail"]])}
 
 
 def _history_refusal(o: Override, weeks: Sequence[Week], ctx: Context) -> Optional[Dict[str, Any]]:
@@ -2937,7 +3133,8 @@ def _invariant_problems(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULE
             # (what rule 7 took off a long run around a B race is no shortfall either)
             got = w.acwr_from if w.acwr_from[0] > p else (p, sum(1 for s in w.sessions if s.counts))
             if not ctx.inputs.overrides and not calendar_week(w, ctx) and not w.history \
-                    and w.base > week_base(float(w.target), got[0] + w.b_cut, got[1], None) + EPS_M:
+                    and w.base > week_base(float(w.target), got[0] + w.b_cut + w.review_cut, got[1], None) \
+                    - w.review_cut + EPS_M:
                 probs["growth_cap"].append(f"week {w.number}: grows from {km(w.base)} km, placed {km(p)} km")
             last_normal = min(target, float(w.base))
             peak = max(peak, last_normal)
@@ -2975,8 +3172,10 @@ def _invariant_problems(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULE
         # its target for one beside them
         used = {s.date for s in w.sessions}
         fixed_m = sum(_built_m(w, s) for s in w.sessions if s.role in QUALITY_ROLES + ("long",))   # before cuts
+        room = w.target - w.b_cut   # plan_review's accepted cap of the week holds it too
+        room = min(room, w.review_cap) if w.review_cap is not None else room
         if fixed_m > 0 and not any(s.role in EASY_ROLES for s in w.sessions) and not calendar_week(w, ctx) \
-                and w.target - w.b_cut - fixed_m >= float(rules["easy_min_km"]) * 1000.0 \
+                and room - fixed_m >= float(rules["easy_min_km"]) * 1000.0 \
                 and any(ctx.runnable(d) and d not in used and ctx.window_factor(d) is None for d in w.days()):
             probs["easy_share"].append(f"week {w.number}: no easy run")
     for k in ("growth_cap", "no_makeup"):
@@ -3306,6 +3505,21 @@ def merged_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES
     today: the same text) is history, a warning; any other one is a failure, so the days planned after today
     keep every rule against the kept ones. Rule 4's easy share of today's week is history when the kept days
     alone already miss it and the days after today add no quality session."""
+    out: List[Dict[str, Any]] = []
+    kept: List[Dict[str, Any]] = []
+    for i, new, history in _classified(plan, rules):
+        entry = {k: v for k, v in i.items() if k != "problems"}
+        if i.get("problems"):
+            entry.update(ok=not new, detail="; ".join(new[:5]))
+        out.append(entry)
+        if history:
+            kept.append({"id": i["id"], "detail": "; ".join(history[:5])})
+    return out, kept
+
+
+def _classified(plan: Mapping[str, Any], rules: Mapping[str, Any]
+                ) -> List[Tuple[Dict[str, Any], List[str], List[str]]]:
+    """merged_invariants' split: (_invariant_problems' entry, its new problems, its history problems)."""
     weeks: List[Week] = plan["_check"]["weeks"]
     ctx: Context = plan["_check"]["ctx"]
     today = ctx.snapshot.today
@@ -3324,19 +3538,12 @@ def merged_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES
         return (number.isdigit() and int(number) not in added_quality
                 and any(p.split(":", 1)[0] == subject for p in before.get(rule, set())))
 
-    out: List[Dict[str, Any]] = []
-    kept: List[Dict[str, Any]] = []
+    out: List[Tuple[Dict[str, Any], List[str], List[str]]] = []
     for i in _invariant_problems(plan, rules):
         problems = list(i.get("problems") or [])
         history = [p for p in problems if old(i["id"], p)]
-        new = [p for p in problems if p not in history]
-        entry = {k: v for k, v in i.items() if k != "problems"}
-        if problems:
-            entry.update(ok=not new, detail="; ".join(new[:5]))
-        out.append(entry)
-        if history:
-            kept.append({"id": i["id"], "detail": "; ".join(history[:5])})
-    return out, kept
+        out.append((i, [p for p in problems if p not in history], history))
+    return out
 
 
 def _dedupe(warnings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -481,6 +481,8 @@ class MemoryPlanStore:
                 cur = self.versions.get((pid, row["current_version"]))
                 if cur is not None and cur["content_hash"] == content_hash:
                     row["updated_at"] = now   # a draft in use is not dropped by the 30-day retention
+                    if "basis" in body and "basis" not in cur["body"]:
+                        cur["body"]["basis"] = body["basis"]   # a plan stored before plan_basis gets it once
                     return pid, row["current_version"], False
             row = self.plans[pid]
             version = row["current_version"] + 1
@@ -856,6 +858,10 @@ class PgPlanStore:
                                      "AND content_hash = %s", (pid, current, content_hash))
                 if same:   # a draft in use is not dropped by the 30-day retention
                     self._rows(c, f"UPDATE {SCHEMA}.plans SET updated_at = now() WHERE plan_id = %s", (pid,))
+                    if "basis" in body:   # a plan stored before plan_basis gets it once (same version, same hash)
+                        self._rows(c, f"UPDATE {SCHEMA}.plan_versions SET body = jsonb_set(body, '{{basis}}', %s) "
+                                      "WHERE plan_id = %s AND version = %s AND body -> 'basis' IS NULL",
+                                   (self._Jsonb(body["basis"]), pid, current))
                     return pid, current, False
             version = current + 1
             self._rows(c, f"INSERT INTO {SCHEMA}.plan_versions (plan_id, version, rules_version, inputs, body, "

@@ -154,6 +154,24 @@ and so what a MAJOR, MINOR or PATCH release may change:
   the targets or lifts the peak above the original ceiling. The stored `basis` also records the day
   the plan counts as built, so a plan built on a Sunday whose Monday has no session keeps its grid.
 
+- Plan rebuilds after `plan_review_week`: an accepted cut now updates the stored `basis`, so the
+  week counts as planned at its cut size. A rebuild with the same inputs keeps the cut on the days
+  after the review day (a rebuild in the capped week put the cut easy runs back: 42.6 -> 57.8 km),
+  and the weeks after it grow from the week as cut (they grew from the km before the cut: 70.5 km
+  after a week cut to 42.6 km, where rule 2 allows 46.0).
+- Plan rebuilds with another `race_distance`: the peak ceiling is the new distance's own, from the
+  plan's stored km0 and biggest week (a marathon plan rebuilt as a half kept the marathon ceiling,
+  73.0 km where the half allows 66.0).
+- Overrides: an edit is refused when it adds any problem the plan did not have, compared problem by
+  problem. A rule the kept days of a rebuild (or another week) already broke no longer hides a new
+  break of it by the edit, which was applied and stored with `invariants.ok` false.
+- Plans stored before `basis` existed: the first rebuild derives it from the plan's own stored
+  numbers (km0 from the weeks it was built on, else the value its rounded start km0 and first
+  targets allow; a past week's base from the target its next week grew to), so a rebuild with the
+  same inputs no longer changes days (a week after a B race fell 65.0 -> 59.0 km, and the rounded
+  km0 moved every target by 0.1 km). That rebuild stores the `basis` on the current version even
+  when its content hash is unchanged (no new version, no new token); a later basis never replaces it.
+
 - Weekly status: plan completion counts only the workouts already due. `completion_pct` is
   completed of due (it was completed of scheduled, so a week in progress read low in the text),
   and a workout still ahead that Garmin already linked counts in the new `plan.done_early`

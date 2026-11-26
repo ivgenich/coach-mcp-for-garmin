@@ -154,14 +154,22 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    run or quality kind the kept days already hold, and never reuse a kept session's key (a session moved by
    an override keeps the key of the day it was planned on; a new session on a day whose key it holds takes
    the stored version's key of that day). The volume chain (rule 2), the long-run step (rule 3) and rule 7's
-   references go on from the stored weeks, and the peak ceiling, km0 and longest run are the ones the plan was
-   first built with (stored with each version as `basis`, never in the answer; a plan stored before has its
-   `start` block's numbers and the ceiling of this snapshot's weeks before the plan began), so the weeks the
-   plan itself planned and the athlete then ran never move them. The invariants run on the whole merged plan:
-   a problem the kept days have on their own is history (`invariants.history` and the warning
-   `history_rule`), any other one fails, so the newly planned days keep every rule against the kept ones. An
-   override of a kept day is refused (`past_day`). With the same inputs, a rebuild on any later day plans no
-   day differently from the stored version. The last week is the race week. Phases from the end: taper (the race week, and the week before it in
+   references go on from the stored weeks, and km0, the longest run and the biggest week are the ones the plan
+   was first built with (stored with each version as `basis`, never in the answer), so the weeks the plan
+   itself planned and the athlete then ran never move them. The peak ceiling is the race distance's own from
+   those numbers: a rebuild to another distance (a marathon plan rebuilt as a half) gets the new distance's
+   ceiling, never more than a new plan of it allows. A plan stored before `basis` existed gets one from its
+   own stored numbers on its first rebuild (km0 from the weeks it was built on while the snapshot still holds
+   them, else the value its rounded `start` km0 and first weeks' targets allow; a past week's base from the
+   target its next stored week grew to; the ceiling from the week it capped), and that rebuild stores it on
+   the same version (no new version or token). A week `plan_review_week` cut counts as planned at its cut
+   size: the accepted change updates `basis` (the week's base less the km taken off, and a `cap_week` or
+   `cut_week` stays with the week), so a rebuild keeps the cut on the days after the review day and the weeks
+   after it grow from the week as cut, and the invariants count that week as cut. The invariants run on the
+   whole merged plan: a problem the kept days have on their own is history (`invariants.history` and the
+   warning `history_rule`), any other one fails, so the newly planned days keep every rule against the kept
+   ones. An override of a kept day is refused (`past_day`). With the same inputs, a rebuild on any later day
+   plans no day differently from the stored version. The last week is the race week. Phases from the end: taper (the race week, and the week before it in
    plans of 10 weeks or more), peak (1 week from 8 weeks, 2 from 11), then base (4/9 of the rest) and build.
 2. Weekly km: the start (km0) is the mean of the last 4 full weeks. A normal week grows by at most 8% on
    the last normal week, counted as planned: when the easy-run cap (or the run days) holds a week below its
@@ -285,7 +293,10 @@ The same inputs and the same Garmin numbers give the same plan, byte for byte (`
 ## Overrides
 
 `overrides` is a JSON list; each edit is checked by its own rule, then every invariant runs, and an edit that
-breaks one is undone and listed in `overrides.refused` with the rule, the value and the limit. A refused edit
+adds a problem the plan did not have before it is undone and listed in `overrides.refused` with the rule, the
+value (its new problems) and the limit. Problems are compared, not rules: a rule another week already breaks
+(on a rebuild, one the kept days break) never hides a new break of it, so no stored version fails its
+invariants because of an applied edit. A refused edit
 is never stored: the stored version's inputs, `content_hash` and body keep only the edits that applied. When
 every edit for a stored `plan_id` is refused, no new version is stored and the answer (`kind`
 `plan_overrides`) names the current version with `stored.changed` false. Name a session by its `date` where

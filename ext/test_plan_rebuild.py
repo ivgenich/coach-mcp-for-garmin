@@ -16,6 +16,8 @@ import datetime as dt
 import unittest
 
 import plan_engine as pe
+import plan_review as pr
+import plan_store as ps
 import plan_tools as pt
 from test_plan_engine import GOLDEN
 
@@ -240,6 +242,161 @@ class PlanTools(unittest.TestCase):
         self.assertEqual(pt.plan_born({k: v for k, v in body.items() if k != "basis"}), D(2026, 11, 30))
         again = pt.build_rebuilt(inputs, dataclasses.replace(snap, today=D(2026, 12, 1)), body)
         self.assertEqual(pe.plan_answer(again)["weeks"], body["weeks"])
+
+
+def moved_on(snap, body, today):
+    """The snapshot's 8 weeks once the athlete ran the stored weeks that ended before this week as planned."""
+    ran = [pe.Meters(w["planned_km"] * 1000.0) for w in body["weeks"] if D.fromisoformat(w["end"]) < pe.monday(today)]
+    return tuple((list(snap.week_m) + ran)[-8:])
+
+
+def changed_weeks(a, b):
+    """(start, target km before, after) of every week that differs in any way."""
+    A, B = {w["start"]: w for w in a["weeks"]}, {w["start"]: w for w in b["weeks"]}
+    return [(k, (A.get(k) or {}).get("target_km"), (B.get(k) or {}).get("target_km"))
+            for k in sorted(set(A) | set(B)) if A.get(k) != B.get(k)]
+
+
+def review_cap(body, week_start, km, today):
+    patched, _accepted, _refused, applied = pr.apply_changes(body, [{"change_id": "c1", "kind": "repeat_volume", "edits": [
+        {"op": "cap_week", "week_start": week_start, "km": km}]}], today, None)
+    assert applied == ["c1"], applied
+    return patched
+
+
+class ReviewCut(RebuildCase):
+    """Repro F3: plan_review_week's accepted cap of G4's week of 28 Dec (65.1 -> 42.6 km on Sunday 27 Dec) was
+    stored with the old plan_basis, so a rebuild with the same inputs on 5 Jan grew week 2027-01-04 from the
+    pre-cut base (70.5 km; rule 2 allows 1.08 x 42.6 = 46.0), and one in the capped week put the cut easy runs
+    back (42.6 -> 57.8 km)."""
+
+    CAPPED = "2026-12-28"
+
+    def setUp(self):
+        self.inputs, self.snap = g("G4")
+        self.body = stored(pe.build_plan(self.inputs, self.snap, what_if_runs=False))
+        self.cap_km = round(week(self.body, self.CAPPED)["planned_km"] * 0.7, 1)
+        self.patched = review_cap(self.body, self.CAPPED, self.cap_km, D(2026, 12, 27))
+        self.cut = week(self.patched, self.CAPPED)
+
+    def test_the_patched_basis_counts_the_week_at_its_cut_size(self):
+        entry = self.patched["basis"]["weeks"][self.CAPPED]
+        self.assertLessEqual(entry["base_m"], self.cut["planned_km"] * 1000.0 + 1)
+        self.assertEqual((entry["cap_m"], entry["cap_from"]), (self.cap_km * 1000.0, "2026-12-27"))
+        self.assertNotIn("cap_m", self.body["basis"]["weeks"][self.CAPPED])   # the reviewed version is unchanged
+
+    def test_the_week_after_the_cut_grows_from_it(self):
+        today = D(2027, 1, 5)
+        snap = dataclasses.replace(self.snap, today=today, week_m=moved_on(self.snap, self.patched, today))
+        plan = pt.build_rebuilt(self.inputs, snap, self.patched)
+        answer = self.assert_merged_ok(plan)
+        self.assertEqual(week(answer, self.CAPPED), self.cut)
+        self.assertLessEqual(week(answer, "2027-01-04")["planned_km"], round(self.cut["planned_km"] * 1.08, 1) + 0.05)
+        # the next rebuild goes on from the same chain (the basis this one stores keeps the cut base)
+        again = pt.build_rebuilt(self.inputs, dataclasses.replace(snap, today=today + dt.timedelta(days=1)), stored(plan))
+        self.assertEqual(changed_weeks(answer, pe.plan_answer(again)), [])
+
+    def test_a_rebuild_before_or_in_the_capped_week_keeps_the_cut(self):
+        for day in (D(2026, 12, 27), D(2026, 12, 28), D(2026, 12, 30), D(2027, 1, 2)):
+            with self.subTest(today=day):
+                plan = pt.build_rebuilt(self.inputs, dataclasses.replace(self.snap, today=day), self.patched)
+                answer = self.assert_merged_ok(plan)
+                self.assertEqual(week(answer, self.CAPPED)["sessions"], self.cut["sessions"])
+                # the weeks before it as stored; the ones after grow from it (rule 2), not from the km before the cut
+                self.assertEqual([w for w in answer["weeks"] if w["start"] <= self.CAPPED],
+                                 [w for w in self.patched["weeks"] if w["start"] <= self.CAPPED])
+                self.assertLessEqual(week(answer, "2027-01-04")["planned_km"],
+                                     round(self.cut["planned_km"] * 1.08, 1) + 0.05)
+                self.assertEqual(pe.plan_basis(plan)["weeks"][self.CAPPED]["cap_m"],
+                                 self.patched["basis"]["weeks"][self.CAPPED]["cap_m"])
+
+    def test_a_plan_stored_before_the_basis_counts_the_cut_too(self):
+        old = {k: v for k, v in self.body.items() if k != "basis"}
+        patched = review_cap(old, self.CAPPED, self.cut["planned_km"], D(2026, 12, 27))
+        today = D(2027, 1, 5)
+        plan = pt.build_rebuilt(self.inputs, dataclasses.replace(self.snap, today=today,
+                                                                 week_m=moved_on(self.snap, patched, today)), patched)
+        answer = self.assert_merged_ok(plan)
+        self.assertLessEqual(week(answer, "2027-01-04")["planned_km"], round(self.cut["planned_km"] * 1.08, 1) + 0.05)
+
+
+class DistanceChange(RebuildCase):
+    """Repro F2: a stored marathon plan rebuilt as a half marathon kept the marathon's peak ceiling (1.3 x the
+    biggest week, km0 + 25 km) from its basis: G4's half rebuild peaked at 73.0 km, the half's ceiling from the
+    same km0 and biggest week is 66.0 km."""
+
+    def test_the_new_distance_gets_its_own_ceiling(self):
+        for name in ("G1", "G4", "G5"):
+            with self.subTest(name):
+                inputs, snap = g(name)
+                body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
+                today = snap.today + dt.timedelta(days=13)
+                b = body["basis"]
+                half = dataclasses.replace(inputs, race_distance="half", goal_time_s=None,
+                                           b_races=tuple(x for x in inputs.b_races if x.date > today))
+                plan = pt.build_rebuilt(half, dataclasses.replace(snap, today=today), body)
+                self.assert_merged_ok(plan)
+                ceiling = max(1.2 * b["biggest_m"], b["km0_m"] + 18000.0)
+                self.assertAlmostEqual(pe.plan_ceiling(plan["_check"]["ctx"])[0], ceiling)
+                self.assertLessEqual(plan["summary"]["peak_km"], pe.km(ceiling))
+                # back to the marathon: the plan's own marathon ceiling again
+                back = pt.build_rebuilt(dataclasses.replace(half, race_distance="marathon"),
+                                        dataclasses.replace(snap, today=today + dt.timedelta(days=1)), stored(plan))
+                self.assertAlmostEqual(pe.plan_ceiling(back["_check"]["ctx"])[0], b["ceiling_m"])
+
+
+class OverrideOnRebuild(RebuildCase):
+    """Repro F1: apply_overrides refused an edit only when a rule id that passed before failed after it; on a
+    rebuild the kept days already broke easy_share (week 11: 78% easy), so a cap_week_km that left week 14 with
+    no easy run was applied and the version had invariants.ok false."""
+
+    def test_an_edit_that_adds_a_problem_is_refused_whatever_else_breaks_the_rule(self):
+        inputs, snap0 = g("G4")
+        snap = dataclasses.replace(snap0, today=snap0.today + dt.timedelta(days=3))
+        body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
+        new = dataclasses.replace(inputs, run_days=(0, 1, 2, 4, 6), rest_days=(3, 5), long_run_day=4,
+                                  quality_per_week=1, blocked_dates=(D(2027, 2, 15), D(2027, 2, 16), D(2027, 2, 21)),
+                                  overrides=(pe.Override("cap_week_km", week_start=D(2027, 3, 1), km=38.0),))
+        plan = pt.build_rebuilt(new, dataclasses.replace(snap, today=D(2027, 2, 13)), body)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        self.assertIn("easy_share", [h["id"] for h in plan["invariants"]["history"]])
+        self.assertEqual(plan["overrides"]["applied"], [])
+        self.assertEqual([(r["rule"], r["value"]) for r in plan["overrides"]["refused"]],
+                         [("easy_share", "week 14: no easy run")])
+
+
+class PlanStoredBeforeTheBasis(RebuildCase):
+    """Repro F4: a plan stored before plan_basis rebuilt with the same inputs changed days (km0 from the rounded
+    start block: G5 on Monday 30 Nov, every target +0.1 km; a past week's base recomputed without its rule-7
+    cut: G1 on 17 Jan, week 2027-01-18 65.0 -> 59.0 km), and the store kept the old body while the content hash
+    matched, so the basis was never stored."""
+
+    def old_body(self, name):
+        inputs, snap = g(name)
+        body = {k: v for k, v in stored(pe.build_plan(inputs, snap, what_if_runs=False)).items() if k != "basis"}
+        return inputs, snap, body
+
+    def test_a_same_input_rebuild_plans_no_day_differently(self):
+        for name, today in (("G5", D(2026, 11, 30)), ("G1", D(2027, 1, 17)), ("G5", D(2026, 12, 28)),
+                            ("G4", D(2027, 1, 9)), ("G2", D(2026, 12, 20))):
+            with self.subTest(name, today=today):
+                inputs, snap, body = self.old_body(name)
+                b_races = tuple(x for x in inputs.b_races if x.date > today)
+                plan = pt.build_rebuilt(dataclasses.replace(inputs, b_races=b_races),
+                                        dataclasses.replace(snap, today=today, week_m=moved_on(snap, body, today)), body)
+                self.assertEqual(changed_weeks(body, pe.plan_answer(plan)), [])
+
+    def test_the_first_rebuild_stores_the_basis(self):
+        inputs, snap, body = self.old_body("G1")
+        store = ps.MemoryPlanStore()
+        fp = store.account_fp("12345")
+        pid, _v, _c = store.save_preview(fp, None, inputs.race_date, pe.RULES_VERSION, inputs.echo(), body,
+                                         body["content_hash"])
+        plan = pt.build_rebuilt(inputs, dataclasses.replace(snap, today=snap.today + dt.timedelta(days=1)), body)
+        answer = dict(pe.plan_answer(plan), basis=pe.plan_basis(plan))
+        self.assertEqual(store.save_preview(fp, pid, inputs.race_date, pe.RULES_VERSION, inputs.echo(), answer,
+                                            answer["content_hash"]), (pid, 1, False))
+        self.assertEqual(store.get_plan(fp, pid)["version_row"]["body"]["basis"], answer["basis"])
 
 
 if __name__ == "__main__":

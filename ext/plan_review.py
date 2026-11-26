@@ -14,6 +14,8 @@ hold or drop). apply_changes() patches the stored version the athlete reviewed: 
 it is, and only the sessions after today a change targets are shortened, dropped or eased (today's only for
 A8), at the bands the stored plan already uses. The patch is checked again: patch_problems() (the plan rules a
 shortening can break) and no_raise() against the stored plan refuse a change, with the rule that blocks it.
+The patched version's plan_basis counts each cut week at its cut size and keeps a cap with its week
+(_review_basis), so a later rebuild of the plan keeps the cut and grows the weeks after it from it.
 
 The rules (REVIEW_RULES; one week Monday to Sunday, "next week" the week after it):
   A1 completion of the week's due km (runs linked done or partial, each counted up to its planned km, over the
@@ -684,10 +686,11 @@ def _slow_down(body: Dict[str, Any], slowdown: float, today: dt.date) -> bool:
 
 
 def _apply_edit(body: Dict[str, Any], e: Mapping[str, Any], today: dt.date,
-                done: Optional[Mapping[str, float]], stored: Optional[Mapping[str, Any]] = None) -> bool:
+                done: Optional[Mapping[str, float]], stored: Optional[Mapping[str, Any]] = None,
+                caps: Optional[Dict[str, float]] = None) -> bool:
     """Apply one edit to `body` in place; True when it changed a session. Raises _Refused. A cut_week share is
     of the week's km in `stored` (the version reviewed, default `body`), so two cuts of one week keep the lower
-    in either order."""
+    in either order. caps: week start -> the km a cap_week or cut_week that changed the week cut it to."""
     op = e.get("op")
     if op == "easy_band":
         return _slow_down(body, float(e["slowdown"]), today)
@@ -712,6 +715,9 @@ def _apply_edit(body: Dict[str, Any], e: Mapping[str, Any], today: dt.date,
             limit = float((base or week).get("planned_km") or 0.0) * (1 - float(e["share"]))
         long_before = [s for s in _runs(week) if s.get("role") == "long"]
         changed = _cap_week(body, week, round(limit, 1), today, done)
+        if changed and caps is not None:
+            start = str(week.get("start"))
+            caps[start] = min(caps.get(start, round(limit, 1)), round(limit, 1))
         if changed and long_before != [s for s in _runs(week) if s.get("role") == "long"]:
             _keep_long_steps(body, today)
         return changed
@@ -827,6 +833,54 @@ def patch_problems(body: Mapping[str, Any], today: dt.date) -> Dict[str, str]:
     return {k: "; ".join(v[:5]) for k, v in out.items()}
 
 
+def _review_basis(work: Dict[str, Any], stored: Mapping[str, Any], caps: Mapping[str, float], today: dt.date) -> None:
+    """The patched version's plan_basis (what a rebuild grows from, plan_engine.plan_basis): a week the review
+    cut counts as planned at its cut size (its base less the km taken off; review_cut_m), and a cap_week or
+    cut_week stays with the week (cap_m from the day after cap_from), so a rebuild keeps it and the weeks after
+    it never grow from the km it had before the cut."""
+    raw = work.get("basis")
+    basis: Dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    raw_weeks = basis.get("weeks")
+    weeks: Dict[str, Any] = dict(raw_weeks) if isinstance(raw_weeks, dict) else {}
+    before = {str(w.get("start")): w for w in _weeks(stored)}
+    for w in _weeks(work):
+        start = str(w.get("start"))
+        old = before.get(start)
+        if old is None:
+            continue
+        entry: Dict[str, Any] = dict(weeks.get(start) or {})
+        planned_before = float(old.get("planned_km") or 0.0)
+        removed = (planned_before - float(w.get("planned_km") or 0.0)) * 1000.0
+        if removed > EPS_KM * 1000.0:
+            entry["review_cut_m"] = float(entry.get("review_cut_m") or 0.0) + removed
+            if w.get("kind") == "normal":
+                base = entry.get("base_m")
+                if isinstance(base, bool) or not isinstance(base, (int, float)):
+                    # a plan stored before plan_basis: its target, less what it did not place
+                    target = float(w.get("target_km") or 0.0)
+                    base = min(target, planned_before + 0.1 * len(_runs(old))) * 1000.0
+                # at most the km it has after the cut (what rule 7 or the ACWR cap took off stays no shortfall)
+                kept = {str(s.get("key")): float(s.get("km") or 0.0) * 1000.0 for s in _runs(old)}
+                raw_built = entry.get("built_m")
+                built: Dict[str, Any] = raw_built if isinstance(raw_built, dict) else {}
+                no_shortfall = float(entry.get("b_cut_m") or 0.0) + sum(
+                    (max(0.0, float(m) - kept.get(str(k), 0.0)) for k, m in built.items()
+                     if isinstance(m, (int, float)) and not isinstance(m, bool)), 0.0)
+                after = float(w.get("planned_km") or 0.0) * 1000.0 + no_shortfall
+                entry["base_m"] = max(0.0, min(float(base) - removed, after))
+        if start in caps:
+            cap = caps[start] * 1000.0
+            old_cap = entry.get("cap_m")
+            if isinstance(old_cap, (int, float)) and not isinstance(old_cap, bool):
+                cap = min(cap, float(old_cap))
+            entry.update(cap_m=cap, cap_from=today.isoformat())
+        if entry:
+            weeks[start] = entry
+    if weeks:
+        basis["weeks"] = weeks
+        work["basis"] = basis
+
+
 def apply_changes(body: Mapping[str, Any], changes: Sequence[Mapping[str, Any]], today: dt.date,
                   done: Optional[Mapping[str, float]] = None
                   ) -> Tuple[Dict[str, Any], List[str], List[Dict[str, Any]], List[str]]:
@@ -846,13 +900,15 @@ def apply_changes(body: Mapping[str, Any], changes: Sequence[Mapping[str, Any]],
     accepted: List[str] = []
     applied: List[str] = []
     refused: List[Dict[str, Any]] = []
+    caps: Dict[str, float] = {}
     for c in changes:
         cid = str(c["change_id"])
         trial = copy.deepcopy(work)
+        trial_caps = dict(caps)
         try:
             changed = False
             for e in c.get("edits") or []:
-                changed = _apply_edit(trial, e, today, done, stored) or changed
+                changed = _apply_edit(trial, e, today, done, stored, trial_caps) or changed
         except _Refused as exc:
             refused.append({"change_id": cid, "rule": exc.rule, "value": exc.value, "limit": exc.limit})
             continue
@@ -871,6 +927,7 @@ def apply_changes(body: Mapping[str, Any], changes: Sequence[Mapping[str, Any]],
                                 "limit": "never above the plan"})
                 continue
             work = trial
+            caps = trial_caps
             applied.append(cid)
         accepted.append(cid)
     if applied:
@@ -878,6 +935,7 @@ def apply_changes(body: Mapping[str, Any], changes: Sequence[Mapping[str, Any]],
         review["rules_version"] = REVIEW_RULES_VERSION
         review["applied"] = list(review.get("applied") or []) + applied
         work["review"] = review
+        _review_basis(work, stored, caps, today)
         work["content_hash"] = pe.content_hash(int(work.get("rules_version") or pe.RULES_VERSION),
                                                work.get("inputs") or {}, work.get("weeks") or [])
     return work, accepted, refused, applied
