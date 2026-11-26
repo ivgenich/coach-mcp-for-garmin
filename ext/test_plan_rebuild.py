@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import unittest
+from unittest import mock
 
 import plan_engine as pe
 import plan_review as pr
@@ -348,9 +349,10 @@ class DistanceChange(RebuildCase):
 class OverrideOnRebuild(RebuildCase):
     """Repro F1: apply_overrides refused an edit only when a rule id that passed before failed after it; on a
     rebuild the kept days already broke easy_share (week 11: 78% easy), so a cap_week_km that left week 14 with
-    no easy run was applied and the version had invariants.ok false."""
+    no easy run was applied and the version had invariants.ok false. (Since eng-rules2 a reduce-only edit may
+    relax easy_share, long_cap and long_step: that cap is now applied with the warning override_relaxed.)"""
 
-    def test_an_edit_that_adds_a_problem_is_refused_whatever_else_breaks_the_rule(self):
+    def test_an_applied_edit_never_leaves_the_rebuilt_plan_failing(self):
         inputs, snap0 = g("G4")
         snap = dataclasses.replace(snap0, today=snap0.today + dt.timedelta(days=3))
         body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
@@ -358,11 +360,41 @@ class OverrideOnRebuild(RebuildCase):
                                   quality_per_week=1, blocked_dates=(D(2027, 2, 15), D(2027, 2, 16), D(2027, 2, 21)),
                                   overrides=(pe.Override("cap_week_km", week_start=D(2027, 3, 1), km=38.0),))
         plan = pt.build_rebuilt(new, dataclasses.replace(snap, today=D(2027, 2, 13)), body)
-        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
         self.assertIn("easy_share", [h["id"] for h in plan["invariants"]["history"]])
-        self.assertEqual(plan["overrides"]["applied"], [])
-        self.assertEqual([(r["rule"], r["value"]) for r in plan["overrides"]["refused"]],
-                         [("easy_share", "week 14: no easy run")])
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        if plan["overrides"]["applied"]:
+            self.assertIn("override_relaxed", [w["id"] for w in plan["warnings"]])
+
+    def test_a_rule_another_week_breaks_never_hides_a_new_break_of_it(self):
+        # apply_overrides itself: week A already has no easy run; an edit (not reduce-only, so nothing counts as
+        # built) that takes week B's easy runs away adds "week B: no easy run" and is refused and undone
+        inputs, snap = g("G1")
+        first = pe.build_plan(inputs, snap, what_if_runs=False)
+        normal = [w.start for w in first["_check"]["weeks"] if w.kind == "normal"
+                  and any(s.role in ("easy", "strides") for s in w.sessions) and any(s.role == "long" for s in w.sessions)]
+        swap = pe.Override("swap", date=normal[0], date_b=normal[0] + dt.timedelta(days=1))
+        plan = pe.build_plan(dataclasses.replace(inputs, overrides=(swap,)), snap, what_if_runs=False)
+        weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
+        by_start = {w.start: w for w in weeks}
+        a, b = by_start[normal[0]], by_start[normal[-1]]
+
+        def no_easy(w):
+            w.sessions = [s for s in w.sessions if s.role not in ("easy", "strides")]
+
+        no_easy(a)
+        before = [i["detail"] for i in pe.check_invariants(plan) if i["id"] == "easy_share" and not i["ok"]]
+        self.assertTrue(before and f"week {a.number}: no easy run" in before[0], before)
+
+        def edit(_weeks, _ctx, o):
+            no_easy(b)
+            return [{"edit": o.echo()}], []
+
+        with mock.patch.object(pe, "_apply_one", edit):
+            applied, refused = pe.apply_overrides(weeks, ctx)
+        self.assertEqual(applied, [])
+        self.assertEqual([r["rule"] for r in refused], ["easy_share"])
+        self.assertIn(f"week {b.number}: no easy run", refused[0]["value"])
+        self.assertTrue(any(s.role in ("easy", "strides") for s in b.sessions), "the refused edit is undone")
 
 
 class PlanStoredBeforeTheBasis(RebuildCase):
