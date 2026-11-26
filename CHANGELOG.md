@@ -67,6 +67,10 @@ and so what a MAJOR, MINOR or PATCH release may change:
   max(1.2 x the biggest week, km0 + 18 km) and long runs of at most 24 km. `plan_assess` reads the
   running VO2max from the training status (`mostRecentVO2Max`) when `get_max_metrics` has no
   reading for today.
+- Plan invariants: a pace band outside the speed limits is listed as `pace_targets.<band>` in
+  `missing` with the warning `band_out_of_limits`, and `bands_match_roles` fails one dropped without
+  them; `dto_valid` also checks every step's values (distance 1 m to 50 km, time 1 s to 6 h,
+  repeats 1 to 50, pace targets slower < faster within 1.5-7.0 m/s).
 
 ### Changed
 

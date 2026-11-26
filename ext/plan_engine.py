@@ -382,6 +382,20 @@ class Paces:
         self.limits = (float(lo), float(hi))
 
     def band(self, name: Optional[str]) -> Optional[Tuple[MetersPerSecond, MetersPerSecond]]:
+        """The band in m/s (3 decimals), or None: no LT speed or MP, or outside speed_limits_mps (see
+        out_of_limits())."""
+        raw = self.raw_band(name)
+        if raw is None or raw[0] < self.limits[0] or raw[1] > self.limits[1]:
+            return None
+        return MetersPerSecond(round(raw[0], 3)), MetersPerSecond(round(raw[1], 3))
+
+    def out_of_limits(self, name: Optional[str]) -> bool:
+        """The band is known but outside speed_limits_mps, so its steps carry no pace target."""
+        raw = self.raw_band(name)
+        return raw is not None and (raw[0] < self.limits[0] or raw[1] > self.limits[1])
+
+    def raw_band(self, name: Optional[str]) -> Optional[Tuple[float, float]]:
+        """The band before the speed limits; None without an LT speed (or MP for "mp")."""
         if name is None or self.lt is None:
             return None
         if name in self.anchored:
@@ -396,9 +410,7 @@ class Paces:
             low, high = self.lt * f_lo, self.lt * f_hi
             if name in ("easy", "long") and self.easy_slowdown:
                 low, high = low * (1 - self.easy_slowdown), high * (1 - self.easy_slowdown)
-        if low < self.limits[0] or high > self.limits[1]:
-            return None
-        return MetersPerSecond(round(low, 3)), MetersPerSecond(round(high, 3))
+        return float(low), float(high)
 
     def mid(self, name: Optional[str]) -> Optional[MetersPerSecond]:
         b = self.band(name)
@@ -1195,6 +1207,20 @@ def week0(ctx: Context) -> Optional[Week]:
     return w
 
 
+def report_out_of_limits(paces: Paces, warnings: List[Dict[str, Any]], missing: List[str]) -> None:
+    """A band outside speed_limits_mps leaves its steps without a pace target: listed as missing
+    (pace_targets.<band>) with a warning, never dropped silently (bands_match_roles checks it)."""
+    names = [n for n in (*paces.rules["bands_of_lt"], "mp") if paces.out_of_limits(n)]
+    new = [n for n in names if f"pace_targets.{n}" not in missing]
+    if not new:
+        return
+    missing += [f"pace_targets.{n}" for n in new]
+    lo, hi = paces.limits
+    warnings.append({"id": "band_out_of_limits", "dates": [],
+                     "detail": f"the {', '.join(new)} band{'s' if len(new) > 1 else ''} outside {lo}-{hi} m/s: "
+                               f"those steps carry no pace target"})
+
+
 def by_distance(rules: Mapping[str, Any], distance: str, key: str) -> Any:
     """rules[key], or the race distance's own value of it (rules "by_distance")."""
     own = (rules.get("by_distance") or {}).get(distance) or {}
@@ -1355,6 +1381,7 @@ def context(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any]) -> Con
     for f in snap.fixed:
         fixed.setdefault(f.date, []).append(f)
     paces = Paces(snap.lt_speed_mps, mp, rules, anchored=anchored_bands(snap.lt_speed_mps, snap, rules))
+    report_out_of_limits(paces, warnings, missing)
     return Context(inputs, snap, rules, paces, km0, longest, [], fixed,
                    warnings, missing)
 
@@ -2201,9 +2228,12 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
     for w in weeks:
         for s in w.sessions:
             for st in _leaves(s.steps):
-                band = paces.band(st.band) if st.band else None
-                if band is not None and not (lo_lim <= band[0] <= band[1] <= hi_lim):
-                    bands.append(f"{s.key}: {band}")
+                band = paces.raw_band(st.band) if st.band else None
+                if band is not None and not (lo_lim <= band[0] <= band[1] <= hi_lim) \
+                        and f"pace_targets.{st.band}" not in ctx.missing:
+                    # outside the speed limits the step has no pace target: only with it listed as missing
+                    bands.append(f"{s.key}: {st.band} band {round(band[0], 3)}-{round(band[1], 3)} m/s outside "
+                                 f"the speed limits, not reported")
                 if st.band and s.role in ("easy", "long") and st.band not in ("easy", "long"):
                     bands.append(f"{s.key}: {st.band} step in an {s.role} run")
                 if s.role in QUALITY_ROLES and st.kind == "interval" and st.band != s.role:
@@ -2389,6 +2419,7 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
         # Stage 4 (plan_review A4): the easy and long runs keep their planned distances, only their pace band
         # (and so their minutes) is slower in the answer and the workouts; every rule above ran on the plan's bands.
         paces = Paces(ctx.paces.lt, ctx.paces.mp, rules, inputs.easy_band_slowdown, ctx.paces.anchored)
+        report_out_of_limits(paces, ctx.warnings, ctx.missing)
     week_list = [week_json(w, paces) for w in weeks]
     echo = inputs.echo()
     summ = summary(weeks)

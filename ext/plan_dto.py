@@ -133,6 +133,55 @@ def validate(dto: Mapping[str, Any]) -> Optional[List[str]]:
     return problems
 
 
+# The step values dto_valid accepts (upstream checks only ids and keys): a distance step 1 m to 50 km, a timed
+# step 1 s to 6 h, a repeat 1 to 50 times with steps in it, a pace target with 0 < slower < faster speed inside
+# the plan engine's speed limits.
+MAX_STEP_M = 50_000.0
+MAX_STEP_S = 6 * 3600.0
+MAX_REPEATS = 50
+
+
+def step_value_problems(dto: Mapping[str, Any]) -> List[str]:
+    """The DTO's steps with values a workout cannot run (fixed texts, no values): [] when all are sane."""
+    import plan_engine as pe   # lazily, as selfcheck(): plan_engine stays free of this module
+
+    lo_lim, hi_lim = (float(x) for x in pe.RULES["speed_limits_mps"])
+    problems: List[str] = []
+
+    def num(v: Any) -> Optional[float]:
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    def walk(steps: Any) -> None:
+        if not isinstance(steps, list) or not steps:
+            problems.append("a workout or repeat without steps")
+            return
+        for st in steps:
+            if not isinstance(st, dict):
+                problems.append("a step that is not an object")
+                continue
+            end = (st.get("endCondition") or {}).get("conditionTypeKey")
+            value = num(st.get("endConditionValue"))
+            if st.get("type") == "RepeatGroupDTO":
+                n = num(st.get("numberOfIterations"))
+                if n is None or not 1 <= n <= MAX_REPEATS or n != int(n):
+                    problems.append("a repeat count outside 1-50")
+                walk(st.get("workoutSteps"))
+                continue
+            limit = {"distance": MAX_STEP_M, "time": MAX_STEP_S}.get(str(end))
+            if limit is None:
+                problems.append("a step that ends neither by distance nor by time")
+            elif value is None or not 1.0 <= value <= limit:
+                problems.append(f"a {end} step outside 1-{int(limit)}")
+            if (st.get("targetType") or {}).get("workoutTargetTypeKey") == "pace.zone":
+                one, two = num(st.get("targetValueOne")), num(st.get("targetValueTwo"))
+                if one is None or two is None or not lo_lim <= one < two <= hi_lim:
+                    problems.append("a pace target not slower < faster within the speed limits")
+
+    walk([s for seg in dto.get("workoutSegments") or [] if isinstance(seg, dict)
+          for s in seg.get("workoutSteps") or []] or None)
+    return problems
+
+
 def classify(dto: Mapping[str, Any], athlete: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """daily_status.classify_workout of the DTO as get_daily_status would read it from the calendar; None
     without upstream."""
@@ -190,7 +239,7 @@ def check_plan(plan: Mapping[str, Any], lt_speed_mps: Optional[float]) -> List[D
                 {"id": "cross_engine", "ok": True, "detail": SKIPPED}]
     athlete = {"lt_speed_mps": lt_speed_mps, "lt_hr": None, "ftp_w": None}
     for s, dto in pairs:
-        problems = validate(dto) or []
+        problems = (validate(dto) or []) + step_value_problems(dto)
         if problems:
             bad.append(f"{s['key']}: {problems[0]}")
         c = classify(dto, athlete) or {}

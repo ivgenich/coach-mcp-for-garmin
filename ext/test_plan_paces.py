@@ -7,6 +7,7 @@ running VO2max 60, Tel Aviv Marathon on 2027-02-26 without a goal.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -142,6 +143,32 @@ class AnchoredBands(unittest.TestCase):
         self.assertAlmostEqual(lo, 0.91 * LT, places=6)
         a = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)
         self.assertGreaterEqual(a["intervals"][0], hi)               # intervals never under the threshold band
+
+
+class SpeedLimits(unittest.TestCase):
+    """A band outside the speed limits loses its pace target only with it listed as missing and a warning;
+    otherwise bands_match_roles fails (it skipped every such band before)."""
+
+    def failed(self, plan):
+        return {i["id"]: i for i in pe.check_invariants(plan)}
+
+    def test_bands_shifted_out_of_the_limits_fail_bands_match_roles(self):
+        plan = pe.build_plan(pe.PlanInputs(race_date=RACE), owner_snapshot(), what_if_runs=False)
+        self.assertTrue(self.failed(plan)["bands_match_roles"]["ok"])
+        plan["_check"]["ctx"].paces.lt = pe.MetersPerSecond(9.0)   # every LT band above 7 m/s
+        check = self.failed(plan)["bands_match_roles"]
+        self.assertFalse(check["ok"])
+        self.assertIn("outside the speed limits", check["detail"])
+
+    def test_a_slow_runners_easy_band_is_reported_missing(self):
+        snap = owner_snapshot(predictions=())
+        slow = pe.build_plan(pe.PlanInputs(race_date=RACE), dataclasses.replace(
+            snap, lt_speed_mps=pe.MetersPerSecond(2.0)), what_if_runs=False)   # 0.70 x 2.0 = 1.4 m/s < 1.5
+        self.assertTrue(slow["invariants"]["ok"], slow["invariants"]["failed"])
+        self.assertIn("pace_targets.easy", slow["missing"])
+        self.assertIn("band_out_of_limits", [w["id"] for w in slow["warnings"]])
+        ok = pe.build_plan(pe.PlanInputs(race_date=RACE), snap, what_if_runs=False)
+        self.assertFalse([m for m in ok["missing"] if m.startswith("pace_targets.")])
 
 
 class HalfProjection(unittest.TestCase):

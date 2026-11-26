@@ -139,7 +139,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    which `get_daily_status` classifies as easy.
 5. Pace bands are fractions of the lactate-threshold speed: easy and long 0.70-0.80, threshold 0.97-1.03,
    intervals and strides 1.05-1.10. Without an LT speed the steps have no pace target and `lt_speed` is
-   listed as missing.
+   listed as missing. A band outside 1.5-7.0 m/s leaves its steps without a pace target too, listed as
+   `pace_targets.<band>` in `missing` with the warning `band_out_of_limits` (`bands_match_roles` fails a
+   band dropped without them).
    - Garmin's 5K and 10K race predictions anchor the harder bands when there is one (a missing one is
      converted from the other by Riegel's formula, t2 = t1 x (d2/d1)^1.06), because a Garmin LT close to
      the 5K pace makes LT multiples faster than the athlete races: intervals run from the 5K pace to its
@@ -186,7 +188,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    planned weeks and the longest long run placed so far, recomputed by the check) (`growth_cap`, `no_makeup`,
    `deload_cadence`, `deload_depth`, `long_cap`, `long_step`, `peak_long_timing`, `easy_share`,
    `no_adjacent_hard`, `bands_match_roles`, `b_windows`, `a_taper`, `last_quality`, `rest_days`,
-   `one_run_per_day`, `peak_ceiling`), plus `dto_valid` (upstream's workout checks pass on every workout JSON) and
+   `one_run_per_day`, `peak_ceiling`), plus `dto_valid` (upstream's workout checks pass on every workout
+   JSON, and every step's values are sane: a distance of 1 m to 50 km or a time of 1 s to 6 h, repeats 1 to
+   50 times, a pace target slower < faster within 1.5-7.0 m/s) and
    `cross_engine` (every session `get_daily_status` would call hard or long is one the plan marks so).
 10. What-if: the goal 5 minutes faster and slower, and a long-run share of 0.35 and 0.45, each with its peak,
     long run, verdict and warnings.

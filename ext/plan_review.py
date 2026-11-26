@@ -484,6 +484,10 @@ class _StoredPaces(pe.Paces):
         f = self.factor if name in ("easy", "long") else 1.0
         return pe.MetersPerSecond(round(b[0] * f, 3)), pe.MetersPerSecond(round(b[1] * f, 3))
 
+    def raw_band(self, name: Optional[str]) -> Optional[Tuple[float, float]]:
+        b = self.band(name)   # the stored bands were inside the speed limits when the plan was built
+        return None if b is None else (float(b[0]), float(b[1]))
+
 
 def _speed(step: Any) -> Optional[Tuple[float, float]]:
     v = step.get("speed_mps") if isinstance(step, dict) else None
