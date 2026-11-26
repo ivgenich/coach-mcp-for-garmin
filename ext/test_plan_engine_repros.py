@@ -107,15 +107,15 @@ class LongRunDayOnARestDay(unittest.TestCase):
         self.assertIn("no long run in any normal week", failed["long_cap"])
 
     def test_a_week_whose_long_run_day_is_today_does_not_count_as_one_that_needed_a_long_run(self):
-        # Repro (DEEP_EXAMPLES=2000, a half never plans more than a marathon): a half built on Monday 30 Nov with
+        # Repro (DEEP_EXAMPLES=2000, a half never plans more than a marathon): a half built on Monday 29 Nov with
         # the long run on Monday; the engine plans nothing on today, so week 1 has no long run, and it was the
         # only normal week 21+ days out: "no long run in any normal week" failed a plan that could not have one
-        inputs = pe.PlanInputs(race_date=D(2026, 12, 21), race_distance="half", run_days=(0, 2, 3),
+        inputs = pe.PlanInputs(race_date=D(2027, 12, 20), race_distance="half", run_days=(0, 2, 3),
                                rest_days=(1, 4, 5, 6), long_run_day=0, quality_per_week=0)
-        snap = _snap(D(2026, 11, 30), [8.0] * 8, 5.0, predictions=(("marathon", 13200), ("half", 6300)))
+        snap = _snap(D(2027, 11, 29), [8.0] * 8, 5.0, predictions=(("marathon", 13200), ("half", 6300)))
         plan = pe.build_plan(inputs, snap, what_if_runs=False)
         self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
-        first = _week_of(plan, D(2026, 11, 30))
+        first = _week_of(plan, D(2027, 11, 29))
         self.assertFalse([s for s in first["sessions"] if s["role"] == "long"])
 
     def test_feasibility_fails_a_plan_with_no_long_run(self):

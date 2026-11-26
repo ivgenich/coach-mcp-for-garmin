@@ -182,7 +182,7 @@ def parse_goal(value: Any) -> Optional[int]:
         return None
     m = _GOAL_RE.fullmatch(text)
     if not m:
-        raise BadInput("goal_time must be H:MM:SS, for example 3:30:00")
+        raise BadInput("goal_time must be H:MM:SS, for example 3:45:00")
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
 
 

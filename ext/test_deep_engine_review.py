@@ -308,7 +308,7 @@ class Apply(unittest.TestCase):
 
     def setUp(self) -> None:
         snap = snapshot(self.BUILT, PROFILES["club40"], loads={})
-        self.inputs = pe.PlanInputs(race_date=D(2027, 3, 21), goal_time_s=12600,
+        self.inputs = pe.PlanInputs(race_date=D(2027, 3, 21), goal_time_s=13500,
                                     b_races=(pe.BRace(D(2027, 1, 16), "tri_half"),))
         self.body = stored(self.inputs, snap)
 
@@ -452,7 +452,7 @@ class Apply(unittest.TestCase):
 
     def test_two_accepted_cuts_of_one_week_keep_the_lower_whatever_their_order(self):
         snap = pe.sample_snapshot(self.BUILT)
-        body = stored(pe.PlanInputs(race_date=D(2027, 3, 26), goal_time_s=3 * 3600 + 30 * 60), snap)
+        body = stored(pe.PlanInputs(race_date=D(2027, 3, 26), goal_time_s=3 * 3600 + 45 * 60), snap)
         week, nxt = D(2026, 12, 7), D(2026, 12, 14)
         sessions = pr.sessions_of(body)
         links = {s.key: "done" for s in sessions if s.date < nxt}

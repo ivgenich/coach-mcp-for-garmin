@@ -440,7 +440,7 @@ class ProfileMatrix(Oracle):
                         loads = {} if (weeks + wd) % 3 == 0 else None
                         snap = snapshot(today, prof, loads=loads)
                         inputs = pe.PlanInputs(race_date=race, race_distance=dist,
-                                               goal_time_s=None if wd % 2 else (12600 if dist == "marathon" else 6000))
+                                               goal_time_s=None if wd % 2 else (13500 if dist == "marathon" else 6000))
                         with self.subTest(profile=name, dist=dist, weeks=weeks, today=today.isoformat()):
                             self.assertSound(inputs, snap)
                             n += 1
@@ -489,7 +489,7 @@ class ProfileMatrix(Oracle):
         self.assertIsNone(nolong["start"]["longest_run_8w_km"])
 
     def test_no_lt_speed(self):
-        plan = self.assertSound(pe.PlanInputs(race_date=race_in(TODAY, 14, 6), goal_time_s=12600),
+        plan = self.assertSound(pe.PlanInputs(race_date=race_in(TODAY, 14, 6), goal_time_s=13500),
                                 snapshot(TODAY, PROFILES["no_lt"]))
         self.assertTrue({"lt_speed", "pace_targets", "long_run_time_cap"} <= set(plan["missing"]))
         for w in plan["weeks"]:
@@ -635,7 +635,7 @@ class BRaces(Oracle):
 
     def plan(self, *b, prof="club40", loads=None):
         snap = snapshot(TODAY, PROFILES[prof], loads=loads)
-        inputs = pe.PlanInputs(race_date=self.RACE, goal_time_s=12600, b_races=tuple(b))
+        inputs = pe.PlanInputs(race_date=self.RACE, goal_time_s=13500, b_races=tuple(b))
         return inputs, snap, self.assertSound(inputs, snap, msg=str(b))
 
     def test_each_kind_at_each_place(self):
@@ -861,7 +861,7 @@ class Inputs(Oracle):
         # The sample numbers (pe.sample_snapshot), a Saturday marathon, long runs on Saturday, and the Saturday 21
         # days out blocked (Friday is a rest day, so the long run goes to Sunday, 20 days out).
         race = D(2027, 2, 27)
-        inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 30 * 60, long_run_day=5,
+        inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 45 * 60, long_run_day=5,
                                blocked_dates=(race - dt.timedelta(days=21),))
         plan = build(inputs, pe.sample_snapshot(TODAY))
         self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
@@ -869,7 +869,7 @@ class Inputs(Oracle):
     def test_the_same_trim_without_a_blocked_date(self):
         # the same week with the long run on its day: every rule holds
         race = D(2027, 2, 27)
-        inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 30 * 60, long_run_day=5)
+        inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 45 * 60, long_run_day=5)
         self.assertSound(inputs, pe.sample_snapshot(TODAY))
 
     def test_late_long_runs_are_capped_before_any_peak_long_run(self):
@@ -918,7 +918,7 @@ class FixedSessions(Oracle):
         for loads in (None, {}, {"garmin_gap": 0.3}):
             with self.subTest(loads=loads):
                 snap = snapshot(TODAY, PROFILES["club40"], loads=loads, fixed=fixed)
-                plan = self.assertSound(pe.PlanInputs(race_date=self.RACE, goal_time_s=12600), snap)
+                plan = self.assertSound(pe.PlanInputs(race_date=self.RACE, goal_time_s=13500), snap)
                 if loads == {}:
                     self.assertTrue(plan["acwr"]["enforced"])
 
@@ -965,7 +965,7 @@ class Determinism(Oracle):
         for name, prof in PROFILES.items():
             for loads in (None, {}):
                 snap = snapshot(TODAY, prof, loads=loads)
-                inputs = pe.PlanInputs(race_date=D(2027, 3, 21), goal_time_s=12600,
+                inputs = pe.PlanInputs(race_date=D(2027, 3, 21), goal_time_s=13500,
                                        b_races=(pe.BRace(D(2027, 1, 16), "tri_half"),),
                                        blocked_dates=(D(2026, 12, 25), D(2027, 1, 1)))
                 a = pe.plan_answer(build(inputs, snap, what_if=True))
@@ -986,7 +986,7 @@ class Determinism(Oracle):
     def test_any_change_in_the_inputs_changes_the_hash(self):
         snap = snapshot(TODAY, PROFILES["club40"])
         base = pe.PlanInputs(race_date=D(2027, 3, 21))
-        variants = [dataclasses.replace(base, goal_time_s=12600), dataclasses.replace(base, quality_per_week=1),
+        variants = [dataclasses.replace(base, goal_time_s=13500), dataclasses.replace(base, quality_per_week=1),
                     dataclasses.replace(base, max_long_km=30.0), dataclasses.replace(base, long_share=0.45),
                     dataclasses.replace(base, course_id=7), dataclasses.replace(base, easy_band_slowdown=0.03),
                     dataclasses.replace(base, blocked_dates=(D(2027, 2, 1),))]

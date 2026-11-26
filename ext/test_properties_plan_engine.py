@@ -405,7 +405,7 @@ def owner_like_case(draw):
     snap = pe.Snapshot(today=today, week_m=km_weeks, week_runs=(4,) * 8,
                        longest_run_8w_m=pe.Meters(draw(st.floats(15000, 28000))),
                        lt_speed_mps=pe.MetersPerSecond(draw(st.floats(3.5, 4.5))),
-                       prediction_s=(("marathon", 3 * 3600 + 30 * 60),), activity_load=acts, garmin_load=garmin)
+                       prediction_s=(("marathon", 3 * 3600 + 45 * 60),), activity_load=acts, garmin_load=garmin)
     inputs = pe.PlanInputs(race_date=race, b_races=b_races, run_days=run_days, rest_days=rest, long_run_day=long_day,
                            blocked_dates=blocked)
     return inputs, snap
