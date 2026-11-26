@@ -1976,6 +1976,9 @@ def _build_core(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
     assign_targets([w for w in past if w.kind != "week0"] + weeks, ctx, place,
                    lambda w: _capacity(w, ctx, hard, index))
     ctx.built_longs = _longs(all_weeks, ctx)
+    if history is not None:
+        # the plan is built: from here on (overrides, invariants) no day up to today is a run day of it
+        ctx.opens_after = today
     reenforce_acwr(all_weeks, ctx)   # item 12: the days after a week before the next week's first run
     return all_weeks, ctx
 

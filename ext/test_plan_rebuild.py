@@ -106,6 +106,20 @@ class MergedWeek(RebuildCase):
                          week(self.body, "2026-12-28")["sessions"][:3])
 
 
+class PastDaysAreNoRunDays(RebuildCase):
+    def test_rule_4_never_asks_for_an_easy_run_on_a_day_up_to_today(self):
+        # a property example: built on a Monday (week 1 from Tuesday), rebuilt on Tuesday with Tuesday as the
+        # long-run day; Wednesday is the only day left, so the week has no easy run, and that keeps rule 4
+        inputs = pe.PlanInputs(race_date=D(2026, 12, 7), run_days=(0, 2, 3), rest_days=(1, 4, 5, 6), long_run_day=0,
+                               quality_per_week=0, max_long_km=24.0)
+        snap = pe.Snapshot(today=D(2026, 11, 30), week_m=(8000.0,) * 8, week_runs=(4,) * 8,
+                           longest_run_8w_m=pe.Meters(5000.0), prediction_s=(("marathon", 13200), ("half", 6300)))
+        body = stored(pe.build_plan(inputs, snap, what_if_runs=False))
+        new = dataclasses.replace(inputs, run_days=(0, 1, 2), rest_days=(3, 4, 5, 6), long_run_day=1)
+        plan = pt.build_rebuilt(new, dataclasses.replace(snap, today=D(2026, 12, 1)), body)
+        self.assert_merged_ok(plan)
+
+
 class SameInputs(RebuildCase):
     def test_a_rebuild_on_any_later_day_gives_the_stored_plan(self):
         for name in ("G1", "G4", "G5"):
