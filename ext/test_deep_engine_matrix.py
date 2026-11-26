@@ -15,7 +15,7 @@ import dataclasses
 import datetime as dt
 import math
 import unittest
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import plan_engine as pe
 
@@ -268,27 +268,44 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
                     out.append(f"{d}: first long {k} km after a B race")
                 if b["kind"] == "tri_full" and (d - bd).days < 10:
                     out.append(f"{d}: a long run {(d - bd).days} days after a full-distance triathlon")
-    # rule 4: at least 80% of each week's time easy (by distance without an LT speed)
+    # rule 4: at least 80% of each week's time easy (by distance without an LT speed); a step without a pace target
+    # at its band's documented speed (easy and long by rule 5, MP without one at the corrected goal's pace)
+    def speed_of(band: Optional[str]) -> Optional[float]:
+        if band in ("easy", "long"):
+            lo, hi = _easy_band(inputs, snap, a["race"]["marathon_pace"], band == "long")
+            return (lo + hi) / 2
+        if band == "mp":
+            return _accepted_speed(dataclasses.replace(inputs, goal_time_s=None), snap)
+        if band in R["bands_of_lt"] and lt:
+            return lt * sum(R["bands_of_lt"][band]) / 2
+        return None
+
+    # a reduce-only override may take a week under 80% easy: the week then carries override_relaxed instead
+    relaxed = {x["dates"][0] for x in a["warnings"] if x["id"] == "override_relaxed" and x["dates"]}
     for w in real:
+        if w["start"] in relaxed:
+            continue
         hard_t = total_t = 0.0
         for s in w["sessions"]:
             if s["role"] in ("race", "b_race"):
                 continue
-            h, t = _times(s, lt is not None)
+            h, t = _times(s, lt is not None, speed_of)
             hard_t += h
             total_t += t
         if total_t > 0 and hard_t / total_t > 0.2 + 1e-6:
             out.append(f"week {w['week']}: {round(100 * (1 - hard_t / total_t), 1)}% easy")
-    # rule 5: mp band clamped to 0.85-0.96 of LT, but never raised past the fastest race pace feasibility accepts
+    # rule 5: mp band clamped to 0.85-0.96 of LT (a half's 0.85-1.02), but never raised past the fastest race pace
+    # feasibility accepts
     if lt and a["race"]["marathon_pace"]:
         m, s_ = a["race"]["marathon_pace"].split(":")
         speed = 1000.0 / (int(m) * 60 + int(s_))
         accept = _accepted_speed(inputs, snap)
-        floor = 0.85 * lt if accept is None else min(0.85 * lt, accept)
-        if not inputs.goal_time_s and accept is not None:   # the corrected goal's pace, at most 0.96 x LT
-            floor = min(accept, 0.96 * lt)
-        if not floor - 0.02 <= speed <= 0.96 * lt + 0.02:
-            out.append(f"marathon pace {a['race']['marathon_pace']} outside 0.85-0.96 of LT")
+        s_lo, s_hi = (0.85, 1.02) if inputs.race_distance == "half" else (0.85, 0.96)
+        floor = s_lo * lt if accept is None else min(s_lo * lt, accept)
+        if not inputs.goal_time_s and accept is not None:   # the corrected goal's pace, at most the band's top
+            floor = min(accept, s_hi * lt)
+        if not floor - 0.02 <= speed <= s_hi * lt + 0.02:
+            out.append(f"marathon pace {a['race']['marathon_pace']} outside {s_lo}-{s_hi} of LT")
         goal_speed = (21097.5 if inputs.race_distance == "half" else 42195.0) / (inputs.goal_time_s or 1e9)
         if accept is not None and speed > max(accept, goal_speed) + 0.02:
             out.append(f"marathon pace {a['race']['marathon_pace']} faster than feasibility accepts")
@@ -355,7 +372,11 @@ def _accepted_speed(inputs: pe.PlanInputs, snap: pe.Snapshot) -> Optional[float]
     return dist / (math.ceil(max(times) / 60.0) * 60) if times else None
 
 
-def _times(s: Dict[str, Any], by_time: bool) -> Tuple[float, float]:
+def _times(s: Dict[str, Any], by_time: bool,
+           speed_of: Optional[Callable[[Optional[str]], Optional[float]]] = None) -> Tuple[float, float]:
+    """(quality seconds, total seconds) of a session, metres without an LT speed. A distance step without a
+    pace target (its band outside the speed limits, or MP without a goal or prediction) is timed at
+    speed_of(its band), the band's documented speed."""
     quality = s["role"] in pe.QUALITY_ROLES
 
     def walk(steps: Iterable[Dict[str, Any]], times: int) -> Tuple[float, float]:
@@ -369,7 +390,8 @@ def _times(s: Dict[str, Any], by_time: bool) -> Tuple[float, float]:
                 else:
                     dist = float(st["distance_m"])
                     sp = st.get("speed_mps")
-                    tt = dist / ((sp[0] + sp[1]) / 2) if by_time and sp else dist
+                    est = speed_of(st.get("target")) if by_time and not sp and speed_of else None
+                    tt = dist / ((sp[0] + sp[1]) / 2) if by_time and sp else (dist / est if est else dist)
                 hh = tt if quality and st["type"] == "interval" else 0.0
             h += hh * times
             t += tt * times
