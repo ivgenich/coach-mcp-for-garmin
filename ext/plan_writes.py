@@ -11,8 +11,10 @@ future, unlinked workouts and cancels the plan. A token is used first within 30 
 hours; a finished token replays its stored answer and calls Garmin no more.
 
 Before a token runs, the caller's access token must carry the plan:write scope (plan_confirm.caller_may_write:
-never the static MCP_BEARER_TOKEN), and when the client supports MCP elicitation the user confirms a summary the
-server builds (count, dates, roles; never Garmin text). Declined: nothing written, the token stays usable.
+never the static MCP_BEARER_TOKEN), and when the client supports MCP form elicitation the user confirms a summary
+the server builds (count, dates, roles; never Garmin text). Declined: nothing written, the token stays usable. On
+protocol 2026-07-28 that is the input-required round (plan_confirm): the first call returns an InputRequiredResult
+and writes nothing, the client calls again with the answer.
 
 The write path is a dedicated, sequential helper, not status_common.fetch_all (which abandons a timed-out call
 and leaves its thread running, so a POST could still land): each request runs on a thread of its own that this
@@ -41,13 +43,14 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime as dt
+import hashlib
 import logging
 import os
 import re
 import sys
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 import daily_status as ds
 import plan_dto
@@ -790,6 +793,17 @@ def _summary_for_confirm(action: str, ops: Sequence[Mapping[str, Any]]) -> Dict[
     return out
 
 
+def _binding(*parts: Any) -> str:
+    """What the confirmation binds its input-required round to (plan_confirm): a digest of the action, plan_id,
+    token and change ids, so the token itself never goes into the round's state."""
+    return hashlib.sha256(repr([str(p) for p in parts]).encode()).hexdigest()[:32]
+
+
+def _is_input_required(value: Any) -> bool:
+    """The input-required round's InputRequiredResult (mcp_types; this module does not import mcp)."""
+    return not isinstance(value, str) and getattr(value, "result_type", None) == "input_required"
+
+
 class WriteService:
     """plan_commit and plan_cancel, with the Garmin client, the store, the clock, the scope check and the
     confirmation passed in (tests use fakes)."""
@@ -810,15 +824,19 @@ class WriteService:
         with self._locks_lock:
             return self._locks.setdefault(plan_id, threading.Lock())
 
-    async def _confirmed(self, ctx: Any, action: str, ops: Sequence[Mapping[str, Any]]) -> str:
-        """accepted, declined or unsupported (no elicitation: the token alone)."""
+    async def _confirmed(self, ctx: Any, action: str, ops: Sequence[Mapping[str, Any]], bind: str) -> Any:
+        """accepted, declined or unsupported (no elicitation: the token alone), or the input-required round's
+        InputRequiredResult (protocol 2026-07-28: round 1 asks, nothing is written; the tool returns it as is).
+        `bind` (_binding()) ties round 2's answer to this action, plan, token and change ids."""
         if self._confirm is None:
             return "unsupported"
         try:
-            answer = await self._confirm(ctx, action=action, **_summary_for_confirm(action, ops))
+            answer = await self._confirm(ctx, action=action, bind=bind, **_summary_for_confirm(action, ops))
         except Exception as exc:  # noqa: BLE001 - a failed confirmation never writes
             log.info("plans: the write confirmation failed (%s)", type(exc).__name__)
             return "declined"
+        if _is_input_required(answer):
+            return answer
         return answer if answer in ("accepted", "declined", "unsupported") else "declined"
 
     def _load(self, plan_id: str, token: str, action: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
@@ -829,10 +847,10 @@ class WriteService:
         fp = store.history_account()
         return (store.get_plan(fp, plan_id) if fp is not None else None), row
 
-    async def commit(self, plan_id: Any = "", commit_token: Any = "", ctx: Any = None) -> str:
+    async def commit(self, plan_id: Any = "", commit_token: Any = "", ctx: Any = None) -> Any:
         return await self._run_token("commit", plan_id, commit_token, ctx)
 
-    async def cancel(self, plan_id: Any = "", cancel_token: Any = "", ctx: Any = None) -> str:
+    async def cancel(self, plan_id: Any = "", cancel_token: Any = "", ctx: Any = None) -> Any:
         try:
             pid = _parse_plan_id(plan_id)
             token = _parse_token(cancel_token, "cancel", optional=True)
@@ -844,7 +862,7 @@ class WriteService:
             return sc.compact_json(await asyncio.to_thread(self._cancel_preview, pid))
         return await self._run_token("cancel", pid, token, ctx)
 
-    async def apply(self, plan_id: Any = "", apply_token: Any = "", change_ids: Any = "", ctx: Any = None) -> str:
+    async def apply(self, plan_id: Any = "", apply_token: Any = "", change_ids: Any = "", ctx: Any = None) -> Any:
         """plan_apply_changes: the apply token of plan_review_week, for exactly the change ids it lists."""
         try:
             pid = _parse_plan_id(plan_id)
@@ -886,7 +904,9 @@ class WriteService:
         ops = [o for o in payload.get("ops") or [] if not (o["op"] == "create" and o["date"] < today.isoformat())]
         previous = row.get("result") if isinstance(row.get("result"), dict) else {}
         if row["status"] == "issued":
-            answer = await self._confirmed(ctx, "apply", ops)
+            answer = await self._confirmed(ctx, "apply", ops, _binding("apply", pid, token, sorted(ids)))
+            if _is_input_required(answer):
+                return answer
             if answer == "declined":
                 return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(ops),
                                                note=NOTE_DECLINED))
@@ -913,7 +933,7 @@ class WriteService:
                        note=("Nothing was deleted yet. Show the user what would be deleted; only after they approve, "
                              "call plan_cancel again with this cancel_token. The plan is then cancelled."))
 
-    async def _run_token(self, action: str, plan_id: Any, token_text: Any, ctx: Any) -> str:
+    async def _run_token(self, action: str, plan_id: Any, token_text: Any, ctx: Any) -> Any:
         try:
             pid = _parse_plan_id(plan_id)
             token = _parse_token(token_text, action)
@@ -939,7 +959,9 @@ class WriteService:
         ops = [o for o in row["ops"].get("ops") or [] if not (o["op"] == "create" and o["date"] < today.isoformat())]
         previous = row.get("result") if isinstance(row.get("result"), dict) else {}
         if row["status"] == "issued":
-            answer = await self._confirmed(ctx, action, ops)
+            answer = await self._confirmed(ctx, action, ops, _binding(action, pid, token))
+            if _is_input_required(answer):
+                return answer
             if answer == "declined":
                 return sc.compact_json(_answer("declined", pid, confirmed_by=None, written=[], remaining=len(ops),
                                                note=NOTE_DECLINED))
@@ -1266,11 +1288,12 @@ def default_may_write() -> bool:
         return False
 
 
-async def default_confirm(ctx: Any, **summary: Any) -> str:
+async def default_confirm(ctx: Any, **summary: Any) -> Any:
     module = _plan_confirm()
     if module is None:
         return "declined"
-    return str(await module.confirm(ctx, **summary))
+    answer = await module.confirm(ctx, **summary)
+    return answer if _is_input_required(answer) else str(answer)
 
 
 def register(adder: Callable[..., Any], get_client: Callable[[], Any], store: Callable[[], Any],
@@ -1278,7 +1301,9 @@ def register(adder: Callable[..., Any], get_client: Callable[[], Any], store: Ca
              confirm: Optional[Callable[..., Any]] = None, apply: bool = False) -> WriteService:
     """Register plan_commit and plan_cancel through `adder` (plan_tools.register, with writes on). Their
     functions take the request Context, so the SDK runs them on the server's loop and hands plan_confirm the
-    session for the elicitation."""
+    session and the input-required round's answers. They return the answer text, or (protocol 2026-07-28, round
+    1 of the confirmation) the InputRequiredResult the SDK sends as is: their return annotation names both, and
+    the SDK leaves the InputRequiredResult arm out of the output schema, so the schema stays that of str."""
     import mcp2_compat
 
     svc = WriteService(get_client, store, today, may_write=may_write or default_may_write,
@@ -1295,17 +1320,28 @@ def register(adder: Callable[..., Any], get_client: Callable[[], Any], store: Ca
         return await svc.apply(plan_id=plan_id, apply_token=apply_token, change_ids=change_ids, ctx=ctx)
 
     context = _context_class()
+    input_required = _input_required_class()
     for fn in [plan_commit, plan_cancel] + ([plan_apply_changes] if apply else []):
         if context is not None:
             # The SDK hands the request Context to the parameter annotated with it (and leaves it out of the
             # input schema); the string annotations of `from __future__` would not resolve here.
             fn.__annotations__["ctx"] = Optional[context]
+        if input_required is not None:
+            fn.__annotations__["return"] = Union[str, input_required]
         mcp2_compat.server_loop(fn)
     adder(plan_commit, name="plan_commit", description=COMMIT_DESCRIPTION)
     adder(plan_cancel, name="plan_cancel", description=CANCEL_DESCRIPTION)
     if apply:
         adder(plan_apply_changes, name="plan_apply_changes", description=APPLY_DESCRIPTION)
     return svc
+
+
+def _input_required_class() -> Any:
+    try:
+        from mcp_types import InputRequiredResult
+    except Exception:  # noqa: BLE001 - the stdlib test leg has no mcp
+        return None
+    return InputRequiredResult
 
 
 def _context_class() -> Any:

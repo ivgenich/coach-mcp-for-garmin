@@ -278,7 +278,7 @@ Nothing in the plan changes until the user approves:
   bound to the plan, its current version, the accepted change ids, the new version's content and the exact
   ops (the plan's own days on Garmin from tomorrow on, rewritten as a commit would; today only for an A8
   change). `plan_apply_changes(plan_id, apply_token, change_ids)` checks the write scope, asks the user to
-  confirm (elicitation) where the client supports it, stores that version and writes the ops with the same
+  confirm (form elicitation, as `plan_commit` below) where the client supports it, stores that version and writes the ops with the same
   helper and statuses as `plan_commit` (`done` replays, `partial`, `unknown`, `refused`, `declined`).
   `change_ids` must be exactly the token's (`changes_mismatch`); a version stored after the review, or a
   change no longer stored as proposed or approved (a later review of the week), makes the token `superseded`.
@@ -383,7 +383,8 @@ Claude Code 2.1.332, protocol 2026-07-28):
 
 - The client declares form and URL elicitation, but on the 2026 protocol the SDK's
   `can_send_request` is False: a server-to-client `elicitation/create` during a tool call cannot be
-  sent, so `plan_confirm.confirm` (which uses `session.elicit_form`) answers "unsupported".
+  sent, so `plan_confirm.confirm`, which then used only `session.elicit_form`, answered "unsupported".
+  It now asks through the input-required round on that protocol (below, "How plan writes behave").
 - The 2026 protocol's input-required round works: the tool returns an `InputRequiredResult` whose
   `input_requests` hold a form `ElicitRequest`; the client shows the form, then calls the tool again with
   the answer in `input_responses` (read with `Context.input_responses`). The user saw the form and
@@ -401,8 +402,20 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    next `commit_days` days (1 to 21, default 7) not on Garmin yet, and the plan's own days whose workout
    changed (the new workout is created first, then the old one unscheduled and deleted). No token while an
    invariant fails.
-2. `plan_commit(plan_id, commit_token)`: when the client supports MCP elicitation, the user confirms a
-   summary the server builds (the workouts to add and those to remove, each with dates and roles). Declined: nothing written, the token stays valid. Then
+2. `plan_commit(plan_id, commit_token)`: when the client declares MCP form elicitation, the user confirms a
+   summary the server builds (the workouts to add and those to remove, each with dates and roles) by
+   choosing one of two fixed labels ("Add them" / "Don't add"; "Remove them" / "Don't remove"; "Make these
+   changes" / "Don't change anything"): only the approving label is a yes, never a checkbox. On protocol
+   2026-07-28 this is the input-required round: the first call reads the token and writes nothing (no Garmin
+   call, the token stays unused) and answers the form with a state the server minted (bound to the action,
+   plan, token and summary, under a key of this process, and sealed again by the SDK for the same tool,
+   arguments and sign-in, 10 minutes); the client shows it and calls the tool again with the same arguments
+   and the answer. An answer without that state (also one sent on a first call), with another tool,
+   arguments or summary, or after a restart of the server is not taken: the form is asked again (or the SDK
+   refuses the call), and nothing is written. On older protocols the form is an elicitation request during
+   the call (no answer in 3 minutes: declined); a client without form elicitation keeps the token alone
+   (`confirmed_by: "token"`). Declined, cancelled, the other label or no answer: nothing written, the token
+   stays valid. Then
    the server checks the Garmin account, reads the calendar (no read, no write), refuses when a new hard or
    long session now sits next to a planned hard or long day (`calendar_changed`), and writes one request at
    a time: upload, then schedule unless the calendar already has it. A day with another run on it is a

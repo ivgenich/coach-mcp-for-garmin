@@ -239,6 +239,7 @@ class DeepBase(unittest.TestCase):
         self.set_history_account(self.fp)
         self.confirm_answer = "unsupported"
         self.confirm_calls = []
+        self.confirm_binds = []
         self.may_write = True
         self.svc = self.service()
 
@@ -251,6 +252,7 @@ class DeepBase(unittest.TestCase):
 
     def service(self, store=None, **options):
         async def confirm(ctx, **summary):
+            self.confirm_binds.append(summary.pop("bind", None))
             self.confirm_calls.append(summary)
             if isinstance(self.confirm_answer, BaseException):
                 raise self.confirm_answer

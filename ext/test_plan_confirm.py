@@ -2,8 +2,10 @@
 
     python -m unittest test_plan_confirm -v     (from ext/)
 
-confirm() and summary() run on the standard library with a fake session; the
-caller_may_write() tests set mcp's auth context and are skipped without mcp 2.x.
+confirm() and summary() run on the standard library with a fake session, and so
+does the input-required round's state (minted and checked here); the round's
+InputRequiredResult (mcp_types) and the caller_may_write() tests (mcp's auth
+context) are skipped without mcp 2.x.
 The sign-in that grants the scope is tested end to end in test_owner_auth
 (PlanWriteScope).
 """
@@ -39,8 +41,18 @@ ARGS = {"action": "commit", "count": 3, "dates": ["2026-12-02", "2026-11-30", "2
         "roles": ["easy", "long_run", "easy"]}
 
 
+class _Yes:
+    """FakeSession's answer: accept with the approving label of the form it was sent (the enum's second entry)."""
+
+    def __repr__(self):
+        return "YES"
+
+
+YES = _Yes()
+
+
 class FakeSession:
-    """Records elicit_form calls and answers with `answer` (a result, an exception, or 'hang')."""
+    """Records elicit_form calls and answers with `answer` (a result, YES, an exception, or 'hang')."""
 
     def __init__(self, capabilities, answer=None):
         self.client_capabilities = capabilities
@@ -53,6 +65,8 @@ class FakeSession:
             await asyncio.sleep(3600)
         if isinstance(self.answer, BaseException):
             raise self.answer
+        if self.answer is YES:
+            return result("accept", {"confirm": requested_schema["properties"]["confirm"]["enum"][1]})
         return self.answer
 
 
@@ -97,12 +111,12 @@ class Summary(NoThreadLeak):
         self.assertEqual(text, "Add 3 training-plan workouts to your Garmin Connect calendar?\n"
                                "Dates: 2026-11-30, 2026-12-02\n"
                                "Sessions: easy (2), long run (1)\n"
-                               "Answer yes only if you asked for this change in this conversation.")
+                               'Choose "Add them" only if you asked for this change in this conversation.')
 
     def test_cancel_and_one_workout(self):
         text = plan_confirm.summary(action="cancel", count=1, dates=["2026-12-01"], roles=[])
         self.assertTrue(text.startswith("Remove 1 training-plan workout that this server added from your "
-                                        "Garmin Connect calendar?\nDates: 2026-12-01\nAnswer yes"))
+                                        "Garmin Connect calendar?\nDates: 2026-12-01\nChoose \"Remove them\""))
         self.assertNotIn("Sessions", text)
 
     def test_long_date_lists_are_cut(self):
@@ -120,7 +134,7 @@ class Summary(NoThreadLeak):
                                "Add sessions: threshold (1)\n"
                                "Remove dates: 2026-12-03, 2026-12-05\n"
                                "Remove sessions: easy (1), threshold (1)\n"
-                               "Answer yes only if you asked for this change in this conversation.")
+                               'Choose "Make these changes" only if you asked for this change in this conversation.')
 
     def test_a_commit_that_only_removes_says_remove(self):
         text = plan_confirm.summary(action="commit", count=0, dates=[], roles=[], removes=1,
@@ -151,7 +165,7 @@ class Summary(NoThreadLeak):
                     plan_confirm.summary(**args)
 
     def test_confirm_checks_arguments_before_asking(self):
-        session = FakeSession(caps(form=object()), result("accept", {"confirm": True}))
+        session = FakeSession(caps(form=object()), YES)
         with self.assertRaises(ValueError):
             self.confirm(session, roles=["Run 10k <script>"])
         self.assertEqual(session.calls, [])
@@ -159,7 +173,7 @@ class Summary(NoThreadLeak):
 
 class Confirm(NoThreadLeak):
     def test_accept_with_yes(self):
-        session = FakeSession(caps(form=object()), result("accept", {"confirm": True}))
+        session = FakeSession(caps(form=object()), YES)
         self.assertEqual(self.confirm(session), "accepted")
         (call,) = session.calls
         self.assertEqual(call["message"], plan_confirm.summary(**ARGS))
@@ -168,13 +182,18 @@ class Confirm(NoThreadLeak):
         self.assertEqual(schema["type"], "object")
         self.assertEqual(schema["required"], ["confirm"])
         self.assertEqual(list(schema["properties"]), ["confirm"])
-        self.assertEqual(schema["properties"]["confirm"]["type"], "boolean")
-        self.assertIs(schema["properties"]["confirm"]["default"], False)
+        self.assertEqual(schema["properties"]["confirm"]["type"], "string")
+        self.assertEqual(schema["properties"]["confirm"]["enum"], ["Don't add", "Add them"])
+        self.assertNotIn("default", schema["properties"]["confirm"])
 
     def test_everything_else_is_declined(self):
         answers = [
             result("decline"), result("cancel"),
-            result("accept", {"confirm": False}), result("accept", {"confirm": "true"}),
+            result("accept", {"confirm": False}), result("accept", {"confirm": True}),
+            result("accept", {"confirm": "true"}), result("accept", {"confirm": "yes"}),
+            result("accept", {"confirm": "Don't add"}), result("accept", {"confirm": "add them"}),
+            result("accept", {"confirm": "Add them "}), result("accept", {"confirm": ["Add them"]}),
+            result("decline", {"confirm": "Add them"}), result("cancel", {"confirm": "Add them"}),
             result("accept", {}), result("accept", None), None,
         ]
         for answer in answers:
@@ -189,7 +208,7 @@ class Confirm(NoThreadLeak):
 
     def test_a_connection_without_a_back_channel_is_unsupported_not_declined(self):
         # Stateless HTTP and the 2026 protocol cannot send the form: the user was never asked.
-        session = FakeSession(caps(form=object()), result("accept", {"confirm": True}))
+        session = FakeSession(caps(form=object()), YES)
         session.can_send_request = False
         self.assertEqual(self.confirm(session), "unsupported")
         self.assertEqual(session.calls, [])
@@ -232,11 +251,11 @@ class Confirm(NoThreadLeak):
         self.assertEqual(asyncio.run(plan_confirm.confirm(SimpleNamespace(), **ARGS)), "unsupported")
 
     def test_an_empty_elicitation_capability_means_form(self):
-        session = FakeSession(caps(), result("accept", {"confirm": True}))
+        session = FakeSession(caps(), YES)
         self.assertEqual(self.confirm(session), "accepted")
 
     def test_capabilities_from_client_params_and_request_context(self):
-        session = FakeSession(None, result("accept", {"confirm": True}))
+        session = FakeSession(None, YES)
         session.client_params = SimpleNamespace(capabilities=caps(form=object()))
         ctx = SimpleNamespace(request_context=SimpleNamespace(session=session))
         self.assertEqual(asyncio.run(plan_confirm.confirm(ctx, **ARGS)), "accepted")
@@ -244,7 +263,7 @@ class Confirm(NoThreadLeak):
 
     def test_a_request_id_that_raises_is_sent_unrelated(self):
         class Ctx:
-            session = FakeSession(caps(form=object()), result("accept", {"confirm": True}))
+            session = FakeSession(caps(form=object()), YES)
 
             @property
             def request_id(self):
@@ -253,6 +272,167 @@ class Confirm(NoThreadLeak):
         ctx = Ctx()
         self.assertEqual(asyncio.run(plan_confirm.confirm(ctx, **ARGS)), "accepted")
         self.assertIsNone(ctx.session.calls[0]["related"])
+
+
+class Choices(NoThreadLeak):
+    def test_labels_fit_the_change(self):
+        cases = [
+            ({"action": "commit", "count": 3}, ("Don't add", "Add them")),
+            ({"action": "commit", "count": 0, "removes": 2}, ("Don't remove", "Remove them")),
+            ({"action": "commit", "count": 1, "removes": 1}, ("Don't change anything", "Make these changes")),
+            ({"action": "apply", "count": 2}, ("Don't add", "Add them")),
+            ({"action": "apply", "count": 0}, ("Don't change it", "Change the plan")),
+            ({"action": "cancel", "count": 4}, ("Don't remove", "Remove them")),
+        ]
+        for args, labels in cases:
+            with self.subTest(args=args):
+                self.assertEqual(plan_confirm.choices(**args), labels)
+
+    def test_the_legacy_form_uses_the_labels_of_the_action(self):
+        for args, labels in (({"action": "cancel", "count": 1, "dates": ["2026-12-01"], "roles": ["easy"]},
+                              ["Don't remove", "Remove them"]),
+                             ({"action": "apply", "count": 0, "dates": [], "roles": []},
+                              ["Don't change it", "Change the plan"])):
+            with self.subTest(action=args["action"]):
+                session = FakeSession(caps(form=object()), YES)
+                self.assertEqual(asyncio.run(plan_confirm.confirm(ctx_for(session), **args)), "accepted")
+                self.assertEqual(session.calls[0]["schema"]["properties"]["confirm"]["enum"], labels)
+                wrong = FakeSession(caps(form=object()), result("accept", {"confirm": "Add them"}))
+                self.assertEqual(asyncio.run(plan_confirm.confirm(ctx_for(wrong), **args)), "declined")
+
+
+class State(NoThreadLeak):
+    """The round-1 state: minted and checked with the standard library alone."""
+
+    def test_round_trip_and_every_mismatch(self):
+        state = plan_confirm._mint_state("key-a", "message-a")
+        self.assertTrue(plan_confirm._state_matches(state, "key-a", "message-a"))
+        self.assertFalse(plan_confirm._state_matches(state, "key-b", "message-a"))
+        self.assertFalse(plan_confirm._state_matches(state, "key-a", "message-b"))
+        head, payload, mac = state.split(".")
+        for bad in (None, 7, "", "pc1.", "pc1.x", f"{head}.{payload}", f"{head}.{payload}.", f"pc2.{payload}.{mac}",
+                    f"{head}.{payload}x.{mac}", f"{head}.{payload}.{mac[:-1]}A", state + "x", "pc1." + "A" * 2000):
+            with self.subTest(bad=bad if not isinstance(bad, str) else bad[:40]):
+                self.assertFalse(plan_confirm._state_matches(bad, "key-a", "message-a"))
+
+    def test_a_state_minted_under_another_key_is_refused(self):
+        state = plan_confirm._mint_state("key-a", "message-a")
+        with mock.patch.object(plan_confirm, "_STATE_KEY", b"\0" * 32):
+            self.assertFalse(plan_confirm._state_matches(state, "key-a", "message-a"))
+            forged = plan_confirm._mint_state("key-a", "message-a")
+        self.assertFalse(plan_confirm._state_matches(forged, "key-a", "message-a"))
+
+    def test_expiry_and_future_skew(self):
+        now = plan_confirm.time.time()
+        state = plan_confirm._mint_state("k", "m")
+        for moment, ok in ((now + plan_confirm.STATE_TTL_S - 5, True), (now + plan_confirm.STATE_TTL_S + 1, False),
+                           (now - plan_confirm.STATE_SKEW_S - 5, False)):
+            with self.subTest(offset=moment - now), mock.patch.object(plan_confirm.time, "time", lambda: moment):
+                self.assertEqual(plan_confirm._state_matches(state, "k", "m"), ok)
+
+    def test_the_state_carries_no_token_or_summary_text(self):
+        state = plan_confirm._mint_state(plan_confirm._digest(["commit", "ct1.SECRET"]), "Add 3 workouts")
+        import base64
+
+        payload = state.split(".")[1]
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode()
+        self.assertNotIn("SECRET", decoded)
+        self.assertNotIn("Add", decoded)
+
+
+def ctx2026(session, state=None, responses=None, version="2026-07-28"):
+    return SimpleNamespace(session=session, request_id=3, protocol_version=version, request_state=state,
+                           input_responses=responses)
+
+
+class ProtocolChoice(NoThreadLeak):
+    def test_older_or_unknown_versions_keep_the_elicitation_request(self):
+        for version in ("2025-11-25", "2025-06-18", None, "", "latest", "2026-07-28x", 20260728):
+            with self.subTest(version=version):
+                session = FakeSession(caps(form=object()), YES)
+                ctx = ctx2026(session, version=version)
+                self.assertEqual(asyncio.run(plan_confirm.confirm(ctx, **ARGS)), "accepted")
+                self.assertEqual(len(session.calls), 1)
+
+    def test_the_version_is_read_from_the_request_context_too(self):
+        session = FakeSession(caps(form=object()), YES)
+        ctx = SimpleNamespace(request_context=SimpleNamespace(session=session, protocol_version="2025-11-25"))
+        self.assertEqual(asyncio.run(plan_confirm.confirm(ctx, **ARGS)), "accepted")
+
+    def test_without_the_2026_types_the_round_is_unsupported(self):
+        session = FakeSession(caps(form=object()), YES)
+        with mock.patch.dict(sys.modules, {"mcp_types": None}):
+            self.assertEqual(asyncio.run(plan_confirm.confirm(ctx2026(session), **ARGS)), "unsupported")
+        self.assertEqual(session.calls, [])
+
+    def test_no_form_capability_on_2026_is_unsupported(self):
+        for capabilities in (caps(absent=True), None, caps(url=object())):
+            with self.subTest():
+                session = FakeSession(capabilities, YES)
+                self.assertEqual(asyncio.run(plan_confirm.confirm(ctx2026(session), **ARGS)), "unsupported")
+
+
+@unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")
+class InputRequired(NoThreadLeak):
+    def round_one(self, bind="b1", **overrides):
+        session = FakeSession(caps(form=object()), YES)
+        first = asyncio.run(plan_confirm.confirm(ctx2026(session), bind=bind, **{**ARGS, **overrides}))
+        self.assertTrue(plan_confirm.is_input_required(first), first)
+        self.assertEqual(session.calls, [])
+        return first
+
+    def round_two(self, state, responses, bind="b1", **overrides):
+        session = FakeSession(caps(form=object()), YES)
+        return asyncio.run(plan_confirm.confirm(ctx2026(session, state, responses), bind=bind,
+                                                **{**ARGS, **overrides}))
+
+    def test_round_one_is_the_form(self):
+        import mcp_types
+
+        first = self.round_one()
+        self.assertIsInstance(first, mcp_types.InputRequiredResult)
+        self.assertEqual(list(first.input_requests), ["confirm"])
+        params = first.input_requests["confirm"].params
+        self.assertEqual(params.message, plan_confirm.summary(**ARGS))
+        self.assertEqual(params.requested_schema, plan_confirm._schema(("Don't add", "Add them")))
+        self.assertIn("plan confirm: asked through the input-required round", self.logs)
+
+    def test_round_two(self):
+        first = self.round_one()
+        yes = {"confirm": mcp_types_result("accept", {"confirm": "Add them"})}
+        self.assertEqual(self.round_two(first.request_state, yes), "accepted")
+        for responses in ({"confirm": mcp_types_result("decline")}, {"confirm": mcp_types_result("cancel")},
+                          {"confirm": mcp_types_result("accept", {"confirm": "Don't add"})},
+                          {"confirm": mcp_types_result("accept", {"confirm": True})}, None, {}):
+            with self.subTest(responses=responses):
+                self.assertEqual(self.round_two(first.request_state, responses), "declined")
+
+    def test_an_answer_without_its_state_is_asked_again(self):
+        first = self.round_one()
+        yes = {"confirm": mcp_types_result("accept", {"confirm": "Add them"})}
+        for state, bind, overrides in ((None, "b1", {}), (first.request_state, "b2", {}),
+                                       (first.request_state, "b1", {"action": "cancel", "count": 3})):
+            with self.subTest(state=state is not None, bind=bind, overrides=overrides):
+                again = self.round_two(state, yes, bind=bind, **overrides)
+                self.assertTrue(plan_confirm.is_input_required(again), again)
+        self.assertIn("plan confirm: an answer without a matching state, asked again", self.logs)
+
+    def test_a_context_that_raises_is_round_one(self):
+        class Ctx:
+            session = FakeSession(caps(form=object()), YES)
+            protocol_version = "2026-07-28"
+
+            @property
+            def request_state(self):
+                raise RuntimeError("outside a request")
+
+        self.assertTrue(plan_confirm.is_input_required(asyncio.run(plan_confirm.confirm(Ctx(), **ARGS))))
+
+
+def mcp_types_result(action, content=None):
+    import mcp_types
+
+    return mcp_types.ElicitResult(action=action, content=content)
 
 
 @unittest.skipUnless(HAVE_MCP2, "needs mcp 2.x")

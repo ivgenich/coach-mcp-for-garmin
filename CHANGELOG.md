@@ -26,8 +26,13 @@ and so what a MAJOR, MINOR or PATCH release may change:
   Garmin calendar and replaces the plan's own days whose workout changed; `plan_cancel` deletes the
   plan's own future workouts not linked to an activity and cancels the plan. Each runs on a
   single-use, resumable token from the preview (stored as SHA-256 only), needs a sign-in with the
-  `plan:write` consent (never the static bearer), and asks the user to confirm through MCP
-  elicitation where the connection supports it. Writes run one at a time (at most 8 per call);
+  `plan:write` consent (never the static bearer), and asks the user to confirm through MCP form
+  elicitation when the client declares it: on protocol 2026-07-28 with the input-required round
+  (the first call writes nothing and calls no Garmin; the client calls the tool again with the
+  answer, which counts only with the server's sealed state for that same tool, plan and token),
+  before that with an elicitation request during the call. The form is one required choice
+  between two fixed labels ("Add them" / "Don't add" and the like): only the approving label is a
+  yes, as a ticked checkbox can come back false. Writes run one at a time (at most 8 per call);
   answers are `done`, `partial` (with `retry_after_s`, 900 after a 429; also when Garmin refused an
   upload or schedule, listed in `failed[]`), `unknown` (settled from Garmin before anything is sent
   again, so a retry never makes a second copy), `refused` or `declined`. Only the plan's own

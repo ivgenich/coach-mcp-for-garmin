@@ -477,7 +477,9 @@ def read_only_server_class(base, allowed):
       (structured "result" kept equal to the text); this repo's 3 tools, which clean their
       own read points and whose markdown keeps its bidi isolates, unchanged;
     - an MCPError (a protocol error) passes through, and an
-      InputRequiredResult is returned as is.
+      InputRequiredResult (plan_confirm's input-required round) is returned
+      as is: not cleaned, not a failure, and the call guard hears no outcome
+      for it (it called no Garmin); telemetry counts it as an ok call.
     A bug in the override itself is answered as an internal error, never as
     its own text.
     """
@@ -547,7 +549,10 @@ def read_only_server_class(base, allowed):
                 status_common.end_capture(capture)
                 if guard is not None:
                     guard.live_call_finished()
-                    guard.after_outcome(garmin_guard.TOOL, _guard_outcome(group, sources))
+                    if not _is_input_required(result):
+                        # The input-required round asked the user and called no Garmin: no outcome to hear
+                        # (a success would end a login cooldown).
+                        guard.after_outcome(garmin_guard.TOOL, _guard_outcome(group, sources))
                 if _TELEMETRY is not None:
                     _record_tool_call(name, "ok" if group is None else "error", group,
                                       time.monotonic() - started, result, guard)
@@ -605,6 +610,12 @@ def read_only_server_class(base, allowed):
                                 f"tool-error wrapper failed: {type(bug).__name__}: {bug}", exc_info=bug)
 
     return ReadOnlyFastMCP
+
+
+def _is_input_required(result):
+    """True for an InputRequiredResult (protocol 2026-07-28: the tool asks the client for input and runs again):
+    passed through as is, neither a failure nor a Garmin outcome."""
+    return getattr(result, "result_type", None) == "input_required"
 
 
 def _guard_outcome(group, source_groups):
