@@ -22,7 +22,7 @@ The tool returns JSON with:
 - `flags` (which rules fired) and `missing` (which values Garmin had none for).
 - `plan`, only with plan tracking on (`PLAN_TRACKING=on`, see
   [Training plans](training-plan.md)): today's session of the stored training plan, or
-  `null` without a tracked plan, outside its weeks, or when its database read failed. See "Training plan" below.
+  `null` without an active plan (a draft is never shown), outside its weeks, or when its database read failed. See "Training plan" below.
 
 ### Training plan
 

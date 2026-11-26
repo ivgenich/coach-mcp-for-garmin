@@ -196,14 +196,18 @@ breaks one is undone and listed in `overrides.refused` with the rule.
 
 ## Tracking
 
-With `PLAN_TRACKING=on` the server follows one plan: your active plan, or, while no plan is active (no
-Garmin writes yet), your latest draft. It tracks the plan's own sessions (date, sport, role), so it works
-without any Garmin write; a session's Garmin workout id (`plan_commit`, `PLAN_WRITES=on`) is only an extra
-link. Rules (`ext/plan_tracking.py`):
+With `PLAN_TRACKING=on` the server follows one plan: your active plan (one per account; a plan becomes
+active on its first `plan_commit`). A draft is never followed: while no plan is active, tracking stores
+nothing, `get_daily_status` and `get_weekly_status` have no plan section (`plan` and `training_plan` are
+`null`), and `log_feedback` and `plan_review_week` answer a fixed text instead (see below). `plan_get` still
+shows the latest draft, with a note that it is not tracked. Activation is only `plan_commit` for now, so with `PLAN_WRITES` off no plan
+becomes active and tracking has nothing to follow. Tracking works on the plan's own sessions (date, sport,
+role), not on Garmin writes; a session's Garmin workout id (`plan_commit`) is only an extra link. Rules
+(`ext/plan_tracking.py`):
 
 - An activity completes a session of the same sport from 1 day before to 1 day after its date
-  (`status_common.match_completion_pairs`), never an activity that started before the plan was activated
-  (a draft: created). It completes as many sessions as it can and, among those ways, has as many on their
+  (`status_common.match_completion_pairs`), never an activity that started before the plan was activated.
+  It completes as many sessions as it can and, among those ways, has as many on their
   own day as it can (same-day matches first), so a moved session never takes the run of a session done on its
   day when another run keeps the count. Each activity completes at most one session (an activity listed twice
   counts once). On one day
@@ -211,8 +215,6 @@ link. Rules (`ext/plan_tracking.py`):
   it partial; with two sessions on one day the long or quality one gets the run first, unless it is too
   short for it and a full run for the other (the two swap runs when each is a full run for the other's
   session).
-- A link already counted stays when the plan is activated later (`plan_commit` on a tracked draft): the
-  activation only keeps runs from before it from counting anew.
 - Garmin's own link (`associatedActivityId` on the calendar entry) wins; it is usually empty, so matching
   does most of the work.
 - A matched run under 80% of the planned distance or of the planned time is `partial`, otherwise `done`
@@ -241,7 +243,9 @@ week and the week before.
 `log_feedback` stores how a session felt: `workout_key` (the session's key, from `plan_get` or
 `get_daily_status`), `rpe` (1-10), `pain` (0-10), `pain_location` (`none`, `foot`, `ankle`, `achilles`,
 `calf`, `shin`, `knee`, `hamstring`, `quad`, `hip`, `glute`, `lower_back`, `other`) and `sharp` (sharp or
-localised pain); `plan_id` is optional. Pain 0 goes with location `none`; pain above 0 needs a location.
+localised pain); `plan_id` is optional (empty: the active plan). Feedback is stored for the active plan
+only: a draft, named or as the default, answers the fixed `No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow the active plan only; a plan becomes active on its first plan_commit.`
+Pain 0 goes with location `none`; pain above 0 needs a location.
 Calling it again for the same session replaces the numbers. A session after tomorrow is refused. The answer
 says `stored` and `progression_hold`: true for pain 4 or more, or sharp pain. Bad input answers
 `Invalid input: ...` with a fixed text, never the value; a database failure answers a fixed `No data:` text.
@@ -250,8 +254,9 @@ annotated additive, idempotent and local-only, never read-only.
 
 ## Weekly review
 
-With `PLAN_TRACKING=on`, `plan_review_week(plan_id, week_start)` reviews one week of the tracked plan
-(`plan_id` empty: the tracked plan; `week_start` a Monday that has begun, empty: the last week that has ended,
+With `PLAN_TRACKING=on`, `plan_review_week(plan_id, week_start)` reviews one week of the active plan
+(`plan_id` empty: the active plan; a draft, named or as the default, answers the same fixed text as
+`log_feedback`; `week_start` a Monday that has begun, empty: the last week that has ended,
 or this week on a Sunday). It reads from Garmin the activities from two weeks before the week to today, the
 calendar, four weeks of HRV, the week's nights and Garmin's training status at the week's end (today's daily
 status only when the plan has a quality session today), refreshes the plan's links, reads the stored
