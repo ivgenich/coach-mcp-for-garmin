@@ -64,6 +64,12 @@ and so what a MAJOR, MINOR or PATCH release may change:
   while the calendar cannot be read; cleanup also takes rows a crash left mid-request. The plan's own workouts
   are told from the user's by Garmin workout id, not by the name `Coach ...`, for the plan's spacing and for
   `calendar_changed`.
+- Plan rebuilds: `plan_preview` with a `plan_id` keeps the plan's week grid (week 1 where it first started),
+  so a rebuild mid-week no longer turns the planned week into an easy-only week 0, and with unchanged inputs
+  and history it changes none of the week's remaining days. The new version keeps the stored sessions up to
+  today and the past weeks, so after a morning rebuild today's run is still linked to today's session, and
+  `log_feedback` for today and `plan_review_week` for the current or last week still find them. `plan_get`'s
+  `built_on` is the local date (`REPORT_TZ`), no longer the UTC one.
 - Plan rules v2, B races: a long run 5 to 13 days before a B race and the first one after it are
   held at 0.70 x the peak long run (0.60 after a full-distance triathlon, whose first long run waits
   10 days), race-week runs at 8 km, the km not made up (warning `b_race_capped`).

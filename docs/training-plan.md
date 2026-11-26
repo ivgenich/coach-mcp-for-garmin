@@ -128,8 +128,16 @@ Plans stored with `rules_version` 1 were built by these rules alone. The current
 `RULES_VERSION = 2` in `ext/plan_engine.py`, keep every rule below and add the ACWR cap ([Plan rules
 v2](#plan-rules-v2)); every number below is in its `RULES`.
 
-1. Weeks run Monday to Sunday. Week 1 starts next Monday; the rest of this week (week 0) has easy runs only.
-   The last week is the race week. Phases from the end: taper (the race week, and the week before it in
+1. Weeks run Monday to Sunday. A new plan's week 1 starts next Monday (today when today is a Monday); the
+   rest of this week (week 0) has easy runs only. A rebuild of an existing plan (`plan_preview` with its
+   `plan_id`) keeps that plan's week grid: week 1 where it first started, and the same phases, deloads and
+   quality kinds. Once week 1 has begun, this week is planned as the week of the grid it is (its long run and
+   quality stay, checked by the invariants again, with the usual fallbacks and warnings when a rule now fails),
+   never as a week 0, and the weeks before it are not planned again. Nothing is planned for today or an earlier
+   day: the new version keeps the stored version's sessions up to today and every past week whole, so it
+   holds the plan's whole history and tracking, `log_feedback` and `plan_review_week` still find them; those
+   days are history, not checked again by the invariants. With the same inputs and history, a rebuild later in
+   the week changes none of its remaining days. The last week is the race week. Phases from the end: taper (the race week, and the week before it in
    plans of 10 weeks or more), peak (1 week from 8 weeks, 2 from 11), then base (4/9 of the rest) and build.
 2. Weekly km: the start (km0) is the mean of the last 4 full weeks. A normal week grows by at most 8% on
    the last normal week, counted as planned: when the easy-run cap (or the run days) holds a week below its
@@ -418,7 +426,8 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    next `commit_days` days (1 to 21, default 7) not on Garmin yet, and, whatever the window, the plan's own days
    on Garmin whose workout changed (the new workout is created first, then the old one unscheduled and deleted)
    or whose session left the plan (deleted). A shorter window than an earlier commit's leaves the later days
-   alone. A rebuilt plan never plans today, so today's workout is never removed by a commit (only replaced by a
+   alone. A rebuilt plan never plans today (it keeps the stored session, rule 1), so today's workout is never
+   removed by a commit (only replaced by a
    red-day change, rule A8). Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
    token while an invariant fails, nor when there is nothing to write.
 2. `plan_commit(plan_id, commit_token)`: when the client declares MCP form elicitation, the user confirms a
