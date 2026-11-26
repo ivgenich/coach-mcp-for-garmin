@@ -42,7 +42,9 @@ What the tools read from Garmin: the run activities of the last 8 full weeks (di
 lactate-threshold speed, Garmin's race predictions, VO2max, today's stats (the profile id, only for the
 account fingerprint) and the calendar from today to the race (each workout's date, sport and whether
 `get_daily_status` would call it hard or long, and its estimated duration). The plan's own workouts
-(named `Coach ...`, written by `plan_commit`) are not counted as fixed sessions. Since plan rules v2
+(written by `plan_commit`, known by their Garmin workout id in the plan database) are not counted as fixed
+sessions; a workout of yours named `Coach ...` is (only while the database cannot be read is the name taken
+as the plan's own). Since plan rules v2
 they also read, for the planned load: every sport's activities of those 8 weeks (date, sport, duration,
 distance and Garmin's training load; never names) and Garmin's acute and chronic load today, 14 and 28
 days ago (three training-status reads). `plan_preview` with a `course_id` reads that one course too;
@@ -54,6 +56,19 @@ with `key`, `date`, `role`, `km`, `pace` and a `structure` text), `warnings` (id
 `window` (the next 7 days rendered from the exact Garmin workout JSON `plan_commit` sends),
 `acwr` (the planned load, see rule 12), `race_pacing` (only with a `course_id`, rule 13),
 `stored` (`plan_id`, `version`, `changed`) and `content_hash`.
+
+### Session keys
+
+A session's `key` is the day the plan placed it and its slot: `YYYYMMDD-run` for a run, `YYYYMMDD-race` for the
+A race and `YYYYMMDD-b` for a B race (`20261206-run`). A plan has at most one session a day, so the key is unique,
+and it does not depend on the day the plan is built: `plan_preview` rebuilds the plan with today's numbers each
+time, and the same planned session keeps its key, so what is stored by key (the Garmin workouts `plan_commit`
+wrote, the tracking links, feedback, review changes) still names the same session. When the session of a day
+changes (another role, distance or pace), it keeps the key and its Garmin workout is replaced. An override that
+moves a session (`move`, `swap`, `long_run_day`) keeps its key, the day it was planned on. A replaced workout's old
+row is kept as `<key>~<hash8>` (or `~<hash8>-<n>`) until it is deleted from Garmin; the tools take only session
+keys. Every key is checked (`plan_store.key_ok`: the shape and a real date) where it comes in: `log_feedback`,
+`overrides`, the stored rows and links, and the argument check before a tool runs.
 
 ## AI roles
 
@@ -362,14 +377,15 @@ Connect, then removed):
   delete: `DELETE workout-service/workout/<id>` answers 204. Afterwards a GET or a second DELETE fails
   with garminconnect's `GarminConnectConnectionError("API Error 404 - ...")` and no response attached;
   `plan_writes.classify` reads the status from that text (404 = gone).
+- The GraphQL calendar read (`workoutScheduleSummariesScalar`) carries each entry's `workoutId` and its entry id
+  as `scheduledWorkoutId` (the number `workoutScheduleId` names in the schedule answer).
 - Each request took about 0.3 s; nine writes about 1.2 s apart met no rate limit.
 
 Still unverified, and coded to these assumptions behind `PLAN_WRITES` (default off):
 
-- The GraphQL calendar read (`workoutScheduleSummariesScalar`) carries `workoutId` and the same entry id
-  for a workout we scheduled (the spike checked the REST calendar, `calendar-service/year/<y>/month/<m>`,
-  whose month is 0-based and whose entry `id` is the `workoutScheduleId`).
-- Deleting a workout also removes its calendar entries (the spike unscheduled first).
+- Whether deleting a workout also removes its calendar entries (the spike unscheduled first). The code does
+  not rely on it: every delete unschedules the entries first, and the eval fake keeps a deleted workout's
+  entries.
 - garminconnect's re-send after a 401 does not duplicate a write; a read timeout or a 5xx may have
   written.
 - Garmin's write rate limits under load, and the client's tool-call timeout: the budget (8 writes, 15 s
@@ -399,9 +415,12 @@ With `PLAN_WRITES=on` (full mode, the app only), and only for a sign-in whose co
 writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
 
 1. `plan_preview` answers `commit`: a token (`ct1.`, 30 minutes to first use) and its ops, the runs of the
-   next `commit_days` days (1 to 21, default 7) not on Garmin yet, and the plan's own days whose workout
-   changed (the new workout is created first, then the old one unscheduled and deleted). No token while an
-   invariant fails.
+   next `commit_days` days (1 to 21, default 7) not on Garmin yet, and, whatever the window, the plan's own days
+   on Garmin whose workout changed (the new workout is created first, then the old one unscheduled and deleted)
+   or whose session left the plan (deleted). A shorter window than an earlier commit's leaves the later days
+   alone. A rebuilt plan never plans today, so today's workout is never removed by a commit (only replaced by a
+   red-day change, rule A8). Stored rows are matched to sessions by key ([Session keys](#session-keys)). No
+   token while an invariant fails, nor when there is nothing to write.
 2. `plan_commit(plan_id, commit_token)`: when the client declares MCP form elicitation, the user confirms a
    summary the server builds (the workouts to add and those to remove, each with dates and roles) by
    choosing one of two fixed labels ("Add them" / "Don't add"; "Remove them" / "Don't remove"; "Make these
@@ -417,7 +436,8 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    (`confirmed_by: "token"`). Declined, cancelled, the other label or no answer: nothing written, the token
    stays valid. Then
    the server checks the Garmin account, reads the calendar (no read, no write), refuses when a new hard or
-   long session now sits next to a planned hard or long day (`calendar_changed`), and writes one request at
+   long session that is not one of this install's workouts (by Garmin workout id, never by name) now sits next
+   to a planned hard or long day (`calendar_changed`), and writes one request at
    a time: upload, then schedule unless the calendar already has it. A day with another run on it is a
    `conflict` and is skipped. A session Garmin linked to an activity (the calendar's `associatedActivityId`,
    also with `PLAN_TRACKING=off`) is done: never written again nor deleted (`kept[]`). A workout uploaded but
@@ -443,13 +463,23 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    delete Garmin refuses answers `partial` with `failed[]`, and the plan stays open.
 5. Each workout this server writes is named `Coach <role>` and carries `coach-mcp <install tag> <plan_id>
    <key> h<hash>` in its description. A workout is ours only when its Garmin id is in `plan_workouts`;
-   TrainingPeaks, Garmin Coach, your own workouts and another install's are never touched.
-6. `python ext/launch.py --plan-cleanup [--dry-run] [--orphans]` (the owner, e.g. `railway run`; needs
+   TrainingPeaks, Garmin Coach, your own workouts and another install's are never touched. The name never
+   decides: a workout of yours named `Coach ...` counts as a fixed session for the plan's spacing and for
+   `calendar_changed` (only while the plan database cannot be read does a preview take a `Coach ...` workout
+   as the plan's own).
+6. Every delete unschedules first: the workout's calendar entries (the stored entry id and the entries the
+   calendar shows on its day, read around that day when the call's calendar read did not cover it) are
+   unscheduled, then the workout is deleted, since deleting a workout is not known to remove its entries.
+   When that calendar cannot be read, nothing is deleted; the next call tries again.
+7. `python ext/launch.py --plan-cleanup [--dry-run] [--orphans]` (the owner, e.g. `railway run`; needs
    `DATABASE_URL`, `GARMIN_AUTH=full` and the Garmin login) deletes this install's own workouts from today on,
-   of the plans of the Garmin account logged in, also with `PLAN_WRITES=off`. With `--orphans` it also
+   of the plans of the Garmin account logged in, also with `PLAN_WRITES=off`, rows a crash left mid-request
+   (`uploading`, `scheduling`, `unknown` with a workout id) included. With `--orphans` it also
    deletes library workouts with this install's marker that no row owns, only those on the calendar today or
-   later, never on an earlier day, never linked to an activity. A workout of today that Garmin linked to
-   an activity is kept. It prints counts only.
+   later, never on an earlier day, never linked to an activity. A workout Garmin linked to
+   an activity is kept. Each workout is unscheduled first (its entries read from the calendar, which is read
+   once for the rows' days; an entry without its id, or a failed unschedule, keeps the workout and counts as
+   failed); when the calendar cannot be read nothing is deleted. It prints counts only.
 
 Every Garmin request passes a method allowlist: GET, one anonymous GraphQL read query (no `mutation` or
 `subscription` keyword outside its strings and comments, a comment ending at a carriage return or a line
