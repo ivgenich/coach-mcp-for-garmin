@@ -158,13 +158,35 @@ class Rebuilds(unittest.TestCase):
         self.go_to(tomorrow)
         second = self.preview()
         ops = second["commit"].get("ops") or []
-        self.assertEqual([o for o in ops if o["op"] == "delete"], [], ops)
         self.assertEqual([o for o in ops if o["date"] == tomorrow.isoformat()], [], ops)
-        # Only the day that came into the 7-day window is added.
+        # the plan is active: a changed preview is a proposal until its commit token runs (1.1.1)
+        stored = self.store.get_plan(self.store.history_account(), self.pid)
+        if second["stored"]["changed"]:
+            self.assertTrue(second["stored"]["proposed"])
+            self.assertEqual(stored["current_version"], first["stored"]["version"])
+            self.assertIn("a proposal", second["note"])
+            got = json.loads(self.plans.get(self.pid))
+            self.assertEqual(got["stored"]["version"], first["stored"]["version"])
+            self.assertEqual(got["stored"]["proposed_version"], second["stored"]["version"])
+        # Only the day that came into the 7-day window is added; a committed day is touched only when its
+        # session changed (the fake's numbers move with today, so the ratio cap may cut a little differently),
+        # and then replaced on the same day: its old workout deleted, the new one created.
         last = (tomorrow + dt.timedelta(days=6)).isoformat()
-        self.assertEqual(sorted(o["date"] for o in ops), [d for d in sorted(self.runs(second)) if d == last])
+        self.assertEqual(sorted({o["date"] for o in ops if o["op"] == "create"} - {last}),
+                         sorted({o["date"] for o in ops if o["op"] == "delete"}), ops)
+
+        def plain(out, day):
+            return {k: v for k, v in _session(out, day).items() if k != "key"}
+
+        for o in ops:
+            if o["date"] != last:
+                self.assertNotEqual(plain(first, o["date"]), plain(second, o["date"]), o)
+        self.assertEqual(sorted({o["date"] for o in ops if o["op"] == "create"} & {last}),
+                         [d for d in sorted(self.runs(second)) if d == last])
         if ops:
             self.commit(second)
+            self.assertEqual(self.store.get_plan(self.store.history_account(), self.pid)["current_version"],
+                             second["stored"]["version"])   # the commit adopted the proposal
         self.assertEqual(self.calendar_days(), sorted(set(on_garmin) | {o["date"] for o in ops}))
 
     def test_a_week_later_with_past_sessions_linked_every_new_day_is_written(self):

@@ -254,6 +254,60 @@ class StoreContract:
             self.store.save_feedback("a" * 32, "20261202-run", 4, 0, "none", False)
 
 
+    def test_a_preview_of_an_active_plan_is_a_proposal(self):
+        # 1.1.1: adopt=False on an active plan stores the version without moving current_version; the same
+        # content again stores nothing; adopt_version makes it current; an accepted change (adopt=True) moves it
+        pid, v1, _ = self.save(content="a")
+        self.store.move_plan(pid, "active")
+        self.assertEqual(self.store.save_preview(self.fp, pid, RACE, 1, {"race_date": RACE.isoformat()},
+                                                 {"weeks": [], "content": "b"}, h("b"), adopt=False), (pid, 2, True))
+        row = self.store.get_plan(self.fp, pid)
+        self.assertEqual((row["current_version"], row["latest_version"], row["version_row"]["version"]), (1, 2, 1))
+        self.assertEqual(self.store.save_preview(self.fp, pid, RACE, 1, {"race_date": RACE.isoformat()},
+                                                 {"weeks": [], "content": "b"}, h("b"), adopt=False), (pid, 2, False))
+        self.assertEqual(self.store.save_preview(self.fp, pid, RACE, 1, {"race_date": RACE.isoformat()},
+                                                 {"weeks": [], "content": "a"}, h("a"), adopt=False), (pid, 1, False))
+        self.assertEqual(self.store.tracked_plan(self.fp)["current_version"], 1)
+        self.assertFalse(self.store.adopt_version(pid, 1))
+        self.assertTrue(self.store.adopt_version(pid, 2))
+        self.assertFalse(self.store.adopt_version(pid, 2))
+        row = self.store.get_plan(self.fp, pid)
+        self.assertEqual((row["current_version"], row["latest_version"], row["version_row"]["version"]), (2, 2, 2))
+        with self.assertRaises(ps.PlanNotFound):
+            self.store.adopt_version(pid, 9)
+        self.assertEqual(self.save(pid, content="c")[1:], (3, True))   # adopt=True (an accepted change)
+        self.assertEqual(self.store.get_plan(self.fp, pid)["current_version"], 3)
+        # a draft's preview is current at once, adopt or not; adopt_version leaves a draft alone
+        draft, _v, _c = self.save(content="d")
+        self.assertEqual(self.store.save_preview(self.fp, draft, RACE, 1, {"race_date": RACE.isoformat()},
+                                                 {"weeks": [], "content": "e"}, h("e"), adopt=False), (draft, 2, True))
+        self.assertEqual(self.store.get_plan(self.fp, draft)["current_version"], 2)
+
+    def test_feedback_update_keeps_the_fields_not_given(self):
+        # 1.1.1: a correction of one value ("the effort was 8") keeps a logged pain, so the review still sees it
+        pid, _, _ = self.save()
+
+        def row():
+            r = self.store.feedback(pid)[0]
+            return (r["rpe"], r["pain"], r["pain_location"], r["sharp"])
+
+        self.assertTrue(self.store.save_feedback(pid, "20261202-run", 4, 5, "knee", True))
+        self.assertFalse(self.store.save_feedback(pid, "20261202-run", rpe=8))
+        self.assertEqual(row(), (8, 5, "knee", True))
+        self.assertFalse(self.store.save_feedback(pid, "20261202-run", sharp=False))
+        self.assertEqual(row(), (8, 5, "knee", False))
+        self.assertFalse(self.store.save_feedback(pid, "20261202-run", pain=0))   # pain 0 clears the location
+        self.assertEqual(row(), (8, 0, "none", False))
+        for kw in ({}, {"pain": 2}, {"pain_location": "calf"}, {"sharp": True}):   # not a whole record
+            with self.subTest(kw=kw):
+                with self.assertRaises(ps.FeedbackError):
+                    self.store.save_feedback(pid, "20261202-run", **kw)
+        self.assertEqual(row(), (8, 0, "none", False))
+        with self.assertRaises(ps.FeedbackError):   # a first record needs rpe
+            self.store.save_feedback(pid, "20261203-run", pain=2, pain_location="calf")
+        self.assertEqual(len(self.store.feedback(pid)), 1)
+
+
 class WriteContract(StoreContract):
     """Stage 2: tokens and workout rows, on every PlanStore."""
 

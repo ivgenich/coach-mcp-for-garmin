@@ -467,6 +467,25 @@ class Feedback(unittest.TestCase):
         self.assertEqual(self.store.feedback(self.pid)[0]["pain_location"], "calf")
         self.assertEqual(len(self.store.feedback(self.pid)), 1)
 
+    def test_a_correction_changes_only_what_it_gives(self):
+        # 1.1.1: log_feedback without pain (the tool's default is "not given") keeps a logged pain of 5, so the
+        # progression hold stays
+        self.log(rpe=4, pain=5, pain_location="knee")
+        out = json.loads(self.svc.feedback(workout_key="20261202-run", rpe=8))
+        self.assertEqual((out["updated"], out["rpe"], out["pain"], out["pain_location"], out["sharp"],
+                          out["progression_hold"]), (True, 8, 5, "knee", False, True))
+        self.assertEqual(self.store.feedback(self.pid)[0]["pain"], 5)
+        out = json.loads(self.svc.feedback(workout_key="20261202-run", pain=0))
+        self.assertEqual((out["rpe"], out["pain"], out["pain_location"], out["progression_hold"]),
+                         (8, 0, "none", False))
+        for kw in ({}, {"pain": 3}):   # nothing given; pain without a location over a stored "none"
+            with self.subTest(kw=kw):
+                text = self.svc.feedback(workout_key="20261202-run", **kw)
+                self.assertTrue(text.startswith("Error: Invalid input: "), text)
+        text = self.svc.feedback(workout_key="20261203-run", pain=2, pain_location="calf")   # first: needs rpe
+        self.assertTrue(text.startswith("Error: Invalid input: "), text)
+        self.assertEqual(len(self.store.feedback(self.pid)), 1)
+
     def test_progression_hold(self):
         self.assertTrue(json.loads(self.log(pain=4, pain_location="knee"))["progression_hold"])
         out = json.loads(self.log(pain=1, pain_location="shin", sharp=True))

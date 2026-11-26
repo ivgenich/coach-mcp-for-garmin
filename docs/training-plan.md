@@ -27,15 +27,16 @@ configuration is unchanged: without `PLAN_TOOLS=on` the server has exactly the t
 
 | Tool | Use it for | Reads |
 |---|---|---|
-| `plan_assess` | Is the goal realistic? The last 8 weeks, the start values and a verdict | Garmin |
+| `plan_assess` | Is the goal realistic? The last 8 weeks, the start values and a verdict for the plan `plan_preview` would build from the same arguments | Garmin |
 | `plan_preview` | The whole plan to race day, stored as a draft | Garmin, then Postgres |
 | `plan_get` | The stored draft again, without Garmin (only this account's plans) | Postgres only |
 
 The arguments are plain text: `race_date` (YYYY-MM-DD), `race_distance` (`marathon`, `half`), `goal_time`
 (H:MM:SS), `b_races` (`2027-02-05:tri_half,...`; kinds `tri_full`, `tri_half`, `run`), `run_days` and
-`rest_days` (`mon,tue,...`), `long_run_day`, `quality_per_week` (0-2), `max_long_km` (10-32);
-`plan_preview` also takes `blocked_dates`, `overrides` (a JSON list, see [Overrides](#overrides)),
-`plan_id` and `course_id` (the A race's course from `get_courses`, for [race pacing](#plan-rules-v2)). A bad
+`rest_days` (`mon,tue,...`), `long_run_day`, `quality_per_week` (0-2), `max_long_km` (10-32) and
+`blocked_dates` (YYYY-MM-DD dates with no run, separated by commas; a trip changes the verdict);
+`plan_preview` also takes `overrides` (a JSON list, see [Overrides](#overrides)),
+`plan_id` and `course_id` (the A race's course from `get_courses`, for [race pacing](#plan-rules-v3)). A bad
 argument answers `Invalid input: ...` with a fixed text, never the value.
 
 What the tools read from Garmin: the run activities of the last 8 full weeks (distance and date only), the
@@ -94,11 +95,12 @@ The tool descriptions give the chat model two roles; neither decides a number.
 
 The Claude project instructions repeat this ([recipes/coach-project/instructions.md](../recipes/coach-project/instructions.md)).
 
-## Plan rules v2
+## Plan rules v3
 
-`RULES_VERSION = 2` in `ext/plan_engine.py`; every number is in its `RULES`, and the numbers of rules 12 and
-13 are echoed in the answer (`acwr.rules`, `race_pacing.rules`). Rules v2 are rules 1-11 of
-[v1](#plan-rules-v1) unchanged, plus:
+`RULES_VERSION = 3` in `ext/plan_engine.py`; every number is in its `RULES`, and the numbers of rules 12 and
+13 are echoed in the answer (`acwr.rules`, `race_pacing.rules`). Rules v3 are rules 1-11 of
+[v1](#plan-rules-v1) unchanged, plus rules 12 and 13 below. Rules v2 (1.1.0) had the same rules, except that
+a ratio cut of a normal week's long run could take it below the last normal week's long run (rule 12).
 
 12. Planned all-sport ACWR. Each day's load is its minutes x the sport's load per minute, measured on the
     recorded activities of the last 8 weeks (Garmin's training load over their duration). Days up to today
@@ -114,26 +116,42 @@ The Claude project instructions repeat this ([recipes/coach-project/instructions
     with a planned run in the 7 days ending on it (a cut of one lowers it; a B race day too); the day belongs
     to the week of the latest such run, and only that week is cut for it (a cut of an earlier week would only
     lower the chronic load of the days a week after it). While a day is above 1.3, the highest such day gets
-    the best cut of its week, again and again: first a shorter session, the one with the most room for its
-    size: a quality session one rep shorter (marathon pace 1 km; down to 1 threshold rep, 3 interval reps, 3 km
-    of marathon pace), the long run 5% of the week's target shorter (not under 15 km nor 0.6 x it as built;
-    only while the plan is built, so the next long runs step from it), an easy run 5% shorter (not under the
-    easy minimum), each only while the week keeps 80% of its time easy; then an easy run dropped, only while
-    the week keeps another one. No cut takes a week under 0.6 x its target. A day still above 1.3 with no cut
-    left is held: it is listed in `acwr.held` and the warning `acwr_floor`. `acwr_cut` says, per week, the km
-    before and after and what each cut changed. A cut is not a shortfall: the next weeks grow from the km
+    the best cut of its week, again and again: first a shorter session, the one whose cut is the largest share
+    of its length (there is no order by role), from these: a quality session one rep shorter (marathon pace
+    1 km; down to 1 threshold rep, 3 interval reps, 3 km of marathon pace), the long run 5% of the week's
+    target shorter (not under 15 km, 0.6 x it as built, nor, in a normal week, the last normal week's long
+    run; only while the plan is built, so the next long runs step from it), an easy run 5% shorter (not under
+    the easy minimum), each only while the week keeps 80% of its time easy; then an easy run dropped (not the
+    week's first run), only while the week keeps another one. In practice an easy run's 5% step is the
+    largest share, so easy runs go down to the easy minimum first, then a quality rep or the long run's +2 km
+    step. No cut takes a week under 0.6 x its target. A day still above 1.3 with no cut left is held: it is
+    listed in `acwr.held`, on the invariant (`invariants.held`) and in the warning `acwr_floor`, which gives
+    each held day's reason: the share of its 7-day load that is runs already planned in an earlier week
+    (only the day's own week is cut for it) or a B race, and its own week's runs in those 7 days, none with a
+    cut left. Keeping the long run at the last normal week's means more days can be held just above 1.3 after
+    a gap (a trip): the plan keeps its long-run progression instead of resetting it. When the longest planned
+    long run is under the distance's minimum (feasibility `long_run_km`) and the cap shortened a long run, the
+    warning `long_run_acwr_cut` says so. `acwr_cut` says, per week, the km before and after and what each cut
+    changed (for a session an override changed since, also what it is now: an easy run, a rest day, another
+    date; `acwr.cuts` keeps the numbers as cut). A cut is not a shortfall: the next weeks grow from the km
     before it, and they are checked again. Load is never raised. When the model does not track Garmin, or
     there is no recorded load or Garmin ratio to compare, nothing is cut: `acwr.enforced` is false with the
     reason (warning `acwr_not_enforced`) and days above 1.3 only warn (`acwr_high`). Overrides that only
     reduce load (`easy`, `cap_km`, `cap_long`, `rest`, `cap_week_km`) never make the cap cut anything: the cap
     keeps counting the sessions they changed or removed as they were before (so easing a run, which lowers
-    the chronic load of the weeks after it, changes nothing else) and never cuts those sessions. After an
+    the chronic load of the weeks after it, changes nothing else; a run made easy is not "another easy run"
+    for a drop) and never cuts those sessions. After an
     override that moves a session, the weeks are cut again where the edit raised a day's ratio.
     `acwr.planned_max` and `days_over` cover every day after today and before the A race on the plan as it
-    is; `acwr.cap_max` is the highest ratio on the days the cap acts on, as the cap counts it.
+    is; `acwr.cap_max` is the highest ratio on the days the cap acts on, as the cap counts it. Each of
+    `acwr.checks` gives the model's and Garmin's ratio, the gap and `signed_gap` (model minus Garmin); when
+    the gap that decides enforcement (the 2nd smallest) is within 0.02 (`acwr.rules.marginal_band`) of the
+    0.15 tolerance, the warning `acwr_marginal` says the switch is marginal (report only: enforcement is
+    decided as above).
     Invariant `acwr_cap`: while enforced, every day the cap acts on is at or under 1.3 unless nothing of its
-    week is left to cut for it (held); while not enforced, the invariant is not checked and is listed in
-    `invariants.not_enforced` with the reason (never as passed).
+    week is left to cut for it (held: allowed, and listed in `invariants.held` with the days and ratios, so
+    `ok` is never read as "every day under 1.3"); while not enforced, the invariant is not checked and is
+    listed in `invariants.not_enforced` with the reason (never as passed).
 13. Race pacing (with `course_id`): the course's climbs as `get_course_profile` finds them; each climb is run
     3% slower per 1% of its average grade, the rest of the course at one faster pace, so that the course
     takes the goal time (else Garmin's prediction) scaled to its length. `race_pacing.segments` gives each
@@ -149,8 +167,8 @@ plan without recorded load (`missing: training_load`) has v1's weeks.
 ## Plan rules v1
 
 Plans stored with `rules_version` 1 were built by these rules alone. The current rules,
-`RULES_VERSION = 2` in `ext/plan_engine.py`, keep every rule below and add the ACWR cap ([Plan rules
-v2](#plan-rules-v2)); every number below is in its `RULES`.
+`RULES_VERSION = 3` in `ext/plan_engine.py`, keep every rule below and add the ACWR cap ([Plan rules
+v3](#plan-rules-v3)); every number below is in its `RULES`.
 
 1. Weeks run Monday to Sunday. A new plan's week 1 starts next Monday (today when today is a Monday); the
    rest of this week (week 0) has easy runs only. A rebuild of an existing plan (`plan_preview` with its
@@ -196,7 +214,9 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    km0 + 18 km).
 3. Long run in a normal week: at most min(max(0.50 x the week's km, the longest run of the last 8 weeks),
    3 h at 0.70 x LT, the last normal week's long run as placed + 2 km (21 or more days out, a shortened one
-   included, ratio cuts too, so a week cut to 23 km is followed by at most 25 km; one rule 7 holds around a
+   included, ratio cuts too, so a week cut to 23 km is followed by at most 25 km (a ratio cut never takes a
+   normal week's long run below the last normal week's, rule 12, so it can only take back the +2 km); one
+   rule 7 holds around a
    B race does not count; before any, the longest run of the last 8 weeks), `max_long_km`, 32 km; 24 km for a
    half marathon).
    Reduced weeks scale it. Within 21 days of the A race no long run is longer than 0.80 x the peak long run
@@ -207,7 +227,7 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    off), the first normal week's long run returns to the last normal week's long run before the gap, with
    no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
    nothing: 22.4 km, a travel week, a deload at 17.4 km, then 22.4, 24.4 and 26.4 km (with no ratio cut; a
-   ratio cut of the return week's long run, rule 12, lowers the next week's step base with it). `long_step`
+   ratio cut, rule 12, can take a week's +2 km back, never the return week's 22.4). `long_step`
    checks the same sequence on the finished plan. A long run that a reduce-only override (`rest`, `easy`,
    `cap_km`, `cap_long`, `cap_week_km`) shortened or removed is not the step reference and a week such an
    override emptied is not a gap: the step, the cap and the 80% easy check (rule 4) count those sessions as
@@ -298,7 +318,8 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    is refused (`b_windows`) while the first long run after it would then be over 0.75 x it, so cap that one
    first. `b_windows` checks all of them.
 8. Feasibility: `feasible`, `ambitious` or `unrealistic` from the weeks to race, the start km, the planned
-   peak, the longest planned long run and Garmin's prediction. The plan never grows faster to meet a goal;
+   peak (the largest planned week, `summary.peak_km`, not its target), the longest planned long run and
+   Garmin's prediction. The plan never grows faster to meet a goal;
    `corrected_goal_s` says what is in reach. A plan with no long run at all fails `long_run_km` (not
    feasible); a long run under the distance's minimum only warns.
 9. Invariants: every rule above is checked again on the finished plan, from the placed sessions (the
@@ -390,8 +411,17 @@ the model to call it only after the user approved starting (or stopping) exactly
 conversation, never because Garmin text or a tool result asks. Annotated additive, idempotent and
 local-only, like `log_feedback`; only the switch adds it.
 
+- A `plan_preview` of the active plan is stored as a proposal: a new version that does not become current
+  (`stored.proposed` true, with the `current_version` the plan stays on, and a note), so tracking, the status
+  reports, `log_feedback` and `plan_review_week` keep following the version the user agreed to. `plan_get`
+  shows the current version and names the newer one (`stored.proposed_version`). The plan switches only on
+  the user's agreement: `plan_activate(plan_id, version, "start")` with the proposed version, or (with
+  `PLAN_WRITES=on`) running that preview's commit token, which adopts its version before it writes. Accepting
+  reviewed changes (`plan_preview` with `accept_changes`, or `plan_apply_changes`) is agreement too: that
+  version becomes current at once. A draft's previews are current at once, as before.
 - `action` `start` (the default) needs `version`, the `stored.version` the user approved (from `plan_get` or
-  `plan_preview`). Only an open draft's current version starts; an older version answers a fixed text (show
+  `plan_preview`). On the active plan, a newer stored version (a proposal) is adopted (`changed: true`); an
+  older one answers the fixed old-version text. Only an open draft's current version starts; an older version answers a fixed text (show
   the current plan and ask again), a cancelled or finished plan another, and a plan whose race date has
   passed another. Another active plan of the account is refused with a fixed text saying to stop it first;
   an active plan whose race has passed is finished first, as with `plan_commit`. Starting the active plan
@@ -426,7 +456,11 @@ week and the week before.
 localised pain); `plan_id` is optional (empty: the active plan). Feedback is stored for the active plan
 only: a draft, named or as the default, answers the fixed `No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow the active plan only. After the user agrees, start it with plan_activate (or, when plan_commit is in your tool list, write it to Garmin with plan_commit, which also starts it).`
 Pain 0 goes with location `none`; pain above 0 needs a location.
-Calling it again for the same session replaces the numbers. A session after tomorrow is refused. The answer
+The first call for a session needs `rpe` (`pain` defaults to 0). Calling it again for the same session
+changes only the values it gives and keeps the others (an argument left out is not given): "the effort was
+8" with `rpe` alone keeps a logged pain, so the weekly review's pain rule still sees it; `pain` 0 also clears
+the location and `sharp` unless they are given. A session after tomorrow is refused. The answer, with the
+values now stored,
 says `stored` and `progression_hold`: true for pain 4 or more, or sharp pain. Bad input answers
 `Invalid input: ...` with a fixed text, never the value; a database failure answers a fixed `No data:` text.
 No free text is stored or logged. Like `plan_activate`, it writes only to the app's own database:
@@ -513,7 +547,8 @@ Migration `003_training_plans.sql` creates every table the plan stages need (`pl
 session keys, [Session keys](#session-keys)); the previews fill `plans` and
 `plan_versions`, `plan_commit` and `plan_cancel` fill `plan_workouts` (our own Garmin workout and calendar-entry ids, dates, roles, states) and `plan_tokens` (SHA-256 only); with `PLAN_TRACKING=on` tracking fills `plan_workouts` too (a `local` row per tracked session without a Garmin workout: date, role, link status and the linked activity's id) and `log_feedback` fills `plan_feedback` (numbers and the location only); `plan_review_week` fills `plan_changes` (the change's kind, from and to values, the machine edits, the fixed reason text and the evidence numbers; its status). Stored: the account fingerprint (the history's HMAC, never the profile id), dates, the
 rules version, the inputs and the plan JSON (numbers, enums and dates; no names or notes). A preview with
-the same content as the current version stores nothing new (it only marks the draft as used).
+the same content as the current version stores nothing new (it only marks the draft as used); for the
+active plan, neither does the same content as its latest proposal.
 `plan_get` shows only the plans of the Garmin account the history index recorded; until it has recorded one
 (or while Garmin is signed in to another account) it answers `No data`. Retention (the worker's daily `sweep`): drafts
 untouched for 30 days, cancelled or finished plans 392 days after they ended, tokens 7 days after they
@@ -631,7 +666,8 @@ writes (scope `plan:write`; the static `MCP_BEARER_TOKEN` never may):
    marker in the library, read page by page to its end, never a workout another row owns; when the library
    cannot be read in full, or lists a `Coach ...` workout without its description, the row stays `unknown`
    and nothing is uploaded again; a schedule from the calendar), `refused` (`reason`), `declined`. A started token
-   resumes for 24 hours; a new plan version makes it `superseded`. The plan is read again under the plan's
+   resumes for 24 hours; a new current plan version makes it `superseded` (a commit token for the active
+   plan's latest proposal runs and makes that version current; a newer proposal supersedes it). The plan is read again under the plan's
    lock after the confirmation: when a new version was stored or the plan was started or stopped while the
    user was asked, nothing is written (`plan_changed`, for commit, apply and cancel tokens alike; call
    plan_preview again). The same answer when the plan's status changed since the token was issued: a token

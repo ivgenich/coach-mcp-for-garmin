@@ -834,6 +834,51 @@ class OwnerAcwr(unittest.TestCase):
         ids = [(w["id"], tuple(w["dates"])) for w in plan["warnings"]]
         self.assertEqual(len(ids), len(set(ids)), ids)
 
+    def test_held_days_are_listed_and_each_says_why(self):
+        # 1.1.1: invariants.ok stays true for a held day (nothing left to cut), but the invariant lists it, and
+        # acwr_floor gives each day's reason: an earlier week's runs or a B race in its 7 days, and the owner
+        # week's runs there with no cut left
+        plan = self.plan
+        held = plan["acwr"]["held"]
+        self.assertTrue(held)
+        self.assertTrue(plan["invariants"]["ok"])
+        listed = plan["invariants"]["held"]
+        self.assertEqual([(i["id"], i["days"]) for i in listed], [("acwr_cap", len(held))])
+        self.assertIn(f"{held[0]['date']}: ratio {held[0]['ratio']}", listed[0]["detail"])
+        floors = [w["detail"] for w in plan["warnings"] if w["id"] == "acwr_floor"]
+        for h in held:
+            self.assertTrue(any(f"{h['date']} ({h['ratio']})" in d for d in floors), h)
+        week6 = next(d for d in floors if "nothing of week 6 " in d)
+        first = week6.split(" | ")[0]   # its first held day: most of its load is week 5's runs
+        self.assertIn("already planned in an earlier week", first)
+        self.assertIn("long run 2027-12-31", first)
+        self.assertIn("is the B race on 2028-01-28", next(d for d in floors if "nothing of week 9 " in d))
+        self.assertNotIn("quality and the long run at their floors", " ".join(floors))
+        # the long-run feasibility check fails and the cap shortened a long run: said in one warning
+        check = next(c for c in plan["feasibility"]["checks"] if c["id"] == "long_run_km")
+        self.assertFalse(check["ok"])
+        warn = next(w for w in plan["warnings"] if w["id"] == "long_run_acwr_cut")
+        self.assertEqual(warn["dates"], ["2028-01-07"])
+        self.assertIn("24.4 -> 22.4 km", warn["detail"])
+
+    def test_the_cut_warning_says_what_an_override_made_of_a_cut_session(self):
+        # 1.1.1: acwr.cuts keeps the record as cut; the acwr_cut text adds what the session is now
+        quality, easy = _key_of(self.plan, 6, "quality", 1), _key_of(self.plan, 6, "easy")
+        inputs, snap = owner_case([pe.Override("easy", key=quality)])
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertEqual(plan["acwr"]["cuts"], self.plan["acwr"]["cuts"])
+        cut = next(w["detail"] for w in plan["warnings"] if w["id"] == "acwr_cut" and w["dates"] == ["2028-01-03"])
+        self.assertIn("intervals 2028-01-05 9.3 -> 8.0 km (now an easy run", cut)
+        day = next(s["date"] for w in self.plan["weeks"] for s in w["sessions"] if s["key"] == easy)
+        inputs, snap = owner_case([pe.Override("rest", date=D.fromisoformat(day))])
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertEqual(plan["overrides"]["refused"], [])
+        cut = next(w["detail"] for w in plan["warnings"] if w["id"] == "acwr_cut" and w["dates"] == ["2028-01-03"])
+        self.assertIn(f"easy run {day} 12.2 -> 4.0 km (now a rest day)", cut)
+        before = next(w["detail"] for w in self.plan["warnings"] if w["id"] == "acwr_cut"
+                      and w["dates"] == ["2028-01-03"])
+        self.assertNotIn("(now", before)
+
     def test_a_refused_override_leaves_no_trace(self):
         # the last long run before the half-distance triathlon cut to 8 km: the first one after it would be over
         # 0.75 x it (rule 7 follows the plan as it is), so the edit is undone and refused
@@ -843,6 +888,25 @@ class OwnerAcwr(unittest.TestCase):
         self.assertEqual(plan["weeks"], self.plan["weeks"])
         self.assertEqual(plan["warnings"], self.plan["warnings"])
         self.assertEqual(plan["acwr"], self.plan["acwr"])
+
+
+class AcwrMargin(unittest.TestCase):
+    def test_signed_gaps_and_a_warning_near_the_tolerance(self):
+        # 1.1.1, report only: each check carries model minus Garmin, and a deciding gap within 0.02 of the 0.15
+        # tolerance warns that the switch is marginal; how enforcement switches on is unchanged
+        g = GOLDEN["G1"]
+        for gap, enforced, marginal in ((0.10, True, False), (0.14, True, True), (0.16, False, True),
+                                        (0.30, False, False)):
+            with self.subTest(gap=gap):
+                acts, garmin = pe.sample_loads(TODAY, g["snapshot"].week_m, garmin_gap=gap)
+                snap = dataclasses.replace(g["snapshot"], activity_load=acts, garmin_load=garmin)
+                plan = pe.build_plan(g["inputs"], snap, what_if_runs=False)
+                self.assertEqual(plan["acwr"]["enforced"], enforced)
+                self.assertEqual({c["signed_gap"] for c in plan["acwr"]["checks"]}, {-gap})
+                warns = [w["detail"] for w in plan["warnings"] if w["id"] == "acwr_marginal"]
+                self.assertEqual(bool(warns), marginal)
+                if warns:
+                    self.assertIn(f"switch the cap {'off' if enforced else 'on'}", warns[0])
 
 
 # --- rules v2: race pacing (item 13) --------------------------------------------------------------------------
@@ -976,7 +1040,7 @@ class BRaceWindow(unittest.TestCase):
             "long_after_of_peak": {"tri_full": 0.60, "tri_half": 0.70, "run": 0.70},
             "long_after_min_days": {"tri_full": 10, "tri_half": 0, "run": 0},
             "long_after_of_last": {"tri_half": 0.75}, "long_after_fallback_of_cap": [0.65, 0.75]})
-        self.assertEqual(pe.RULES_VERSION, 2)
+        self.assertEqual(pe.RULES_VERSION, 3)
 
     def test_long_run_before_a_b_race_is_held_and_not_made_up(self):
         b_day, long_day = D(2028, 1, 28), "2028-01-21"   # a Friday B race: the long run 7 days before it
@@ -1277,10 +1341,12 @@ class BlockedLongDay(unittest.TestCase):
 
 class EasyRunRule(unittest.TestCase):
     def test_a_peak_week_without_room_for_an_easy_run_is_exempt(self):
-        # CI's travel-gap case: in the week of 31 Jan the long run (20.3 km) and the two quality sessions leave
-        # 3.7 km of the 40.5 km target, under the 4 km easy minimum, so no easy run fits and easy_share rightly
-        # passes. The plan without the cap has one there because its week is bigger (its long runs step from
-        # uncut ones), not because this plan dropped it: the property must apply the same exemption.
+        # CI's travel-gap case: in the week of 31 Jan the long run and the two quality sessions left less than the
+        # 4 km easy minimum of the target, so no easy run fitted and easy_share rightly passed. Since 1.1.1 the
+        # ratio cap never cuts a long run below the last normal week's, the weeks after the gap are bigger and
+        # this week has room and an easy run. The exemption is checked on that week with its easy run taken
+        # out: under 4 km of room it is exempt (in the property's helper and the invariant alike); with 10 km
+        # more target the invariant fails without one.
         inputs, snap = ci_owner_like_case()
         plan = pe.build_plan(inputs, snap, what_if_runs=False)
         self.assertTrue(plan["acwr"]["enforced"])
@@ -1288,12 +1354,16 @@ class EasyRunRule(unittest.TestCase):
         week = next(w for w in plan["weeks"] if w["start"] == "2028-01-31")
         roles = [s["role"] for s in week["sessions"]]
         self.assertIn("long", roles)
-        self.assertFalse({"easy", "strides"} & set(roles))
-        self.assertFalse(easy_run_due(plan, "2028-01-31"))
-        self.assertLess(week["target_km"] - sum(s["km"] for s in week["sessions"]), pe.RULES["easy_min_km"])
-        self.assertEqual(week["planned_km"], sum(s["km"] for s in week["sessions"]))
-        # the rule bites when there is room: give the week 10 km more target and the invariant fails without one
+        self.assertTrue({"easy", "strides"} & set(roles))
+        self.assertTrue(easy_run_due(plan, "2028-01-31"))
         w = next(x for x in plan["_check"]["weeks"] if x.start == D(2028, 1, 31))
+        w.sessions = [s for s in w.sessions if s.role not in pe.EASY_ROLES]
+        fixed = sum(pe._built_m(w, s) for s in w.sessions if s.role in pe.QUALITY_ROLES + ("long",))
+        w.target = pe.Meters(fixed + 3700.0 + w.b_cut)
+        self.assertFalse(easy_run_due(plan, "2028-01-31"))
+        failed = {i["id"]: i["detail"] for i in pe.check_invariants(plan) if not i["ok"]}
+        self.assertNotIn(f"week {w.number}: no easy run", failed.get("easy_share", ""))
+        # the rule bites when there is room: give the week 10 km more target and the invariant fails without one
         w.target = pe.Meters(w.target + 10000.0)
         self.assertTrue(easy_run_due(plan, "2028-01-31"))
         failed = {i["id"]: i["detail"] for i in pe.check_invariants(plan) if not i["ok"]}
@@ -1346,15 +1416,16 @@ class OwnerCase(unittest.TestCase):
     def test_after_the_travel_week_the_long_run_returns_to_the_one_before_it(self):
         # the first normal week after the gap returns to the last normal week's long run (23.6 km), no +2 km;
         # the deload in between (18.4 km) does not reset it. These loads track Garmin, so the ratio cap (rule 12)
-        # then cuts the return week's long run (to 18.2 km since its marathon-pace session counts in seconds, not
-        # metres): it was placed at 23.6 km before the cut, and the next week steps from the cut one
+        # cuts the return week, but never its long run below the last normal week's (1.1.1): the other runs
+        # take the cut, the long run stays at 23.6 km and the next week steps from it
         runs = _runs(self.plan)
         self.assertEqual(long_step_problems(self.plan), [])
         self.assertEqual([runs[d]["km"] for d in ("2027-12-10", "2027-12-24")], [23.6, 18.4])
         w5 = next(w for w in self.plan["_check"]["weeks"] if w.start == D(2027, 12, 27))
-        built = {op[3].isoformat(): (op[0], op[1]) for op in w5.acwr_ops.values()}
-        self.assertEqual(built["2027-12-31"], ("long", 23600.0))
-        self.assertLessEqual(runs["2027-12-31"]["km"], 23.6)
+        self.assertTrue(w5.acwr_ops)
+        self.assertNotIn("long", {op[0] for op in w5.acwr_ops.values()})
+        self.assertEqual(runs["2027-12-31"]["km"], 23.6)
+        self.assertGreaterEqual(runs["2028-01-07"]["km"], runs["2027-12-31"]["km"])
         self.assertLessEqual(runs["2028-01-07"]["km"], runs["2027-12-31"]["km"] + 2.0 + 0.05)
 
     def test_real_data_shape_returns_to_the_long_run_before_the_gap_then_steps_2_km(self):
@@ -1363,14 +1434,15 @@ class OwnerCase(unittest.TestCase):
         self.assertEqual(long_step_problems(plan), [])
         longs = [(w["kind"], w["long_km"]) for w in plan["weeks"] if w["kind"] != "week0"][:7]
         # With the ratio cap enforced on these loads, the return week's long run is planned at 22.4 km (the
-        # one before the gap, no step) and then cut for the ratio; the +2 km step counts from each normal
-        # week's long run as placed, after its cuts: 19.9 -> at most 21.9 (cut to 19.2) -> at most 21.2.
+        # one before the gap, no step); the cap cuts the week's other runs but never takes a normal week's long
+        # run below the last normal week's (1.1.1): 22.4, then 24.4 cut back to 22.4, then 24.4.
         self.assertEqual(longs, [("normal", 22.4), ("normal", 22.4), ("normal", None), ("deload", 17.4),
-                                 ("normal", 19.9), ("normal", 19.2), ("normal", 21.2)])
-        built = {w.number: {op[3].isoformat(): (op[0], op[1]) for op in w.acwr_ops.values()}
+                                 ("normal", 22.4), ("normal", 22.4), ("normal", 24.4)])
+        built = {w.number: {op[3].isoformat(): (op[0], op[1], op[2]) for op in w.acwr_ops.values()}
                  for w in plan["_check"]["weeks"]}
-        self.assertEqual(built[5]["2027-12-31"], ("long", 22400.0))   # the return week: back to 22.4 before the cut
-        self.assertEqual(built[6]["2028-01-07"], ("long", 21900.0))   # 19.9 as placed + 2 km
+        self.assertTrue(built[5])
+        self.assertNotIn("2027-12-31", built[5])   # the return week's long run is not cut
+        self.assertEqual(built[6]["2028-01-07"], ("long", 24400.0, 22400.0))   # 22.4 + 2 km, cut back to 22.4
         self.assertEqual([x["id"] for x in plan["warnings"] if "2027-12-13" in x["dates"]], ["no_runs_blocked"])
         runs = _runs(plan)
         self.assertEqual(runs["2028-01-31"]["note"], "Skip it if you're still sore.")

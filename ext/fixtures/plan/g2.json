@@ -27,6 +27,7 @@
     ],
     "chronic_days": 28,
     "cut_step": 0.05,
+    "marginal_band": 0.02,
     "max": 1.3,
     "min_checks": 2,
     "min_keep_of_target": 0.6,
@@ -34,7 +35,7 @@
    }
   },
   "b_races": [],
-  "content_hash": "7d4ed23401c0cddc6b3c6e231c18868bc4b70941ca5d0223fc1957791112aa97",
+  "content_hash": "b01179b7c5ece323b5bc4510dd6ba187abe867466499451768922b37bb558f56",
   "feasibility": {
    "checks": [
     {
@@ -56,7 +57,7 @@
      "level": "warn",
      "limit": 30.0,
      "ok": true,
-     "value": 33.5
+     "value": 33.4
     },
     {
      "id": "long_run_km",
@@ -114,6 +115,7 @@
     "one_run_per_day"
    ],
    "failed": [],
+   "held": [],
    "not_enforced": [
     {
      "detail": "not enforced: no recorded run with a Garmin training load, so planned runs have no load",
@@ -136,14 +138,14 @@
    "goal_time": null,
    "marathon_pace": "5:55"
   },
-  "rules_version": 2,
+  "rules_version": 3,
   "start": {
    "km0": 15.5,
    "longest_run_8w_km": 7.0,
    "lt_pace": "5:12"
   },
   "summary": {
-   "peak_km": 33.5,
+   "peak_km": 33.4,
    "peak_long_km": 16.7,
    "weeks": 16.0
   },
@@ -1814,12 +1816,12 @@
   ],
   "what_if": [
    {
-    "delta_peak_km": -4.8,
+    "delta_peak_km": -6.8,
     "delta_peak_long_km": -6.7,
     "goal_time": null,
     "invariants_ok": true,
     "long_share": 0.35,
-    "peak_km": 28.7,
+    "peak_km": 26.6,
     "peak_long_km": 10.0,
     "variant": "long_share_0.35",
     "verdict": "ambitious",
@@ -1829,12 +1831,12 @@
     ]
    },
    {
-    "delta_peak_km": 0.0,
+    "delta_peak_km": -0.6,
     "delta_peak_long_km": -1.7,
     "goal_time": null,
     "invariants_ok": true,
     "long_share": 0.45,
-    "peak_km": 33.5,
+    "peak_km": 32.8,
     "peak_long_km": 15.0,
     "variant": "long_share_0.45",
     "verdict": "ambitious",

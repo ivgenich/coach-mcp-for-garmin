@@ -1119,7 +1119,7 @@ class WriteService:
             return sc.compact_json({**row["result"], "replayed": True})
         if plan is None or plan["status"] not in ps.OPEN_STATUSES:
             return sc.compact_json(refused(pid, "unknown_plan"))
-        if int(row["version"]) != int(plan["current_version"]):
+        if int(row["version"]) != int(plan["current_version"]) and not _proposal(action, plan, row):
             return sc.compact_json(refused(pid, "superseded"))
         if _status_changed(action, plan, row):
             return sc.compact_json(refused(pid, "plan_changed"))
@@ -1160,8 +1160,19 @@ class WriteService:
                 log.warning("plans: plan_%s could not read the plan again (%s)", action, type(exc).__name__)
                 return {"status": "refused", "plan_id": pid, "reason": "database", "note": TEXT_DB}
             if fresh is None or fresh.get("status") != plan.get("status") \
-                    or int(fresh.get("current_version") or 0) != int(plan.get("current_version") or 0):
+                    or int(fresh.get("current_version") or 0) != int(plan.get("current_version") or 0) \
+                    or int(fresh.get("latest_version") or 0) != int(plan.get("latest_version") or 0):
                 return refused(pid, "plan_changed")
+            if _proposal(action, fresh, row):
+                # the user confirmed this token: the proposed version it was issued for becomes the current one
+                try:
+                    store.adopt_version(pid, int(row["version"]))
+                    fresh = store.get_plan(fp, pid)
+                except (ps.StoreError, ValueError, ps.PlanNotFound) as exc:
+                    log.warning("plans: plan_%s could not adopt the version (%s)", action, type(exc).__name__)
+                    return {"status": "refused", "plan_id": pid, "reason": "database", "note": TEXT_DB}
+                if fresh is None or int(fresh.get("current_version") or 0) != int(row["version"]):
+                    return refused(pid, "plan_changed")
             return self._execute(action, fresh, row, token, ops, today, confirmed_by)
         finally:
             lock.release()
@@ -1323,6 +1334,15 @@ def _calendar_changed(ops: Sequence[Mapping[str, Any]], entries: Sequence[Mappin
         if near & hard_ops:
             return True
     return False
+
+
+def _proposal(action: str, plan: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
+    """A commit token issued for the active plan's proposed version (a plan_preview of the active plan, stored
+    without moving current_version): the newest stored version, newer than the current one. Running the token
+    adopts it."""
+    version = int(row["version"])
+    return (action == "commit" and plan.get("status") == "active" and version > int(plan.get("current_version") or 0)
+            and version == int(plan.get("latest_version") or 0))
 
 
 def _apply_version(store: Any, plan: Mapping[str, Any], payload: Mapping[str, Any]) -> int:

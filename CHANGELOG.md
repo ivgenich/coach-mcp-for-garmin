@@ -8,6 +8,58 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-26
+
+Fixes to the training plan builder. Plan rules version 3 (old: 2), so a plan stored by 1.1.0 says
+`rules_changed` until it is previewed again. After updating, choose **Refresh tools list** in
+claude.ai: `plan_assess` takes a new argument and several tool descriptions changed.
+
+### Added
+
+- `acwr.checks[].signed_gap` (the model's ratio minus Garmin's) and the warning `acwr_marginal` when the
+  gap that decides enforcement is within 0.02 of the 0.15 tolerance (`acwr.rules.marginal_band`). Report
+  only: enforcement switches on as before.
+
+### Fixed
+
+- Plan rules version 3 (old: 2), the ACWR cap (rule 12): a ratio cut never takes a normal week's long
+  run below the last normal week's long run (old: down to 15 km or 0.6 x the run as built). After a
+  trip the long runs no longer regress and then step +2 km from the cut one: they hold, then keep
+  growing. The cost: more days can be held just above 1.3 (up to about 1.36 in the case that showed
+  it), now listed openly (below), in exchange for long runs that keep progressing. Plans without a
+  long-run cut do not change; the five golden plans keep every session.
+- A reduce-only `easy` override is no longer refused with `acwr_cap` when it turns a session of a held
+  week into a second easy run: the ratio cap counts that session as it was (it is not "another easy
+  run" that lets a drop happen), as the rules already said.
+- Held days are reported honestly: the `acwr_cap` invariant lists them (`invariants.held`, with the
+  days and ratios) instead of a silent pass; `invariants.ok` still allows them. The `acwr_floor`
+  warning gives each held day's reason (the share of its 7-day load already planned in an earlier
+  week, or the B race, and its own week's runs with no cut left) in place of a fixed list that could
+  be wrong. A new warning `long_run_acwr_cut` says when the long-run feasibility check fails and the
+  cap shortened a long run.
+- The `acwr_cut` warning describes each cut session as it is now after an override ("now an easy
+  run", "now a rest day", another date); `acwr.cuts` keeps the numbers as cut.
+- `summary.peak_km`, `projected_peak_km` and feasibility's `peak_km` are the largest planned week, as
+  rule 8 says (old: the largest week target, a week that may never be planned at that size).
+- `plan_assess` takes `blocked_dates` (validated as in `plan_preview`) and passes them to the engine,
+  so an assessment with a trip gives the verdict the preview gives. The intake already asked for
+  those dates.
+- `log_feedback` changes only the values a call gives: the tool's arguments default to "not given"
+  (old: `rpe` and `pain` 0), so a correction such as "the effort was 8" keeps a logged pain of 5 and
+  the weekly review's pain rule still sees it. A first call for a session still needs `rpe`; `pain` 0
+  clears the location and `sharp`. Both plan stores merge the same way.
+- A `plan_preview` of an active plan no longer makes the new version current before the user agrees:
+  it is stored as a proposal (`stored.proposed`), and tracking, the status reports, `log_feedback`
+  and `plan_review_week` keep following the current version. `plan_activate(..., version, "start")`
+  on the active plan adopts the proposal; a commit token for it adopts it when it runs; accepting
+  reviewed changes (`accept_changes`, `plan_apply_changes`) adopts that version at once (the user
+  approved those changes). `plan_get` names a newer proposal (`stored.proposed_version`).
+- The Claude project instructions no longer ask Claude to apply its own resting-HR threshold: they
+  point to the flags and levels `get_daily_status` and `get_weekly_status` give.
+- Docs and code comments: the ratio cap's cut order is the largest cut for its length first (in
+  practice easy runs before a quality rep or the long run), not "quality and the long run first"; the
+  threshold-anchor comment describes the 10K bound that wins over the 0.91 x LT floor.
+
 ## [1.1.0] - 2026-11-26
 
 The training plan builder ([docs/training-plan.md](docs/training-plan.md)). Every part of it is off

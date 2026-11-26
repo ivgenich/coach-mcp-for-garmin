@@ -7,7 +7,11 @@ ever reaches an app log. Every value is checked in Python before any SQL runs (P
 row's values to its own server log), and the statuses and enums are checked here, not by CHECK constraints.
 
 Stage 1 stores previews: a plan (draft) and its versions (rules version, inputs, the engine's answer and its
-content hash). A preview with the same content as the plan's current version stores nothing new. The tables
+content hash). A preview with the same content as the plan's current version stores nothing new. A preview of
+an active plan (save_preview(..., adopt=False)) is stored as a proposed version: current_version stays, so
+tracking and the reports follow the version the user agreed to, until adopt_version (plan_activate "start", a
+commit token for that version) or an accepted review change (adopt=True) makes a version current. get_plan
+gives latest_version beside current_version. The tables
 for Garmin writes, tokens, feedback and changes exist (migration 003). Stage 3 (PLAN_TRACKING=on, plan_tracking)
 stores each tracked session's link in plan_workouts (a `local` row when Garmin has no workout for it; a later
 Garmin write takes the row over through put_workout and keeps its link) and log_feedback's numbers in
@@ -86,7 +90,9 @@ class PlanStore(Protocol):
     def account_fp(self, profile_id: Any) -> str: ...
     def install_tag(self) -> str: ...
     def save_preview(self, account_fp: str, plan_id: Optional[str], race_date: dt.date, rules_version: int,
-                     inputs: Dict[str, Any], body: Dict[str, Any], content_hash: str) -> Tuple[str, int, bool]: ...
+                     inputs: Dict[str, Any], body: Dict[str, Any], content_hash: str,
+                     adopt: bool = True) -> Tuple[str, int, bool]: ...
+    def adopt_version(self, plan_id: str, version: int) -> bool: ...
     def history_account(self) -> Optional[str]: ...
     def get_plan(self, account_fp: str, plan_id: Optional[str] = None) -> Optional[Dict[str, Any]]: ...
     def workouts(self, plan_id: str) -> List[Dict[str, Any]]: ...
@@ -98,8 +104,8 @@ class PlanStore(Protocol):
     def tracked_plan(self, account_fp: str) -> Optional[Dict[str, Any]]: ...
     def save_links(self, plan_id: str, version: int, links: List[Dict[str, Any]],
                    checked_at: Optional[dt.datetime] = None) -> int: ...
-    def save_feedback(self, plan_id: str, workout_key: str, rpe: int, pain: int, pain_location: str,
-                      sharp: bool) -> bool: ...
+    def save_feedback(self, plan_id: str, workout_key: str, rpe: Optional[int] = None, pain: Optional[int] = None,
+                      pain_location: Optional[str] = None, sharp: Optional[bool] = None) -> bool: ...
     def feedback(self, plan_id: str) -> List[Dict[str, Any]]: ...
     def links(self, plan_id: str) -> List[Dict[str, Any]]: ...
     def save_changes(self, plan_id: str, week_start: dt.date, changes: List[Dict[str, Any]]
@@ -110,6 +116,21 @@ class PlanStore(Protocol):
 
 
 # --- checks ---------------------------------------------------------------------------------------------------
+
+def _small_version(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1_000_000:
+        raise ValueError("plans: a plan version is a whole number from 1")
+    return value
+
+
+def _version_race(version_row: Mapping[str, Any], default: Any) -> Any:
+    """The race date a stored version was built for (its inputs), else `default`."""
+    inputs = version_row.get("inputs") if isinstance(version_row, Mapping) else None
+    try:
+        return dt.date.fromisoformat(str(inputs["race_date"])) if isinstance(inputs, Mapping) else default
+    except (KeyError, ValueError):
+        return default
+
 
 def check_plan_id(value: Any) -> str:
     if not isinstance(value, str) or not PLAN_ID_RE.fullmatch(value):
@@ -212,6 +233,34 @@ def check_link(link: Any) -> Dict[str, Any]:
     return {"workout_key": check_workout_key(link.get("workout_key")), "date_local": day, "role": role,
             "dto_hash": dto_hash, "linked_activity_id": _activity_id(link.get("linked_activity_id")),
             "link_status": status}
+
+
+class FeedbackError(ValueError):
+    """A feedback update that does not make a whole record (a fixed text, never a value)."""
+
+
+def merge_feedback(old: Optional[Mapping[str, Any]], rpe: Any = None, pain: Any = None, pain_location: Any = None,
+                   sharp: Any = None) -> Tuple[int, int, str, bool]:
+    """The record a feedback call leaves: the fields given (not None) over the stored ones (old), the others kept.
+    A first record needs rpe (pain 0 by default); pain set to 0 clears the location and sharp unless they are
+    given. Raises FeedbackError when the result is not a whole record, ValueError (check_feedback) on a bad
+    value."""
+    if rpe is None and pain is None and pain_location is None and sharp is None:
+        raise FeedbackError("give rpe, pain, pain_location or sharp")
+    if old is None and rpe is None:
+        raise FeedbackError("the first feedback for a session needs rpe")
+    was = (None, 0, "none", False) if old is None else (
+        old.get("rpe"), int(old.get("pain") or 0), str(old.get("pain_location") or "none"), bool(old.get("sharp")))
+    cleared = pain == 0
+    merged = (was[0] if rpe is None else rpe, was[1] if pain is None else pain,
+              pain_location if pain_location is not None else ("none" if cleared else was[2]),
+              sharp if sharp is not None else (False if cleared else was[3]))
+    out = check_feedback(*merged)
+    if out[1] == 0 and (out[2] != "none" or out[3]):
+        raise FeedbackError("with pain 0, pain_location must be none and sharp false")
+    if out[1] > 0 and out[2] == "none":
+        raise FeedbackError("with pain above 0, give pain_location")
+    return out
 
 
 def check_feedback(rpe: Any, pain: Any, pain_location: Any, sharp: Any) -> Tuple[int, int, str, bool]:
@@ -529,7 +578,10 @@ class MemoryPlanStore:
         with self._lock:
             return self.meta.setdefault(META_INSTALL_TAG, secrets.token_hex(4))
 
-    def save_preview(self, account_fp, plan_id, race_date, rules_version, inputs, body, content_hash):
+    def save_preview(self, account_fp, plan_id, race_date, rules_version, inputs, body, content_hash, adopt=True):
+        """Store a preview as the plan's next version: (plan_id, version, stored new). The same content as the
+        current version stores nothing. adopt False on an active plan: a proposed version, current_version
+        stays (the same content as the latest proposed one stores nothing either)."""
         fp = _fp(account_fp)
         race_date, rules_version, content_hash = _version_args(race_date, rules_version, content_hash)
         inputs, body = _json(inputs, "inputs"), _json(body, "body")
@@ -552,12 +604,38 @@ class MemoryPlanStore:
                         cur["body"]["basis"] = body["basis"]   # a plan stored before plan_basis gets it once
                     return pid, row["current_version"], False
             row = self.plans[pid]
-            version = row["current_version"] + 1
+            latest = max((v for p, v in self.versions if p == pid), default=0)
+            propose = not adopt and row["status"] == "active"
+            if propose and latest > row["current_version"] \
+                    and self.versions[(pid, latest)]["content_hash"] == content_hash:
+                row["updated_at"] = now
+                return pid, latest, False
+            version = latest + 1
             self.versions[(pid, version)] = {"plan_id": pid, "version": version, "rules_version": rules_version,
                                              "inputs": inputs, "body": body, "content_hash": content_hash,
                                              "created_at": now}
-            row.update(current_version=version, race_date=race_date, updated_at=now)
+            if propose:
+                row.update(updated_at=now)
+            else:
+                row.update(current_version=version, race_date=race_date, updated_at=now)
             return pid, version, True
+
+    def adopt_version(self, plan_id, version):
+        """Make a stored version newer than the current one the active plan's current version (the user agreed
+        to it); True when it moved. An older or the current version, or a plan that is not active, changes
+        nothing (False); an unknown version raises PlanNotFound."""
+        pid = check_plan_id(plan_id)
+        version = _small_version(version)
+        now = self._clock()
+        with self._lock:
+            row = self.plans.get(pid)
+            v = self.versions.get((pid, version))
+            if row is None or v is None:
+                raise PlanNotFound("plans: no such plan version")
+            if row["status"] != "active" or version <= row["current_version"]:
+                return False
+            row.update(current_version=version, race_date=_version_race(v, row["race_date"]), updated_at=now)
+            return True
 
     def history_account(self):
         with self._lock:
@@ -580,6 +658,8 @@ class MemoryPlanStore:
                 return None
             out = copy.deepcopy(row)
             out["version_row"] = copy.deepcopy(self.versions.get((row["plan_id"], row["current_version"])))
+            out["latest_version"] = max((v for p, v in self.versions if p == row["plan_id"]),
+                                        default=row["current_version"])
             return out
 
     def workouts(self, plan_id):
@@ -665,15 +745,16 @@ class MemoryPlanStore:
                            link_checked_at=now)
         return len(items)
 
-    def save_feedback(self, plan_id, workout_key, rpe, pain, pain_location, sharp):
-        """Upsert one session's feedback; True when it is new."""
+    def save_feedback(self, plan_id, workout_key, rpe=None, pain=None, pain_location=None, sharp=None):
+        """Upsert one session's feedback: the fields given (not None) replace the stored ones, the others stay
+        (merge_feedback); True when it is new."""
         pid, key = check_plan_id(plan_id), check_workout_key(workout_key)
-        rpe, pain, location, sharp = check_feedback(rpe, pain, pain_location, sharp)
         now = self._clock()
         with self._lock:
             if pid not in self.plans:
                 raise PlanNotFound("plans: no plan with this id")
             old = self.feedback_rows.get((pid, key))
+            rpe, pain, location, sharp = merge_feedback(old, rpe, pain, pain_location, sharp)
             self.feedback_rows[(pid, key)] = {
                 "plan_id": pid, "workout_key": key, "rpe": rpe, "pain": pain, "pain_location": location,
                 "sharp": sharp, "created_at": old["created_at"] if old else now, "updated_at": now}
@@ -960,11 +1041,12 @@ class PgPlanStore:
         with self.transaction() as c:
             return self._meta_setdefault(c, META_INSTALL_TAG, secrets.token_hex(4))
 
-    def save_preview(self, account_fp, plan_id, race_date, rules_version, inputs, body, content_hash):
+    def save_preview(self, account_fp, plan_id, race_date, rules_version, inputs, body, content_hash, adopt=True):
         fp = _fp(account_fp)
         race_date, rules_version, content_hash = _version_args(race_date, rules_version, content_hash)
         inputs, body = _json(inputs, "inputs"), _json(body, "body")
         with self.transaction() as c:
+            status = "draft"
             if plan_id is None:
                 pid = new_plan_id()
                 self._rows(c, f"INSERT INTO {SCHEMA}.plans (plan_id, account_fp, status, current_version, race_date) "
@@ -972,11 +1054,11 @@ class PgPlanStore:
                 current = 0
             else:
                 pid = check_plan_id(plan_id)
-                rows = self._rows(c, f"SELECT current_version FROM {SCHEMA}.plans WHERE plan_id = %s AND "
+                rows = self._rows(c, f"SELECT current_version, status FROM {SCHEMA}.plans WHERE plan_id = %s AND "
                                      "account_fp = %s AND status = ANY(%s) FOR UPDATE", (pid, fp, list(OPEN_STATUSES)))
                 if not rows:
                     raise PlanNotFound("plans: no open plan with this id for this Garmin account")
-                current = int(rows[0][0])
+                current, status = int(rows[0][0]), str(rows[0][1])
                 same = self._rows(c, f"SELECT 1 FROM {SCHEMA}.plan_versions WHERE plan_id = %s AND version = %s "
                                      "AND content_hash = %s", (pid, current, content_hash))
                 if same:   # a draft in use is not dropped by the 30-day retention
@@ -986,13 +1068,40 @@ class PgPlanStore:
                                       "WHERE plan_id = %s AND version = %s AND body -> 'basis' IS NULL",
                                    (self._Jsonb(body["basis"]), pid, current))
                     return pid, current, False
-            version = current + 1
+            got = self._rows(c, f"SELECT version, content_hash FROM {SCHEMA}.plan_versions WHERE plan_id = %s "
+                                "ORDER BY version DESC LIMIT 1", (pid,))
+            latest = int(got[0][0]) if got else 0
+            propose = not adopt and status == "active"
+            if propose and latest > current and got and got[0][1] == content_hash:
+                self._rows(c, f"UPDATE {SCHEMA}.plans SET updated_at = now() WHERE plan_id = %s", (pid,))
+                return pid, latest, False
+            version = latest + 1
             self._rows(c, f"INSERT INTO {SCHEMA}.plan_versions (plan_id, version, rules_version, inputs, body, "
                           "content_hash) VALUES (%s, %s, %s, %s, %s, %s)",
                        (pid, version, rules_version, self._Jsonb(inputs), self._Jsonb(body), content_hash))
-            self._rows(c, f"UPDATE {SCHEMA}.plans SET current_version = %s, race_date = %s, updated_at = now() "
-                          "WHERE plan_id = %s", (version, race_date, pid))
+            if propose:   # a proposed version: the active plan keeps the version the user agreed to
+                self._rows(c, f"UPDATE {SCHEMA}.plans SET updated_at = now() WHERE plan_id = %s", (pid,))
+            else:
+                self._rows(c, f"UPDATE {SCHEMA}.plans SET current_version = %s, race_date = %s, updated_at = now() "
+                              "WHERE plan_id = %s", (version, race_date, pid))
         return pid, version, True
+
+    def adopt_version(self, plan_id, version):
+        pid = check_plan_id(plan_id)
+        version = _small_version(version)
+        with self.transaction() as c:
+            rows = self._rows(c, f"SELECT current_version, status, race_date FROM {SCHEMA}.plans WHERE plan_id = %s "
+                                 "FOR UPDATE", (pid,))
+            v = self._rows(c, f"SELECT inputs FROM {SCHEMA}.plan_versions WHERE plan_id = %s AND version = %s",
+                           (pid, version))
+            if not rows or not v:
+                raise PlanNotFound("plans: no such plan version")
+            current, status, race = int(rows[0][0]), str(rows[0][1]), rows[0][2]
+            if status != "active" or version <= current:
+                return False
+            self._rows(c, f"UPDATE {SCHEMA}.plans SET current_version = %s, race_date = %s, updated_at = now() "
+                          "WHERE plan_id = %s", (version, _version_race({"inputs": _loads(v[0][0])}, race), pid))
+        return True
 
     _PLAN_COLS = "plan_id, account_fp, status, current_version, race_date, created_at, updated_at, activated_at, ended_at"
 
@@ -1022,6 +1131,9 @@ class PgPlanStore:
             v = self._rows(c, f"SELECT version, rules_version, inputs, body, content_hash, created_at FROM "
                               f"{SCHEMA}.plan_versions WHERE plan_id = %s AND version = %s",
                            (out["plan_id"], out["current_version"]))
+            top = self._rows(c, f"SELECT max(version) FROM {SCHEMA}.plan_versions WHERE plan_id = %s",
+                             (out["plan_id"],))
+        out["latest_version"] = int(top[0][0]) if top and top[0][0] is not None else out["current_version"]
         out["version_row"] = None
         if v:
             r = v[0]
@@ -1208,9 +1320,8 @@ class PgPlanStore:
                                     i["linked_activity_id"], i["link_status"], checked_at))
         return len(items)
 
-    def save_feedback(self, plan_id, workout_key, rpe, pain, pain_location, sharp):
+    def save_feedback(self, plan_id, workout_key, rpe=None, pain=None, pain_location=None, sharp=None):
         pid, key = check_plan_id(plan_id), check_workout_key(workout_key)
-        rpe, pain, location, sharp = check_feedback(rpe, pain, pain_location, sharp)
         sql = (f"INSERT INTO {SCHEMA}.plan_feedback (plan_id, workout_key, rpe, pain, pain_location, sharp) "
                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (plan_id, workout_key) DO UPDATE SET rpe = EXCLUDED.rpe, "
                "pain = EXCLUDED.pain, pain_location = EXCLUDED.pain_location, sharp = EXCLUDED.sharp, "
@@ -1218,6 +1329,11 @@ class PgPlanStore:
         with self.transaction() as c:
             if not self._rows(c, f"SELECT 1 FROM {SCHEMA}.plans WHERE plan_id = %s", (pid,)):
                 raise PlanNotFound("plans: no plan with this id")
+            # the fields not given keep their stored values (merge_feedback), read under a row lock
+            got = self._rows(c, f"SELECT rpe, pain, pain_location, sharp FROM {SCHEMA}.plan_feedback "
+                                "WHERE plan_id = %s AND workout_key = %s FOR UPDATE", (pid, key))
+            old = dict(zip(("rpe", "pain", "pain_location", "sharp"), got[0])) if got else None
+            rpe, pain, location, sharp = merge_feedback(old, rpe, pain, pain_location, sharp)
             rows = self._rows(c, sql, (pid, key, rpe, pain, location, sharp))
         return bool(rows[0][0])
 

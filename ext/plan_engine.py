@@ -1,12 +1,13 @@
-"""The training-plan engine (rules v2): a race plan built by fixed, versioned rules.
+"""The training-plan engine (rules v3): a race plan built by fixed, versioned rules.
 
 Pure and standard library only, like daily_status' rules: build_plan(inputs, snapshot) takes the athlete's
 numbers (plan_tools reads them from Garmin) and returns the plan as a JSON-ready dict. The same inputs give
 the same plan, byte for byte (content_hash). Code decides every number; a chat model only explains them.
-docs/training-plan.md ("Plan rules v2") says the rules in words; RULES holds every number (the ACWR and
+docs/training-plan.md ("Plan rules v3") says the rules in words; RULES holds every number (the ACWR and
 race-pacing rules are echoed in their blocks of the answer).
 
-What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
+What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13; v3: a cut of 12 never takes a normal
+week's long run below the last normal week's):
  1. weeks Monday to Sunday up to the A-race week (week 1 starts the next Monday; week 0 is the rest of this
     week, easy runs only); phases taper / peak / base / build; a stored plan rebuilt (history=...) keeps its
     grid, its weeks that ended and today's days up to today, and plans the rest around them;
@@ -37,9 +38,12 @@ What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
 12. planned all-sport ACWR (v2): each day's load = minutes x the sport's load per minute from the recent
     activity list (fixed calendar sessions count with their own sport); acute = the last 7 days, chronic =
     the last 28 days / 4, as Garmin's. While the model tracks Garmin's reported ratio within 0.15 on the
-    history, a day whose planned ratio passes 1.3 has its week's runs cut (quality and the long run shorter
-    first, one easy run kept, 80% easy kept; never raised, never below 0.6 x its target; reduce-only overrides
-    never cause a cut); otherwise the ratio is only reported, with a warning;
+    history, a day whose planned ratio passes 1.3 has its week's runs cut: first a session shorter, the one
+    whose cut is the largest share of its length first (in practice easy runs down to the easy minimum before a
+    quality rep or the long run), the long run never below the last normal week's; then an easy run dropped;
+    one easy run kept, 80% easy kept; never raised, never below 0.6 x its target; reduce-only overrides never
+    cause a cut. A day with nothing left to cut is held and reported; otherwise (not enforced) the ratio is
+    only reported, with a warning;
 13. race pacing (v2): with a course, per-segment paces for the A race at the goal pace, slower on climbs
     (course_profile's climbs) and the flats faster, so the course takes the goal time.
 
@@ -62,7 +66,7 @@ Meters = NewType("Meters", float)
 Seconds = NewType("Seconds", float)
 MetersPerSecond = NewType("MetersPerSecond", float)
 
-RULES_VERSION = 2
+RULES_VERSION = 3
 
 DISTANCES: Dict[str, Meters] = {"marathon": Meters(42195.0), "half": Meters(21097.5)}
 # Garmin's race predictions by name (the pace anchors read 5k and 10k, the race paces half and marathon).
@@ -119,8 +123,10 @@ RULES: Dict[str, Any] = {
     "mp_of_lt_sanity": [0.85, 0.96],
     # Garmin's 5K and 10K predictions anchor the intervals and check the threshold band (a missing one is
     # converted from the other by Riegel's t2 = t1 x (d2/d1)^1.06): intervals from the 5K pace to the 3K
-    # equivalent; a threshold band whose fast end is faster than the 10K pace moves down to it (at most
-    # until its slow end is 0.91 x LT), its slow end then no slower than the half-marathon pace.
+    # equivalent; a threshold band whose fast end is faster than the 10K pace moves down to it (its fast end at
+    # the 10K pace: the 10K bound wins over the 0.91 x LT floor; when the moved band's slow end would be slower
+    # than 0.91 x LT, the band narrows toward that floor, at most to half its width, with the warning
+    # threshold_anchor_conflict), its slow end then no slower than the half-marathon pace.
     # Easy and long from the marathon prediction (or the half's, by Riegel) at its corrected goal's speed; with
     # a marathon pace, their fast ends at least this many s/km slower than it (also on LT multiples).
     "pace_anchors": {"riegel_exponent": 1.06, "intervals_m": [5000.0, 3000.0], "threshold_min_of_lt": 0.91,
@@ -153,6 +159,8 @@ RULES: Dict[str, Any] = {
     # v2: planned all-sport acute:chronic workload ratio (item 12)
     "acwr": {"max": 1.3, "acute_days": 7, "chronic_days": 28, "track_tolerance": 0.15,
              "check_days_ago": [0, 14, 28], "min_checks": 2, "min_keep_of_target": 0.6, "cut_step": 0.05,
+             # report only: warning acwr_marginal when the deciding check's gap is this close to the tolerance
+             "marginal_band": 0.02,
              # a B race's estimated minutes (x the all-sport load per minute); "run": a half marathon at the
              # recorded mean run speed, this default without one
              "b_race_minutes": {"tri_full": 750, "tri_half": 330, "run": 120}},
@@ -2268,6 +2276,7 @@ class LoadModel:
     enforced: bool
     reason: Optional[str]
     cuts: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    deciding_gap: Optional[float] = None   # the min_checks-th smallest gap (unrounded): enforced at <= tolerance
 
 
 def _ratio(acute: float, chronic: float) -> Optional[float]:
@@ -2324,7 +2333,7 @@ def load_model(snap: Snapshot, ctx: Context) -> LoadModel:
             continue
         gaps.append(abs(model - garmin))
         checks.append({"date": g.date.isoformat(), "model": round(model, 2), "garmin": round(garmin, 2),
-                       "gap": round(abs(model - garmin), 2)})
+                       "gap": round(abs(model - garmin), 2), "signed_gap": round(model - garmin, 2)})
     tol = float(a["track_tolerance"])
     need = int(a["min_checks"])
     reason: Optional[str] = None
@@ -2338,7 +2347,8 @@ def load_model(snap: Snapshot, ctx: Context) -> LoadModel:
         reason = (f"the model is within {tol} of Garmin's ratio on {close} of {len(checks)} check days (at least "
                   f"{need} needed), so the planned ratio is only reported")
     run_mps = run_m / run_s if run_s > 0 else None
-    return LoadModel(lpm, run_mps, actual, fixed, checks, reason is None, reason)
+    deciding = sorted(gaps)[need - 1] if "run" in lpm and len(gaps) >= need else None
+    return LoadModel(lpm, run_mps, actual, fixed, checks, reason is None, reason, deciding_gap=deciding)
 
 
 def b_race_minutes(b: BRace, model: LoadModel, rules: Mapping[str, Any] = RULES) -> float:
@@ -2497,12 +2507,14 @@ def _week_cuts(weeks: Sequence[Week], ctx: Context, day: dt.date, allowed: Calla
                long_ok: bool) -> List[Tuple[Week, Session, Optional[Session]]]:
     """The cuts of the `allowed` weeks that lower the planned ratio on `day`, best first: (week, session, its
     shorter version or None to drop it). Only their runs in the 7 days ending on `day` (after today, not
-    changed by a reduce-only override), never taking a week under 0.6 x its target. First shorter sessions
-    (the most room for its size first): a quality session one rep shorter (down to rule 4's smallest), the
-    long run (long_ok: the owner's, only while the plan is built, before the later long runs step from it) 5%
-    of the week's target shorter (not under the long-run classifier's 15 km nor 0.6 x it as built), an easy
-    run 5% shorter (not under the easy minimum); each only while the week keeps 80% of its time easy. Then
-    dropping an easy run (not the week's first run), only while the week keeps another one."""
+    changed by a reduce-only override), never taking a week under 0.6 x its target. First shorter sessions,
+    the largest cut for its length first (no role order): a quality session one rep shorter (down to rule 4's
+    smallest), the long run (long_ok: the owner's, only while the plan is built, before the later long runs
+    step from it) 5% of the week's target shorter (not under the long-run classifier's 15 km, 0.6 x it as built
+    nor, in a normal week, the last normal week's long run), an easy run 5% shorter (not under the easy
+    minimum); each only while the week keeps 80% of its time easy. Then dropping an easy run (not the week's
+    first run), only while the week keeps another one (counted as the cap counts the week: a session a
+    reduce-only override made easy is not another easy run)."""
     r, paces = ctx.rules, ctx.paces
     a = r["acwr"]
     today = ctx.snapshot.today
@@ -2524,6 +2536,8 @@ def _week_cuts(weeks: Sequence[Week], ctx: Context, day: dt.date, allowed: Calla
                 new = None
         elif cut >= 100.0 and (s.role in EASY_ROLES or (s.role == "long" and long_ok)):
             low = max(long_min, keep * _built_m(w, s)) if s.role == "long" else easy_min
+            if s.role == "long" and w.kind == "normal":   # never below the last normal week's long run
+                low = max(low, float(w.long_ref))
             new_d = _floor_m(max(low, float(s.distance) - cut))
             if s.distance - new_d >= 100.0:
                 new = make_session(s.key, s.date, s.role, new_d, paces, r)
@@ -2533,7 +2547,7 @@ def _week_cuts(weeks: Sequence[Week], ctx: Context, day: dt.date, allowed: Calla
                 shorter.append(((-w.number, -(s.distance - new.distance) / s.distance, s.key), w, s, new))
         # (never the week's first run: the days before its next run would pass to the week before, already cut)
         if s.role in EASY_ROLES and s.distance <= room + EPS_M \
-                and sum(1 for x in w.sessions if x.role in EASY_ROLES) >= 2 \
+                and sum(1 for x in w.sessions if (ctx.cap_as.get(x.key) or x).role in EASY_ROLES) >= 2 \
                 and s.date > min(x.date for x in w.sessions if x.counts):
             rest = [x for x in w.sessions if x is not s]
             if _easy_share_ok(rest, ctx) or not _easy_share_ok(w.sessions, ctx):
@@ -2593,14 +2607,32 @@ def enforce_acwr(w: Week, ctx: Context) -> bool:
     return cut_any
 
 
-def _cut_text(w: Week) -> str:
+def _cut_text(w: Week, current: Mapping[str, Session]) -> str:
+    """What each cut changed (the record, as cut), and for a session an override changed since, what it is now:
+    an easy run, a rest day (removed), another date or distance."""
     names = {"easy": "easy run", "strides": "strides run", "long": "long run", "threshold": "threshold",
              "intervals": "intervals", "mp": "marathon pace"}
     parts = []
     for key in sorted(w.acwr_ops, key=lambda k: (w.acwr_ops[k][3], k)):
         role, was, now, day = w.acwr_ops[key]
         what = f"{names.get(role, role)} {day.isoformat()}"
-        parts.append(f"{what} dropped" if now <= 0 else f"{what} {km(was)} -> {km(now)} km")
+        text = f"{what} dropped" if now <= 0 else f"{what} {km(was)} -> {km(now)} km"
+        if now > 0:
+            s = current.get(key)
+            if s is None:
+                text += " (now a rest day)"
+            else:
+                notes = []
+                if s.role != role:
+                    notes.append(f"an {names.get(s.role, s.role)}" if s.role in ("easy", "intervals")
+                                 else f"a {names.get(s.role, s.role)}")
+                if abs(float(s.distance) - now) >= 50.0:
+                    notes.append(f"{km(s.distance)} km")
+                if s.date != day:
+                    notes.append(f"on {s.date.isoformat()}")
+                if notes:
+                    text += f" (now {' '.join(notes)})"
+        parts.append(text)
     return ", ".join(parts)
 
 
@@ -2657,11 +2689,12 @@ def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
                 over.append(d)
     cuts = _acwr_cuts(weeks)
     model.cuts = cuts
+    current = {s.key: s for w in weeks for s in w.sessions}
     for w in weeks:
         if w.acwr_ops and w.acwr_first is not None:
             c = next(x for x in cuts if x["week"] == w.number)
             ctx.warnings.append({"id": "acwr_cut", "dates": [w.start.isoformat()],
-                                 "detail": f"run km cut from {c['from_km']} to {c['to_km']} km ({_cut_text(w)}): "
+                                 "detail": f"run km cut from {c['from_km']} to {c['to_km']} km ({_cut_text(w, current)}): "
                                            f"the planned acute:chronic ratio reached {c['ratio']} on {c['date']} "
                                            f"(limit {a['max']})"})
     cap_top: Optional[Tuple[float, dt.date]] = None
@@ -2674,14 +2707,34 @@ def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
         for w in weeks:
             days = [(d, r) for d, r, owner in held if owner is w]
             if days:
+                # the reason per day, days with the same reason together
+                groups: List[Tuple[List[Tuple[dt.date, float]], str]] = []
+                for d, r in days:
+                    why = _held_cause(weeks, ctx, d, w)
+                    if groups and groups[-1][1] == why:
+                        groups[-1][0].append((d, r))
+                    else:
+                        groups.append(([(d, r)], why))
+                text = " | ".join(", ".join(f"{d.isoformat()} ({round(r, 2)})" for d, r in g) + f": {why}"
+                                  for g, why in groups)
                 ctx.warnings.append({"id": "acwr_floor", "dates": [d.isoformat() for d, _r in days[:5]],
                                      "detail": f"the planned acute:chronic ratio stays above {a['max']} (up to "
-                                               f"{round(max(r for _d, r in days), 2)}): nothing of the week is left "
-                                               f"to cut (quality and the long run at their floors, one easy run kept, "
-                                               f"80% of the time easy, the week not under "
-                                               f"{a['min_keep_of_target']} x its target)"})
+                                               f"{round(max(r for _d, r in days), 2)}) with nothing of week "
+                                               f"{w.number} left to cut for it (quality at its fewest reps, easy "
+                                               f"runs at the minimum, a long run not under the last normal week's, "
+                                               f"one easy run and the week's first run kept, 80% of the time easy, "
+                                               f"the week not under {a['min_keep_of_target']} x its target): {text}"})
     else:
         ctx.warnings.append({"id": "acwr_not_enforced", "dates": [], "detail": str(model.reason)})
+    gap = model.deciding_gap
+    if gap is not None and abs(gap - float(a["track_tolerance"])) <= float(a["marginal_band"]) + 1e-9:
+        ctx.warnings.append({"id": "acwr_marginal", "dates": [],
+                             "detail": f"the cap is {'enforced' if model.enforced else 'not enforced'} by a small "
+                                       f"margin: the deciding check's gap between the model's and Garmin's ratio is "
+                                       f"{round(gap, 3)} against the {a['track_tolerance']} tolerance (acwr.checks, "
+                                       f"signed_gap: model minus Garmin), so a small change in Garmin's numbers can "
+                                       f"switch the cap {'off' if model.enforced else 'on'} and change the plan"})
+    if not model.enforced:
         if over:
             ctx.warnings.append({"id": "acwr_high", "dates": [d.isoformat() for d in over[:5]],
                                  "detail": f"the planned acute:chronic ratio passes {a['max']} on {len(over)} "
@@ -2699,6 +2752,38 @@ def acwr_answer(weeks: Sequence[Week], ctx: Context) -> Dict[str, Any]:
             "days_over": len(over),
             "cap_max": {"ratio": round(cap_top[0], 2), "date": cap_top[1].isoformat()} if cap_top else None,
             "held": [{"date": d.isoformat(), "ratio": round(r, 2)} for d, r, _o in held]}
+
+
+def _held_cause(weeks: Sequence[Week], ctx: Context, day: dt.date, owner: Week) -> str:
+    """Why one held day stays above the limit, from its 7-day load as the cap counts it: the runs of earlier weeks
+    already planned in it (only the owner week is cut for a day), a B race in it, and the owner week's runs in
+    it, every one at its floor."""
+    names = {"easy": "easy run", "strides": "strides run", "long": "long run", "threshold": "threshold",
+             "intervals": "intervals", "mp": "marathon pace"}
+    lo = day - dt.timedelta(days=int(ctx.rules["acwr"]["acute_days"]) - 1)
+    capped = _cap_sessions(weeks, ctx)
+    view = [(w, s) for w, s, _c in capped if lo <= s.date <= day and s.date > ctx.snapshot.today]
+    total = sum(v for d, v in _loads_of((s for _w, s, _c in capped), ctx).items() if lo <= d <= day)
+
+    def share(load: float) -> str:
+        return f"{round(100.0 * load / total)}%" if total > 0 else "part"
+
+    def runs(items: Iterable[Session]) -> str:
+        return ", ".join(f"{names.get(s.role, s.role)} {s.date.isoformat()} {km(s.distance)} km" for s in items)
+
+    earlier = sorted((s for w, s in view if s.counts and w.start < owner.start), key=lambda x: x.date)
+    races = sorted((s for _w, s in view if s.role == "b_race"), key=lambda x: x.date)
+    mine = sorted((s for w, s in view if s.counts and w is owner), key=lambda x: x.date)
+    parts = []
+    if earlier:
+        parts.append(f"{share(sum(session_load(s, ctx) for s in earlier))} of its 7-day load is runs already "
+                     f"planned in an earlier week, not cut for a later day ({runs(earlier)})")
+    for s in races:
+        parts.append(f"{share(session_load(s, ctx))} is the B race on {s.date.isoformat()} (modelled load "
+                     f"{int(round(session_load(s, ctx)))}), not cut")
+    if mine:
+        parts.append(f"week {owner.number}'s runs in it have no cut left ({runs(mine)})")
+    return "; ".join(parts)
 
 
 def check_acwr(weeks: Sequence[Week], ctx: Context) -> Optional[List[str]]:
@@ -3427,12 +3512,14 @@ def _invariant_problems(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULE
     add("one_run_per_day", [f"{d.isoformat()}: {n} runs" for d, n in sorted(days_seen.items())
                             if n > 1 or (n >= 1 and ctx.fixed_run(d))]
         + [f"key {k}: {n} sessions" for k, n in sorted(keys_seen.items()) if n > 1])   # session_key is per day
-    acwr = check_acwr(weeks, ctx)   # v2
-    if acwr is None:
+    if ctx.load is None or not ctx.load.enforced:   # v2
         reason = ctx.load.reason if ctx.load is not None else None
         out.append({"id": "acwr_cap", "ok": True, "not_enforced": True, "detail": f"not enforced: {reason}"})
     else:
-        add("acwr_cap", acwr)
+        held, bad = acwr_held(weeks, ctx)
+        add("acwr_cap", bad)
+        if held:   # allowed (nothing left to cut for them), but listed: ok is never read as "all under the cap"
+            out[-1]["held"] = [f"{d.isoformat()}: ratio {round(r, 2)}" for d, r, _o in held]
     return out
 
 
@@ -3561,7 +3648,7 @@ def content_hash(rules_version: int, inputs: Mapping[str, Any], weeks: Any) -> s
 def summary(weeks: Sequence[Week]) -> Dict[str, Optional[float]]:
     real = [w for w in weeks if w.kind != "week0"]
     longs = [s.distance for w in real for s in w.sessions if s.role == "long"]
-    return {"peak_km": km(max((w.target for w in real), default=0.0)),
+    return {"peak_km": km(max((_planned(w) for w in real), default=0.0)),   # the planned peak (rule 8)
             "peak_long_km": km(max(longs)) if longs else None, "weeks": float(len(real))}
 
 
@@ -3596,6 +3683,16 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
     summ = summary(weeks)
     real = [w for w in weeks if w.kind != "week0"]
     feas = feasibility(inputs, snap, len(real), summ["peak_km"], summ["peak_long_km"] or 0.0, km(ctx.km0), rules)
+    long_check = next((c for c in feas["checks"] if c["id"] == "long_run_km"), None)
+    long_cuts = sorted(((op[3], op[1], op[2]) for w in real for op in w.acwr_ops.values()
+                        if op[0] == "long" and op[2] < op[1]), key=lambda x: x[0])
+    if long_check is not None and not long_check["ok"] and long_cuts:
+        ctx.warnings.append({"id": "long_run_acwr_cut", "dates": [d.isoformat() for d, _w, _n in long_cuts[:5]],
+                             "detail": f"the longest planned long run is {long_check['value']} km, under the "
+                                       f"{long_check['limit']} km a {inputs.race_distance} plan should reach; the "
+                                       f"ratio cap shortened long runs ("
+                                       + ", ".join(f"{d.isoformat()} {km(was)} -> {km(now)} km"
+                                                   for d, was, now in long_cuts) + ")"})
     acwr = acwr_answer(weeks, ctx)
     pacing = race_pacing(inputs, snap, rules, ctx.warnings)
     if ctx.load is not None and not ctx.load.lpm:
@@ -3633,7 +3730,10 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
     plan["invariants"] = {"ok": all(i["ok"] for i in inv), "failed": [i for i in inv if not i["ok"]],
                           "checked": [i["id"] for i in inv if not i.get("not_enforced")],
                           "not_enforced": [{"id": i["id"], "detail": i["detail"]} for i in inv
-                                           if i.get("not_enforced")]}
+                                           if i.get("not_enforced")],
+                          "held": [{"id": i["id"], "days": len(i["held"]),
+                                    "detail": "above the limit with nothing left to cut: " + "; ".join(i["held"][:5])}
+                                   for i in inv if i.get("held")]}
     if kept:
         plan["invariants"]["history"] = kept
         plan["warnings"] = _dedupe(plan["warnings"] + [

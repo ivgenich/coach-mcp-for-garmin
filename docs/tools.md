@@ -77,7 +77,8 @@ never call Garmin. They are not in `config/enabled-tools.txt`: the switch adds t
 [History search](history-search.md).
 
 With training plans on as well (`PLAN_TOOLS=on`, full mode only), the server also has `plan_assess`
-(is a race goal realistic), `plan_preview` (the whole plan to race day, stored as a draft) and `plan_get`
+(is a race goal realistic, for the plan the same arguments would build, B races and the dates you cannot run
+(`blocked_dates`) included), `plan_preview` (the whole plan to race day, stored as a draft) and `plan_get`
 (the stored draft, without Garmin). They only read: nothing is written to Garmin unless plan writes are
 on too (below). Like the history tools they are not in `config/enabled-tools.txt`.
 [Training plans](training-plan.md).
@@ -103,12 +104,13 @@ Neither name may go into `config/enabled-tools.txt` or `GARMIN_ENABLED_TOOLS`.
 
 With plan tracking on too (`PLAN_TRACKING=on`, which needs `PLAN_TOOLS=on`), the server also has
 `log_feedback`: RPE (1-10), pain (0-10), a pain location from a fixed list and whether the pain is sharp,
-for one session of the plan. It writes only the app's own database, never Garmin (the server's
+for one session of the plan (a later call changes only the values it gives). It writes only the app's own database, never Garmin (the server's
 instructions say so instead of "No tool changes any data."), so it is annotated additive, idempotent and local-only (never read-only); only the switch adds
 it (`config/enabled-tools.txt` and `GARMIN_ENABLED_TOOLS` cannot name it). The same switch links finished
 activities to the plan's sessions; `plan_get` shows those links. Tracking follows the active plan only, so
 the switch also adds `plan_activate`: it starts following a stored draft (`action` `start`, with the
-`version` you approved) or stops following the active plan (`stop`: it becomes a draft again; refused while
+`version` you approved; on the active plan it adopts a newer version, since a `plan_preview` of the active
+plan is only a proposal until you agree) or stops following the active plan (`stop`: it becomes a draft again; refused while
 the plan has workouts on the Garmin calendar). It never calls Garmin, writes only the app's own database and
 is annotated like `log_feedback`; its description tells Claude to call it only after you agreed in the
 conversation. With `PLAN_WRITES=on`, `plan_commit` also starts a plan.

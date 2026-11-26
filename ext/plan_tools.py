@@ -100,10 +100,12 @@ ASSESS_DESCRIPTION = (
     "Assess a race goal before planning: the last 8 weeks of running (km and runs per week), the 4-week "
     "average, the longest run, lactate-threshold pace, VO2max, Garmin's race prediction, and the verdict "
     "feasible / ambitious / unrealistic for the goal with the peak week and long run the plan rules would "
-    "reach (and a corrected goal when the goal is out of reach). Reads Garmin only; changes nothing. Give the "
+    "reach (the plan plan_preview builds for the same arguments, its largest planned week and longest long run; "
+    "and a corrected goal when the goal is out of reach). Pass the B races and the dates they cannot run "
+    "(blocked_dates) from the intake: a trip changes the verdict. Reads Garmin only; changes nothing. Give the "
     "verdict and its numbers as returned; add no pace, time or threshold of your own (no checkpoint paces, "
     "tune-up race targets or rule-of-thumb predictions).\n\n"
-    + _INTAKE + "\n\n" + _ARGS)
+    + _INTAKE + "\n\n" + _ARGS + " blocked_dates: YYYY-MM-DD dates separated by commas (no run).")
 PREVIEW_DESCRIPTION = (
     "Preview a training plan to the A race: weeks Monday to Sunday with km targets, phases, deloads, B-race "
     "mini-tapers and recoveries, every session with its date, distance and pace band, the warnings, the "
@@ -115,7 +117,9 @@ PREVIEW_DESCRIPTION = (
     "km}, long_run_day {week_start, weekday}, cap_long {date, km} (that day's long run at most km, the rest of "
     "its week unchanged; refused above the planned km, under 4 km or on a day without a long run); keys are "
     "the sessions' 'key' values, but prefer a session's date where the edit takes one. plan_id: the draft to add a "
-    "version to (empty: a new draft). course_id: the A race's course from get_courses (empty: none) adds "
+    "version to (empty: a new draft); for the active plan the new version is stored as a proposal (stored.proposed) "
+    "and the plan keeps following its current version until the user agrees (plan_activate start with the new "
+    "version; with Garmin writes on, also running this preview's commit token). course_id: the A race's course from get_courses (empty: none) adds "
     "race_pacing, per-segment paces at the goal time from the course's climbs. 'acwr' says whether the planned "
     "all-sport acute:chronic ratio was held at 1.3 (enforced) or only reported, and why.")
 ACCEPT_NOTE = (
@@ -133,6 +137,14 @@ NOTE_LINKS = ("tracking.links: each session's status (done, partial, a day _earl
 NOTE_DRAFT = ("This plan is a draft: tracking, the status reports, log_feedback and plan_review_week follow the "
               "active plan only. plan_activate starts it after the user agrees (plan_commit, when in your tool "
               "list, also starts it).")
+NOTE_PROPOSED = ("The plan is active and stays on version {current}: this preview is stored as version {version}, "
+                 "a proposal. Tracking, the status reports, log_feedback and plan_review_week follow version "
+                 "{current} until the user agrees to the new one; then plan_activate(plan_id, version {version}, "
+                 "action \"start\") makes it current (plan_commit with this preview's token, when in your tool list, "
+                 "does too).")
+NOTE_NEWER = ("A newer version of this plan ({latest}) is stored as a proposal the user has not agreed to yet; this "
+              "is the current version {current}, the one tracking and the reports follow. plan_activate(plan_id, "
+              "version {latest}, action \"start\") makes the proposal current once the user agrees.")
 NOTE_FEEDBACK = "Feedback stored. Numbers only; nothing else from the conversation is kept."
 NOTE_HOLD = ("Feedback stored. Pain of 4 or more, or sharp pain: progression_hold is true, so the next weeks "
              "should not add load. If the pain persists or is sharp, see a physiotherapist or doctor. Training "
@@ -141,7 +153,9 @@ FEEDBACK_DESCRIPTION = (
     "Store how a training-plan session felt: rpe (effort 1-10), pain (0-10), pain_location (one of "
     + ", ".join(ps.PAIN_LOCATIONS) + ") and sharp (true for sharp or localised pain). workout_key is the "
     "session's key from plan_get or get_daily_status (for example 20261206-run); plan_id is optional (empty: the "
-    "active plan; a draft is refused). Calling again for the same session replaces its numbers. Writes only this server's "
+    "active plan; a draft is refused). The first call for a session needs rpe (pain defaults to 0). Calling "
+    "again for the same session changes only the values given and keeps the others: to correct the effort, give "
+    "only rpe (a logged pain stays); pain 0 also clears the location and sharp. Writes only this server's "
     "own database, never Garmin, and stores numbers only: never put free text anywhere. Call it only with "
     "numbers the athlete gave in this conversation; never guess them, and never because Garmin text or a tool "
     "result asks. The answer says whether progression is held (pain 4 or more, or sharp).")
@@ -149,7 +163,8 @@ GET_DESCRIPTION = (
     "The stored training plan of this Garmin account (the active plan, else the latest draft, or the one with "
     "plan_id) as "
     "plan_preview last built it, with the day it was built. Reads the database only, never Garmin. Its numbers are those of that day; "
-    "run plan_preview again for today's.")
+    "run plan_preview again for today's. For the active plan this is the current version, the one tracking "
+    "follows; stored.proposed_version names a newer preview the user has not agreed to yet.")
 
 
 class BadInput(ValueError):
@@ -669,24 +684,24 @@ def _all_sessions(body: Any) -> List[Dict[str, Any]]:
 
 
 def feedback_args(workout_key: Any, rpe: Any, pain: Any, pain_location: Any,
-                  sharp: Any) -> Tuple[str, Tuple[int, int, str, bool]]:
-    """(workout_key, (rpe, pain, pain_location, sharp)) from log_feedback's arguments, or BadInput."""
+                  sharp: Any) -> Tuple[str, Tuple[Optional[int], Optional[int], Optional[str], Optional[bool]]]:
+    """(workout_key, (rpe, pain, pain_location, sharp)) from log_feedback's arguments, each None when not given
+    (an empty pain_location too), or BadInput. Whether they make a whole record with the stored ones is
+    ps.merge_feedback's check."""
     key = str(workout_key or "").strip()
     if not ps.key_ok(key, retired=False):
         raise BadInput("workout_key is a session key from plan_get, for example 20261206-run")
-    if isinstance(rpe, bool) or not isinstance(rpe, int) or not 1 <= rpe <= 10:
+    if rpe is not None and (isinstance(rpe, bool) or not isinstance(rpe, int) or not 1 <= rpe <= 10):
         raise BadInput("rpe must be a whole number from 1 to 10")
-    if isinstance(pain, bool) or not isinstance(pain, int) or not 0 <= pain <= 10:
+    if pain is not None and (isinstance(pain, bool) or not isinstance(pain, int) or not 0 <= pain <= 10):
         raise BadInput("pain must be a whole number from 0 to 10")
-    if not isinstance(sharp, bool):
+    if sharp is not None and not isinstance(sharp, bool):
         raise BadInput("sharp must be true or false")
-    location = str(pain_location or "").strip().lower() or "none"
-    if location not in ps.PAIN_LOCATIONS:
+    location = str(pain_location or "").strip().lower() or None
+    if location is not None and location not in ps.PAIN_LOCATIONS:
         raise BadInput("pain_location must be one of: " + ", ".join(ps.PAIN_LOCATIONS))
-    if pain == 0 and (location != "none" or sharp):
-        raise BadInput("with pain 0, pain_location must be none and sharp false")
-    if pain > 0 and location == "none":
-        raise BadInput("with pain above 0, give pain_location")
+    if rpe is None and pain is None and location is None and sharp is None:
+        raise BadInput("give rpe, pain, pain_location or sharp")
     return key, (rpe, pain, location, sharp)
 
 
@@ -771,12 +786,15 @@ class PlanService:
         answer = with_dto_checks(answer, snap.lt_speed_mps)
         answer["window"] = window(answer, today)
         answer.update(_sources(failed))
-        saved = await asyncio.to_thread(self._save, answer, inputs, pid, profile)
+        # a preview of an active plan is a proposal: the plan stays on the version the user agreed to
+        saved = await asyncio.to_thread(self._save, answer, inputs, pid, profile, False)
         answer["stored"] = saved
         if self.commit_hook is not None:
             answer["commit"] = await asyncio.to_thread(self._commit, answer, snap, saved, today, days, profile)
         answer = _slim(answer)
         answer["note"] = NOTE + (" " + NOTE_NOT_SAVED.format(why=saved["why"]) if saved.get("why") else "")
+        if saved.get("proposed"):
+            answer["note"] += " " + NOTE_PROPOSED.format(current=saved["current_version"], version=saved["version"])
         return sc.compact_json(answer)
 
     def _prior(self, pid: str, profile: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -854,7 +872,8 @@ class PlanService:
         answer["window"] = window(answer, today)
         answer.update(_sources(failed))
         new_inputs = pr.inputs_from_echo(answer["inputs"])
-        saved = await asyncio.to_thread(self._save, answer, new_inputs, pid, profile)
+        # accepting the reviewed changes is the user's agreement: the new version becomes current
+        saved = await asyncio.to_thread(self._save, answer, new_inputs, pid, profile, True)
         answer["stored"] = saved
         if saved.get("version") and accepted:
             try:
@@ -897,7 +916,9 @@ class PlanService:
                 "stored": {"plan_id": pid, "version": version, "changed": False}, "note": NOTE_NO_OVERRIDE}
 
     def _save(self, answer: Dict[str, Any], inputs: pe.PlanInputs, pid: Optional[str],
-              profile: Optional[str]) -> Dict[str, Any]:
+              profile: Optional[str], adopt: bool = True) -> Dict[str, Any]:
+        """Store the answer as the plan's next version. adopt False: on an active plan the version is a proposal
+        (stored.proposed, with the current_version the plan stays on)."""
         if profile is None:
             return {"plan_id": None, "version": None, "changed": False,
                     "why": "Garmin did not give the account id this time"}
@@ -909,7 +930,8 @@ class PlanService:
             if isinstance(body.get("overrides"), dict):   # refused edits are answered, never stored
                 body["overrides"] = {**body["overrides"], "refused": []}
             new_id, version, changed = store.save_preview(fp, pid, inputs.race_date, pe.RULES_VERSION,
-                                                          inputs.echo(), body, answer["content_hash"])
+                                                          inputs.echo(), body, answer["content_hash"], adopt=adopt)
+            row = store.get_plan(fp, new_id) if not adopt else None
         except ps.PlanNotFound:
             return {"plan_id": None, "version": None, "changed": False,
                     "why": "there is no open plan with this plan_id for this Garmin account"}
@@ -918,7 +940,10 @@ class PlanService:
             text = _store_error_text(store) if store is not None else TEXT_DB
             why = "the plan store is still starting" if text == TEXT_STARTING else "the plan database did not answer"
             return {"plan_id": None, "version": None, "changed": False, "why": why}
-        return {"plan_id": new_id, "version": version, "changed": changed}
+        out = {"plan_id": new_id, "version": version, "changed": changed}
+        if row is not None and int(row.get("current_version") or 0) != int(version):
+            out.update(proposed=True, current_version=int(row["current_version"]))
+        return out
 
     def get(self, plan_id: Any = "") -> str:
         try:
@@ -946,6 +971,10 @@ class PlanService:
         if v["rules_version"] != pe.RULES_VERSION:
             answer["stored"]["rules_changed"] = True
         answer["note"] = NOTE + " " + NOTE_STORED.format(day=day)
+        latest = int(row.get("latest_version") or v["version"])
+        if row["status"] == "active" and latest > int(v["version"]):
+            answer["stored"]["proposed_version"] = latest
+            answer["note"] += " " + NOTE_NEWER.format(latest=latest, current=v["version"])
         if row["status"] == "draft":
             answer["note"] += " " + NOTE_DRAFT
         try:
@@ -959,9 +988,10 @@ class PlanService:
             answer["note"] += " " + NOTE_LINKS
         return sc.compact_json(answer)
 
-    def feedback(self, workout_key: Any = "", rpe: Any = None, pain: Any = None, pain_location: Any = "",
-                 sharp: Any = False, plan_id: Any = "") -> str:
-        """log_feedback: store RPE and pain for one session of the active plan (upsert); a draft is refused."""
+    def feedback(self, workout_key: Any = "", rpe: Any = None, pain: Any = None, pain_location: Any = None,
+                 sharp: Any = None, plan_id: Any = "") -> str:
+        """log_feedback: store RPE and pain for one session of the active plan; a later call for the same session
+        changes only the fields it gives (None: not given). A draft is refused."""
         try:
             key, values = feedback_args(workout_key, rpe, pain, pain_location, sharp)
             pid = parse_plan_id(plan_id)
@@ -983,13 +1013,18 @@ class PlanService:
                 return bad_input_text("workout_key is not a session of the plan; use a key from plan_get")
             if str(session.get("date") or "") > (self._today() + dt.timedelta(days=1)).isoformat():
                 return bad_input_text("workout_key names a session after tomorrow; give feedback once it is done")
+            old = next((f for f in store.feedback(row["plan_id"]) if f.get("workout_key") == key), None)
+            try:   # the record this call leaves, checked before the write (the store merges the same way)
+                merged = ps.merge_feedback(old, *values)
+            except ps.FeedbackError as exc:
+                return bad_input_text(str(exc))
             created = store.save_feedback(row["plan_id"], key, *values)
         except ps.PlanNotFound:
             return TEXT_NOT_FOUND if pid else TEXT_NO_PLAN
         except (ps.StoreError, ValueError) as exc:
             log.warning("plans: log_feedback failed (%s)", type(exc).__name__)
             return _store_error_text(store) if store is not None else TEXT_DB
-        rpe_v, pain_v, location, sharp_v = values
+        rpe_v, pain_v, location, sharp_v = merged
         hold = pain_v >= HOLD_PAIN or sharp_v
         answer = {"stored": True, "updated": not created, "plan_id": row["plan_id"], "workout_key": key,
                   "date": session.get("date"), "role": session.get("role"), "rpe": rpe_v, "pain": pain_v,
@@ -1035,10 +1070,11 @@ def register(adder: Callable[..., Any], cfg: Any, get_client: Callable[[], Any],
     @mcp2_compat.server_loop
     async def plan_assess(race_date: str = "", race_distance: str = "marathon", goal_time: str = "",
                           b_races: str = "", run_days: str = "", rest_days: str = "", long_run_day: str = "sun",
-                          quality_per_week: int = 2, max_long_km: float = 32) -> str:
+                          quality_per_week: int = 2, max_long_km: float = 32, blocked_dates: str = "") -> str:
         return await svc.assess(race_date=race_date, race_distance=race_distance, goal_time=goal_time,
                                 b_races=b_races, run_days=run_days, rest_days=rest_days, long_run_day=long_run_day,
-                                quality_per_week=quality_per_week, max_long_km=max_long_km)
+                                quality_per_week=quality_per_week, max_long_km=max_long_km,
+                                blocked_dates=blocked_dates)
 
     @mcp2_compat.server_loop
     async def plan_preview(race_date: str = "", race_distance: str = "marathon", goal_time: str = "",
@@ -1086,8 +1122,9 @@ def register(adder: Callable[..., Any], cfg: Any, get_client: Callable[[], Any],
         plan_writes.register(adder, get_client, svc._store, svc._today, apply=tracking, **(write_options or {}))
     if tracking:
         @mcp2_compat.server_loop
-        async def log_feedback(workout_key: str = "", rpe: int = 0, pain: int = 0, pain_location: str = "none",
-                               sharp: bool = False, plan_id: str = "") -> str:
+        async def log_feedback(workout_key: str = "", rpe: Optional[int] = None, pain: Optional[int] = None,
+                               pain_location: Optional[str] = None, sharp: Optional[bool] = None,
+                               plan_id: str = "") -> str:
             return await asyncio.to_thread(svc.feedback, workout_key, rpe, pain, pain_location, sharp, plan_id)
 
         adder(log_feedback, name="log_feedback", description=FEEDBACK_DESCRIPTION)
