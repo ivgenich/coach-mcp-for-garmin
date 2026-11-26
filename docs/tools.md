@@ -89,8 +89,8 @@ change Garmin data, annotated as writes (`readOnlyHint` false), so a client can 
   seconds), `unknown` (some changes may have landed: check `plan_get` first), `refused` or `declined` (you said
   no in the confirmation), with the days written, replaced and skipped as conflicts.
 - `plan_cancel` (destructive): without a token, shows which future workouts of the plan it would delete and
-  gives a cancel token; with the token, deletes them. Past workouts, workouts linked to an activity and any
-  workout the server did not write (a coach's, another app's) are kept.
+  gives a cancel token; with the token, deletes them. Today's and past workouts, workouts linked to an activity
+  and any workout the server did not write (a coach's, another app's) are kept.
 
 Both run only for a sign-in where you ticked "Also allow this app to change my Garmin calendar" on the consent
 page (the `plan:write` scope; older sign-ins keep read access), never for the static bearer token. Where the

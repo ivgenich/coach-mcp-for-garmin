@@ -122,6 +122,19 @@ before. Details a report may depend on:
   description (install tag, plan id, session key, hash), and the database row is the authority.
   Cancel and replace touch only rows of this install's plan that no activity is linked to; a
   same-day, same-sport workout that is not ours is a conflict and is skipped.
+- **Only the token's ops, never today's workout.** A token writes only the ops it was issued with
+  (and the confirmation named): a replaced workout the ops did not list (it was `unknown` when the
+  token was issued) stays, reported in `kept[]`, and the next preview lists its delete. Every op is
+  checked against the date when it runs: a workout dated before today is never touched, and one
+  dated today only by a commit or apply token issued today (a red-day change of today's session);
+  a token resumed after midnight keeps the workout that became today's (`kept[]`, reason `today`).
+  `plan_cancel` deletes only workouts after today; today's is kept. A token is refused
+  (`plan_changed`) when the plan's status changed since it was issued, so a token issued while the
+  plan was active never runs after `plan_activate` stop.
+- **No second copy.** An upload whose outcome is `unknown` is settled from the workout library,
+  read page by page to its end (at most 20 pages of 100): adopted by its marker, never a workout
+  another row owns. When the listing cannot be read in full, or lists a `Coach ...` workout
+  without its description, the row stays `unknown` and nothing is uploaded again.
 - **Limits.** At most 8 Garmin write requests and 30 seconds per call, writes spaced at least a
   second apart; Garmin's 429 stops the call (`partial`, `retry_after_s` 900) and blocks live Garmin
   calls for 15 minutes. A write that may have landed (a read timeout, a 5xx) is `unknown` until a
