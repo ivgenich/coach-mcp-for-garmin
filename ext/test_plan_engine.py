@@ -796,7 +796,8 @@ A_RACE = D(2027, 2, 26)
 NO_B_LIMITS = copy.deepcopy(pe.RULES)
 NO_B_LIMITS["b_race"].update(long_before_of_peak=9.0, mini_taper_max_km=99.0,
                              long_after_of_peak={k: 9.0 for k in pe.B_RACE_KINDS},
-                             long_after_min_days={k: 0 for k in pe.B_RACE_KINDS})
+                             long_after_min_days={k: 0 for k in pe.B_RACE_KINDS},
+                             long_after_of_last={"tri_half": 9.0})
 
 
 def _shape_snap(loads=None):
@@ -839,7 +840,8 @@ class BRaceWindow(unittest.TestCase):
         self.assertEqual(pe.RULES["b_race"], {
             "long_before_days": [5, 13], "long_before_of_peak": 0.70, "mini_taper_max_km": 8.0,
             "long_after_of_peak": {"tri_full": 0.60, "tri_half": 0.70, "run": 0.70},
-            "long_after_min_days": {"tri_full": 10, "tri_half": 0, "run": 0}})
+            "long_after_min_days": {"tri_full": 10, "tri_half": 0, "run": 0},
+            "long_after_of_last": {"tri_half": 0.75}, "long_after_fallback_of_cap": [0.65, 0.75]})
         self.assertEqual(pe.RULES_VERSION, 2)
 
     def test_long_run_before_a_b_race_is_held_and_not_made_up(self):
@@ -996,6 +998,183 @@ class BRaceWindow(unittest.TestCase):
         self.assertEqual(sorted(set(_capped(plan))), ["2027-01-22", "2027-01-25", "2027-01-26", "2027-01-27",
                                                       "2027-02-05"])
         self.assertTrue(plan["acwr"]["enforced"])
+
+
+# --- the owner's shape: a half-distance triathlon B race, a travel week, cap_long ---------------------------
+
+# The shape of the owner's real case (representative numbers, as above): Tel Aviv Marathon on Friday
+# 2027-02-26, Israman (tri_half) on Friday 2027-01-29, runs Mon/Tue/Wed/Fri with the long run on Friday, rest
+# Thu/Sat/Sun, no goal time, and a travel week 2026-12-14..20 with every date blocked.
+TRAVEL = tuple(D(2026, 12, 14) + dt.timedelta(days=i) for i in range(7))
+ISRAMAN = D(2027, 1, 29)
+
+
+def owner_inputs(*overrides, **kw):
+    kw.setdefault("blocked_dates", TRAVEL)
+    return _shape_inputs(pe.BRace(ISRAMAN, "tri_half"), overrides=tuple(overrides), **kw)
+
+
+def owner_plan(*overrides, **kw):
+    return pe.build_plan(owner_inputs(*overrides, **kw), _shape_snap(loads={}), what_if_runs=False)
+
+
+def long_step_problems(plan, step_km=2.0):
+    """The long-run step recomputed from the answer alone (rule 3 with the gap rule): a normal week's long run
+    is at most the step reference + 2 km. The reference is the longest long run of a normal week 21+ days
+    before the A race (from the 8 weeks' longest run); after a gap (a normal or deload week with no long run
+    and a blocked run day, or no run at all) it is the last long run planned, whatever its week, until a normal
+    week's long run."""
+    a_race = D.fromisoformat(plan["race"]["date"])
+    blocked = set(plan["inputs"]["blocked_dates"])
+    run_days = {pe.WEEKDAYS.index(d) for d in plan["inputs"]["run_days"]} - \
+        {pe.WEEKDAYS.index(d) for d in plan["inputs"]["rest_days"]}
+    ref = last = plan["start"]["longest_run_8w_km"] or 0.0
+    gap = False
+    out = []
+    for w in plan["weeks"]:
+        if w["kind"] == "week0":
+            continue
+        longs = [s for s in w["sessions"] if s["role"] == "long"]
+        runs = [s for s in w["sessions"] if s["role"] not in ("race", "b_race")]
+        if w["kind"] in ("normal", "deload") and not longs:
+            start = D.fromisoformat(w["start"])
+            days = [start + dt.timedelta(days=i) for i in range(7)]
+            if not runs or any(d.isoformat() in blocked and d.weekday() in run_days for d in days):
+                gap = True
+            continue
+        if not longs:
+            continue
+        lmax = max(s["km"] for s in longs)
+        base = last if gap else ref
+        if w["kind"] == "normal" and lmax > base + step_km + 0.05:
+            out.append(f"{w['start']}: long {lmax} km > {base} + {step_km} km")
+        last = lmax
+        if gap:
+            ref = lmax
+            gap = w["kind"] != "normal"
+        elif w["kind"] == "normal" and (a_race - D.fromisoformat(longs[0]["date"])).days >= 21:
+            ref = max(ref, lmax)
+    return out
+
+
+class OwnerCase(unittest.TestCase):
+    def setUp(self):
+        self.plan = owner_plan()
+        self.assertTrue(self.plan["invariants"]["ok"], self.plan["invariants"]["failed"])
+
+    def test_tri_half_recovery_is_easy_through_race_day_plus_6(self):
+        self.assertEqual(self.plan["b_races"][0]["recovery"], ["2027-01-30", "2027-02-04"])
+        for day, s in _runs(self.plan).items():
+            if "2027-01-30" <= day <= "2027-02-04":
+                self.assertEqual(s["role"], "easy", s)
+        self.assertEqual(pe.RULES["b_race"]["long_after_of_last"], {"tri_half": 0.75})
+        self.assertEqual(pe.RULES["b_race"]["long_after_fallback_of_cap"], [0.65, 0.75])
+
+    def test_first_long_run_after_tri_half_is_at_most_075_of_the_last_before(self):
+        runs = _runs(self.plan)
+        before = max((s for s in runs.values() if s["role"] == "long" and s["date"] < ISRAMAN.isoformat()),
+                     key=lambda s: s["date"])
+        after = min((s for s in runs.values() if s["role"] == "long" and s["date"] > ISRAMAN.isoformat()),
+                    key=lambda s: s["date"])
+        self.assertEqual(after["date"], "2027-02-05")
+        self.assertLessEqual(after["km"], 0.75 * before["km"] + 0.05)
+        self.assertGreaterEqual(after["km"], 0.75 * before["km"] - 0.15)   # a ceiling it is held at (100 m)
+        self.assertIn("2027-02-05", _capped(self.plan))
+
+    def test_notes_after_tri_half(self):
+        runs = _runs(self.plan)
+        after = runs["2027-02-05"]
+        cap = after["km"]
+        lo, hi = int(0.65 * cap + 0.5), int(0.75 * cap + 0.5)
+        self.assertEqual(after["note"], f"Run up to {cap} km only if your legs feel normal and your HRV is back "
+                                        f"in its usual range; otherwise run {lo}-{hi} km easy.")
+        first = min((s for s in runs.values() if s["date"] > ISRAMAN.isoformat()), key=lambda s: s["date"])
+        self.assertEqual(first["role"], "easy")
+        self.assertEqual(first["note"], "Skip it if you're still sore.")
+        noted = sorted(s["date"] for s in runs.values() if "note" in s)
+        self.assertEqual(noted, sorted([first["date"], "2027-02-05"]))
+
+    def test_tri_full_and_run_get_no_notes(self):
+        for kind in ("tri_full", "run"):
+            with self.subTest(kind=kind):
+                plan = pe.build_plan(_shape_inputs(pe.BRace(ISRAMAN, kind)), _shape_snap(), what_if_runs=False)
+                self.assertFalse([s for s in _runs(plan).values() if "note" in s])
+
+    def test_long_run_after_the_travel_week_steps_from_the_last_planned_one(self):
+        runs = _runs(self.plan)
+        self.assertEqual(long_step_problems(self.plan), [])
+        deload = runs["2026-12-25"]
+        self.assertEqual(deload["role"], "long")
+        nxt = runs["2027-01-01"]
+        self.assertEqual(nxt["role"], "long")
+        self.assertLessEqual(nxt["km"], deload["km"] + 2.0 + 0.05)
+
+    def test_the_invariant_catches_the_jump_after_a_gap(self):
+        weeks, ctx = self.plan["_check"]["weeks"], self.plan["_check"]["ctx"]
+        w = next(w for w in weeks if w.start == D(2026, 12, 28))
+        i, s = next((i, s) for i, s in enumerate(w.sessions) if s.role == "long")
+        w.sessions[i] = pe.make_session(s.key, s.date, "long", pe.Meters(s.distance + 2500.0), ctx.paces, ctx.rules)
+        failed = {x["id"]: x["detail"] for x in pe.check_invariants(self.plan) if not x["ok"]}
+        self.assertIn("long_step", failed)
+        self.assertIn("week 5: long", failed["long_step"])
+        self.assertIn("> 18.5 + 2 km", failed["long_step"])
+
+    def test_a_week_with_every_run_day_blocked_gets_one_warning(self):
+        week = [x for x in self.plan["warnings"] if "2026-12-14" in x["dates"] or "2026-12-20" in x["dates"]]
+        self.assertEqual([x["id"] for x in week], ["no_runs_blocked"])
+        self.assertEqual(week[0]["dates"], ["2026-12-14", "2026-12-20"])
+        self.assertIn("blocked", week[0]["detail"])
+
+    def test_a_partly_blocked_week_keeps_its_fallback_warnings(self):
+        plan = owner_plan(blocked_dates=(D(2026, 12, 18),))   # only the Friday: the long run moves or drops
+        ids = {x["id"] for x in plan["warnings"] if "2026-12-14" in x["dates"]}
+        self.assertNotIn("no_runs_blocked", ids)
+
+    # cap_long{date or key, km}: lowers one long run, nothing else in its week
+
+    def test_cap_long_lowers_one_long_run_only(self):
+        day = D(2027, 1, 15)
+        base = _runs(self.plan)[day.isoformat()]
+        self.assertEqual(base["role"], "long")
+        plan = owner_plan(pe.Override("cap_long", date=day, km=base["km"] - 4.0))
+        self.assertEqual(plan["overrides"]["refused"], [])
+        self.assertEqual(plan["overrides"]["applied"], [{"kind": "cap_long", "date": "2027-01-15",
+                                                         "km": base["km"] - 4.0}])
+        self.assertAlmostEqual(_runs(plan)[day.isoformat()]["km"], base["km"] - 4.0, places=1)
+        wk_old = next(w for w in self.plan["weeks"] if w["start"] == "2027-01-11")
+        wk_new = next(w for w in plan["weeks"] if w["start"] == "2027-01-11")
+        others = [(s["date"], s["role"], s["km"]) for s in wk_new["sessions"] if s["date"] != day.isoformat()]
+        self.assertEqual(others, [(s["date"], s["role"], s["km"]) for s in wk_old["sessions"]
+                                  if s["date"] != day.isoformat()])
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        self.assertEqual(plan["inputs"]["overrides"], [{"kind": "cap_long", "date": "2027-01-15",
+                                                        "km": base["km"] - 4.0}])
+        self.assertNotEqual(plan["content_hash"], self.plan["content_hash"])
+        # by key as well
+        by_key = owner_plan(pe.Override("cap_long", key=base["key"], km=base["km"] - 4.0))
+        self.assertEqual(by_key["weeks"], plan["weeks"])
+
+    def test_cap_long_refusals(self):
+        runs = _runs(self.plan)
+        long_day, easy_day = D(2027, 1, 15), next(D.fromisoformat(d) for d, s in runs.items() if s["role"] == "easy")
+        planned = runs[long_day.isoformat()]["km"]
+        cases = [
+            (pe.Override("cap_long", date=long_day, km=planned + 1.0), "raises_load", planned + 1.0, planned),
+            (pe.Override("cap_long", date=long_day, km=3.0), "easy_min_km", 3.0, 4.0),
+            (pe.Override("cap_long", date=easy_day, km=4.0), "not_long_run", "easy", "long"),
+            (pe.Override("cap_long", date=D(2026, 12, 17), km=10.0), "unknown_session", "2026-12-17", None),
+            (pe.Override("cap_long", date=long_day), "km_required", None, None),
+        ]
+        for edit, rule, value, limit in cases:
+            with self.subTest(rule=rule):
+                plan = owner_plan(edit)
+                self.assertEqual(plan["overrides"]["applied"], [])
+                refused = plan["overrides"]["refused"]
+                self.assertEqual([r["rule"] for r in refused], [rule])
+                self.assertEqual(refused[0]["value"], value)
+                if limit is not None:
+                    self.assertEqual(refused[0]["limit"], limit)
+                self.assertEqual(plan["weeks"], self.plan["weeks"])
 
 
 if __name__ == "__main__":
