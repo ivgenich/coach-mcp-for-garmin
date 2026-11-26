@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import threading
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import course_profile
 import daily_status as ds
@@ -51,7 +51,9 @@ WINDOW_DAYS = 7
 MAX_OVERRIDES = 20
 MAX_B_RACES = 4
 MAX_BLOCKED = 60
-OWN_PREFIX = plan_dto.NAME_PREFIX + " "   # the plan's own workouts on the calendar (Stage 2) are not fixed sessions
+# The plan's own workouts on the calendar (Stage 2) are not fixed sessions: known by their Garmin workout id in the
+# plan store (plan_workouts). Only while the store cannot be read, by this name prefix instead.
+OWN_PREFIX = plan_dto.NAME_PREFIX + " "
 
 TEXT_STARTING = "No data: the plan store is still starting (the database tables are being created); try again in a minute."
 TEXT_DB = ("No data: the plan database did not answer; try again in a few minutes. plan_assess and plan_preview "
@@ -451,12 +453,19 @@ def vo2max(payload: Any) -> Optional[float]:
     return None
 
 
-def fixed_sessions(entries: Optional[List[Dict[str, Any]]], athlete: Mapping[str, Any]) -> Tuple[pe.FixedSession, ...]:
-    """The calendar's workouts that are not the plan's own, as daily_status classifies them (hard or long)."""
+def fixed_sessions(entries: Optional[List[Dict[str, Any]]], athlete: Mapping[str, Any],
+                   own_ids: Optional[Set[int]] = None) -> Tuple[pe.FixedSession, ...]:
+    """The calendar's workouts that are not the plan's own, as daily_status classifies them (hard or long). Ours:
+    the workout ids in `own_ids` (the plan store's Garmin workout ids), so the user's own session named "Coach ..."
+    still counts; only when the store could not be read (own_ids None), a workout named "Coach ..." is taken as
+    ours."""
     out = []
     for e in entries or []:
         name = e.get("workoutName")
-        if isinstance(name, str) and name.startswith(OWN_PREFIX):
+        if own_ids is not None:
+            if _garmin_id(e.get("workoutId")) in own_ids:
+                continue
+        elif isinstance(name, str) and name.startswith(OWN_PREFIX):
             continue
         day_text = str(e.get("scheduleDate") or "")[:10]
         if not _DATE_RE.fullmatch(day_text):
@@ -473,8 +482,28 @@ def fixed_sessions(entries: Optional[List[Dict[str, Any]]], athlete: Mapping[str
     return tuple(sorted(out, key=lambda f: (f.date, f.sport)))
 
 
-async def fetch_snapshot(client: Any, today: dt.date, race_date: dt.date,
-                         course_id: Optional[int] = None) -> Tuple[pe.Snapshot, Optional[str], List[str]]:
+def _garmin_id(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= ps.MAX_GARMIN_ID else None
+
+
+def own_workout_ids(get_store: Callable[[], Any]) -> Optional[Set[int]]:
+    """The Garmin workout ids this install wrote (plan_workouts, every plan), or None when the store cannot be
+    read (fixed_sessions then falls back to the name)."""
+    try:
+        return {int(r["garmin_workout_id"]) for r in get_store().all_write_rows() if r.get("garmin_workout_id")}
+    except Exception as exc:  # noqa: BLE001 - a store without the tables, or down: the name fallback
+        log.info("plans: the plan's own workout ids were not read (%s)", type(exc).__name__)
+        return None
+
+
+async def fetch_snapshot(client: Any, today: dt.date, race_date: dt.date, course_id: Optional[int] = None,
+                         own_ids: Optional[Set[int]] = None) -> Tuple[pe.Snapshot, Optional[str], List[str]]:
     """(Snapshot, Garmin profile id or None, the sources that failed). Raises sc.SystemicFailure when the first
     call failed for every call alike (login, rate limit, Garmin down). The course is read only with a
     course_id."""
@@ -498,7 +527,7 @@ async def fetch_snapshot(client: Any, today: dt.date, race_date: dt.date,
         today=today, week_m=week_m, week_runs=runs, longest_run_8w_m=longest,
         lt_speed_mps=pe.MetersPerSecond(athlete["lt_speed_mps"]) if athlete.get("lt_speed_mps") else None,
         vo2max=vo2max(data.get("max_metrics")), prediction_s=predictions(data.get("race_predictions")),
-        fixed=fixed_sessions(entries, athlete), activity_load=activity_loads(data.get("activities"), today),
+        fixed=fixed_sessions(entries, athlete, own_ids), activity_load=activity_loads(data.get("activities"), today),
         garmin_load=garmin, course=course,
         acwr=round(now.acute / now.chronic, 2) if now is not None and now.chronic > 0 else None)
     pid = sc.dig(data.get("stats"), "userProfileId")
@@ -594,13 +623,17 @@ class PlanService:
         except BadInput as exc:
             return bad_input_text(str(exc))
         try:
-            snap, _pid, failed = await fetch_snapshot(self._client(), today, inputs.race_date)
+            snap, _pid, failed = await fetch_snapshot(self._client(), today, inputs.race_date,
+                                                      own_ids=await self._own_ids())
         except sc.SystemicFailure as exc:
             return f"Error: {exc}"
         answer = pe.assess(inputs, snap)
         answer.update(_sources(failed))
         answer["note"] = NOTE
         return sc.compact_json(answer)
+
+    async def _own_ids(self) -> Optional[Set[int]]:
+        return await asyncio.to_thread(own_workout_ids, self._store)
 
     # PLAN_WRITES=on (plan_writes): set by register(); adds the "commit" object (a commit token) to a preview.
     commit_hook: Optional[Callable[..., Dict[str, Any]]] = None
@@ -616,7 +649,8 @@ class PlanService:
         except BadInput as exc:
             return bad_input_text(str(exc))
         try:
-            snap, profile, failed = await fetch_snapshot(self._client(), today, inputs.race_date, inputs.course_id)
+            snap, profile, failed = await fetch_snapshot(self._client(), today, inputs.race_date, inputs.course_id,
+                                                         await self._own_ids())
         except sc.SystemicFailure as exc:
             return f"Error: {exc}"
         try:
@@ -669,7 +703,8 @@ class PlanService:
         unknown = [{"change_id": c, "rule": "unknown_change", "value": c, "limit": "a change_id from plan_review_week"}
                    for c in ids if c not in {r["change_id"] for r in found}]
         try:
-            snap, profile, failed = await fetch_snapshot(self._client(), today, inputs.race_date, inputs.course_id)
+            snap, profile, failed = await fetch_snapshot(self._client(), today, inputs.race_date, inputs.course_id,
+                                                         await asyncio.to_thread(own_workout_ids, lambda: store))
         except sc.SystemicFailure as exc:
             return f"Error: {exc}"
         if profile is None or store.account_fp(profile) != row["account_fp"]:

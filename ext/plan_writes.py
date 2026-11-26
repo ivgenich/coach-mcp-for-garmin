@@ -257,13 +257,12 @@ def schedule_id_of(payload: Any) -> Optional[int]:
 
 def _hard_dates(entries: Optional[Sequence[Mapping[str, Any]]], our_ids: Set[int],
                 lt_speed: Optional[float]) -> List[str]:
-    """Dates of calendar sessions that are not ours (by id, and not named like ours) and that
-    daily_status.classify_workout calls hard or long."""
+    """Dates of calendar sessions that are not ours (by Garmin workout id: a session of the user's named "Coach ..."
+    counts) and that daily_status.classify_workout calls hard or long."""
     athlete = {"lt_speed_mps": lt_speed, "lt_hr": None, "ftp_w": None}
     out = set()
     for e in entries or []:
-        if _pos_int(e.get("workoutId")) in our_ids or str(e.get("workoutName") or "").startswith(
-                plan_dto.NAME_PREFIX + " "):
+        if _pos_int(e.get("workoutId")) in our_ids:
             continue
         day = str(e.get("scheduleDate") or "")[:10]
         c = ds.classify_workout(dict(e), None, athlete=athlete)

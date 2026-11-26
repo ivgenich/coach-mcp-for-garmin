@@ -373,6 +373,27 @@ class Windows(tpw.Base):
         self.assertEqual(again["ops"], [])
 
 
+class OursById(unittest.TestCase):
+    """A calendar workout is the plan's own by its Garmin workout id, never by its name: the user's own hard
+    session named "Coach ..." counts for spacing and calendar_changed."""
+
+    ENTRY = {"scheduleDate": "2026-12-16", "workoutName": "Coach VO2 intervals", "workoutType": "running",
+             "estimatedDurationInSecs": 3600, "isRestDay": False, "workoutId": 4711}
+
+    def test_fixed_sessions_count_a_users_workout_named_coach(self):
+        athlete = {"lt_speed_mps": 3.85, "lt_hr": None, "ftp_w": None}
+        ours = dict(self.ENTRY, workoutId=4712, scheduleDate="2026-12-18")
+        fixed = pt.fixed_sessions([self.ENTRY, ours], athlete, own_ids={4712})
+        self.assertEqual([f.date.isoformat() for f in fixed], ["2026-12-16"])
+
+    def test_calendar_changed_sees_a_users_workout_named_coach(self):
+        ops = [{"op": "create", "date": "2026-12-17", "hard_or_long": True}]
+        payload = {"fixed_hard": [], "lt_speed_mps": None}
+        entry = dict(self.ENTRY, workoutName="Coach Long run", estimatedDistanceInMeters=30000)
+        self.assertTrue(pw._calendar_changed(ops, [entry], set(), payload))
+        self.assertFalse(pw._calendar_changed(ops, [entry], {4711}, payload))
+
+
 def _session(out, day):
     return copy.deepcopy(next(s for w in out["weeks"] for s in w["sessions"] if s["date"] == day))
 
