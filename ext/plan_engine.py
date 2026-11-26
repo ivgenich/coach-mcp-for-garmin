@@ -16,8 +16,9 @@ What it does (Engine v1, items 1-11 of the plan; rules v2 adds 12 and 13):
     deload due just before it is skipped); no make-up after a reduced week; taper x0.70 and race week x0.45 of
     the peak week (as planned), the race itself not counted;
  3. long run in normal weeks <= min(max(0.50 x week km, longest run of the last 8 weeks), 3 h at the slow edge
-    of its pace band, the longest long run so far + 2 km, 32 km); reduced weeks scale it; no long run within
-    21 days of the A race is longer than 0.80 x the peak long run, so the peak long run is >= 21 days out;
+    of its pace band, the last normal week's long run + 2 km (after a gap the last one planned), 32 km);
+    reduced weeks scale it; no long run within 21 days of the A race is longer than 0.80 x the peak long run,
+    so the peak long run is >= 21 days out;
  4. quality by phase with dose caps (threshold <= 10%, intervals <= 8%, marathon pace <= 20% of week km) and
     >= 80% of the week's time easy; strides stay <= 8 x 100 m so daily_status' classifier keeps them easy;
  5. pace bands as fractions of the lactate-threshold speed (no LT speed: steps without targets, "missing");
@@ -826,6 +827,12 @@ def calendar_week(w: Week, ctx: Context) -> bool:
     return any(d in ctx.inputs.blocked_dates or d in ctx.fixed for d in w.days())
 
 
+def step_counts(ctx: Context, s: Session, weeks: Sequence[Week]) -> bool:
+    """Rule 3: a normal week's long run (21+ days out) the next +2 km step counts from, unless rule 7 limits
+    it (5-13 days before a B race, or the first after one)."""
+    return b_long_limit(ctx, s.date, weeks, skip=s)[0] is None
+
+
 def long_gap(w: Week, ctx: Context) -> bool:
     """Rule 3's gap: a normal or deload week with no long run in the plan that has a blocked run day or no run
     at all (travel, a week off). The long-run step after it counts from the last long run planned, whatever
@@ -937,8 +944,11 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
                 gap = w.kind != "normal"
         elif long_gap(w, ctx):
             gap = True
-        if w.kind == "normal" and not late:
-            last_long = Meters(max(last_long, placed))
+        if w.kind == "normal" and not late and longs:
+            # the step counts from the last normal week's long run as placed (a cut one included), not the
+            # longest so far; one rule 7 holds around a B race is a planned hold, like a reduced week's
+            if step_counts(ctx, longs[0], ctx.all_weeks):
+                last_long = Meters(placed)
             peak_long = Meters(max(peak_long, placed))
             ctx.peak_long = peak_long
 
@@ -1177,7 +1187,6 @@ def b_notes(weeks: Sequence[Week], ctx: Context) -> None:
         for s in w.sessions:
             s.advice = ""
     of_last = ctx.rules["b_race"].get("long_after_of_last") or {}
-    lo_f, hi_f = (float(x) for x in ctx.rules["b_race"].get("long_after_fallback_of_cap", (0.65, 0.75)))
     runs = sorted((s for w in weeks for s in w.sessions if s.is_run and s.role not in ("race", "b_race")),
                   key=lambda s: (s.date, s.key))
     for bw in ctx.windows:
@@ -1189,10 +1198,16 @@ def b_notes(weeks: Sequence[Week], ctx: Context) -> None:
             first.advice = NOTE_SORE
         long_s = next((s for s in after if s.role == "long"), None)
         if long_s is not None:
-            cap = km(long_s.distance)
-            lo, hi = (int(math.floor(f * cap + 0.5)) for f in (lo_f, hi_f))
-            alt = f"{lo}-{hi}" if hi > lo else f"{lo}"
-            long_s.advice = NOTE_FIRST_LONG.format(cap=cap, alt=alt)
+            long_s.advice = first_long_note(long_s.distance, ctx.rules)
+
+
+def first_long_note(distance: float, rules: Mapping[str, Any] = RULES) -> str:
+    """The note of the first long run after a half-distance triathlon of `distance` metres (b_notes; the weekly
+    review writes it again when it changes that run's km)."""
+    lo_f, hi_f = (float(x) for x in rules["b_race"].get("long_after_fallback_of_cap", (0.65, 0.75)))
+    cap = km(distance)
+    lo, hi = (int(math.floor(f * cap + 0.5)) for f in (lo_f, hi_f))
+    return NOTE_FIRST_LONG.format(cap=cap, alt=f"{lo}-{hi}" if hi > lo else f"{lo}")
 
 
 def _mini_days(ctx: Context) -> Set[dt.date]:
@@ -2083,7 +2098,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
     days_late = int(rules["late_long_days"])
     t_cap = long_time_cap(paces, rules)
     # Recomputed here, not taken from the engine's own bookkeeping: the km the weeks grow from (min of the
-    # target and what was placed plus the blocked days' share), and the longest long run placed so far.
+    # target and what was placed plus the blocked days' share), and the long run the 2 km step counts from.
     last_normal = float(ctx.km0)
     peak = 0.0
     run_long = float(ctx.longest)
@@ -2125,7 +2140,10 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
             last_normal = min(target, float(w.base))
             peak = max(peak, last_normal)
             if long_s and (ctx.inputs.race_date - long_s[0].date).days >= days_late:
-                run_long = max(run_long, lmax)
+                # the last normal week's long run as placed, not the longest so far (rule 3; rule 7's holds
+                # around a B race leave it)
+                if step_counts(dataclasses.replace(ctx, rules=rules), long_s[0], weeks):
+                    run_long = lmax
                 peak_long = max(peak_long, lmax)
             prev_reduced = False
         else:

@@ -6,7 +6,9 @@ Skipped ("needs hypothesis") where hypothesis is not installed. Runs are derando
 database, so CI sees the same examples every time. The properties: no invariant fails for any input the
 engine accepts, the same inputs give the same content_hash, the plan grows with the starting volume, a
 blocked date never raises another day's km, and the coach critic's overrides never raise a week's km or a
-long run. Rules v2: with recorded loads (tracked by Garmin's ratio or not) every invariant still holds, and the
+long run (cap_long included: no reduce-only edit raises a week or a session). The long-run step recounted from
+the answer holds after a blocked week, and the first long run after a half-distance triathlon is at most 0.75 x
+the last one before it. Rules v2: with recorded loads (tracked by Garmin's ratio or not) every invariant still holds, and the
 planned-ratio cap never raises a week, a session or a long run and is deterministic. Starting volumes reach 100 km a week and run days all seven, so the easy-run cap and the peak
 ceiling bind.
 """
@@ -176,6 +178,8 @@ class PlanProperties(unittest.TestCase):
             elif kind == "cap_week_km":
                 overrides.append(pe.Override("cap_week_km", week_start=data.draw(st.sampled_from(starts)),
                                              km=data.draw(st.floats(0, 120))))
+            elif kind == "cap_long":
+                overrides.append(pe.Override("cap_long", date=day, km=data.draw(st.floats(0, s["km"] + 2))))
             else:
                 overrides.append(pe.Override("long_run_day", week_start=data.draw(st.sampled_from(starts)),
                                              weekday=data.draw(st.integers(0, 6))))
@@ -186,6 +190,109 @@ class PlanProperties(unittest.TestCase):
         for wa, wb in zip(base["weeks"], after["weeks"]):
             self.assertLessEqual(wb["planned_km"], wa["planned_km"] + 0.05, wb["start"])
             self.assertLessEqual(wb["long_km"] or 0, wa["long_km"] or 0, wb["start"])
+
+
+@st.composite
+def gap_case(draw):
+    """A plan case with a whole week blocked (travel) and often a half-distance triathlon B race."""
+    inputs, snap = draw(plan_case())
+    first = pe.week1_start(snap.today)
+    weeks = (pe.monday(inputs.race_date) - first).days // 7 + 1
+    blocked = inputs.blocked_dates
+    if weeks >= 3 and draw(st.integers(0, 3)):
+        wk = first + dt.timedelta(days=7 * draw(st.integers(0, weeks - 2)))
+        blocked += tuple(wk + dt.timedelta(days=i) for i in range(7))
+    b_races = inputs.b_races
+    if weeks >= 5 and draw(st.booleans()):
+        b_races = (pe.BRace(first + dt.timedelta(days=draw(st.integers(14, 7 * (weeks - 2)))), "tri_half"),)
+    return dataclasses.replace(inputs, blocked_dates=blocked, b_races=b_races), snap
+
+
+def _first_long_after_problems(plan):
+    """After each half-distance triathlon: the first long run <= 0.75 x the last long run before the race (the
+    8 weeks' longest run before any), from the answer alone."""
+    out = []
+    longs = sorted((s["date"], s["km"]) for w in plan["weeks"] for s in w["sessions"] if s["role"] == "long")
+    for b in plan["b_races"]:
+        if b["kind"] != "tri_half":
+            continue
+        before = [k for d, k in longs if d < b["date"]]
+        after = [(d, k) for d, k in longs if d > b["date"]]
+        ref = before[-1] if before else (plan["start"]["longest_run_8w_km"] or 0.0)
+        if after and ref and after[0][1] > 0.75 * ref + 0.05:
+            out.append(f"{after[0][0]}: first long {after[0][1]} km > 0.75 x {ref} km")
+    return out
+
+
+def _reduce_only(data, plan):
+    """1 to 5 edits that only lower load: cap_long, cap_km, cap_week_km, easy and rest, by date where they can."""
+    sessions = [s for w in plan["weeks"] for s in w["sessions"] if s["role"] not in ("race", "b_race")]
+    starts = [dt.date.fromisoformat(w["start"]) for w in plan["weeks"]]
+    longs = [s for s in sessions if s["role"] == "long"] or sessions
+    out = []
+    for _ in range(data.draw(st.integers(1, 5))):
+        kind = data.draw(st.sampled_from(("cap_long", "cap_long", "cap_km", "cap_week_km", "easy", "rest")))
+        s = data.draw(st.sampled_from(longs if kind == "cap_long" else sessions))
+        day = dt.date.fromisoformat(s["date"])
+        if kind == "cap_long":
+            out.append(pe.Override("cap_long", date=day, km=data.draw(st.floats(0, s["km"] + 3))))
+        elif kind == "cap_km":
+            out.append(pe.Override("cap_km", date=day, km=data.draw(st.floats(0, s["km"] + 3))))
+        elif kind == "cap_week_km":
+            out.append(pe.Override("cap_week_km", week_start=data.draw(st.sampled_from(starts)),
+                                   km=data.draw(st.floats(0, 120))))
+        elif kind == "easy":
+            out.append(pe.Override("easy", date=day))
+        else:
+            out.append(pe.Override("rest", date=day))
+    return tuple(out)
+
+
+@unittest.skipUnless(HAVE_HYPOTHESIS, NEEDS_HYPOTHESIS)
+class GapAndBRaceProperties(unittest.TestCase):
+    """The long-run step after a gap, rule 7 after a half-distance triathlon and the reduce-only overrides,
+    each recounted from the answer alone (test_plan_engine.long_step_problems)."""
+
+    @settings(**PROPS)
+    @given(gap_case())
+    def test_the_long_run_step_recounted_from_the_plan_holds(self, case):
+        from test_plan_engine import long_step_problems
+
+        inputs, snap = case
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        self.assertEqual(long_step_problems(pe.plan_answer(plan)), [])
+
+    @settings(**PROPS)
+    @given(gap_case())
+    def test_first_long_run_after_a_tri_half_is_at_most_075_of_the_last_before(self, case):
+        inputs, snap = case
+        plan = pe.plan_answer(pe.build_plan(inputs, snap, what_if_runs=False))
+        self.assertEqual(_first_long_after_problems(plan), [])
+
+    @settings(**PROPS)
+    @given(gap_case(), st.data())
+    def test_reduce_only_overrides_never_raise_a_week_or_a_session(self, case, data):
+        from test_plan_engine import long_step_problems
+
+        inputs, snap = case
+        base = pe.plan_answer(pe.build_plan(inputs, snap, what_if_runs=False))
+        assume(any(s["role"] not in ("race", "b_race") for w in base["weeks"] for s in w["sessions"]))
+        overrides = _reduce_only(data, base)
+        edited = pe.build_plan(dataclasses.replace(inputs, overrides=overrides), snap, what_if_runs=False)
+        after = pe.plan_answer(edited)
+        self.assertEqual(len(after["overrides"]["applied"]) + len(after["overrides"]["refused"]), len(overrides))
+        self.assertTrue(edited["invariants"]["ok"], edited["invariants"]["failed"])
+        km0 = {s["key"]: s["km"] for w in base["weeks"] for s in w["sessions"]}
+        for wa, wb in zip(base["weeks"], after["weeks"]):
+            self.assertLessEqual(wb["planned_km"], wa["planned_km"] + 0.05, wb["start"])
+            self.assertLessEqual(wb["long_km"] or 0, wa["long_km"] or 0, wb["start"])
+            for s in wb["sessions"]:
+                self.assertLessEqual(s["km"], km0.get(s["key"], 0.0) + 0.05, s["key"])
+        self.assertEqual(long_step_problems(after), [])
+        self.assertEqual(_first_long_after_problems(after), [])
+        for r in after["overrides"]["refused"]:
+            self.assertTrue(r["rule"])
 
 
 @st.composite

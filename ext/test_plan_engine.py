@@ -1020,8 +1020,8 @@ def owner_plan(*overrides, **kw):
 
 def long_step_problems(plan, step_km=2.0):
     """The long-run step recomputed from the answer alone (rule 3 with the gap rule): a normal week's long run
-    is at most the step reference + 2 km. The reference is the longest long run of a normal week 21+ days
-    before the A race (from the 8 weeks' longest run); after a gap (a normal or deload week with no long run
+    is at most the step reference + 2 km. The reference is the last long run of a normal week 21+ days before
+    the A race that rule 7 does not hold (from the 8 weeks' longest run); after a gap (a normal or deload week with no long run
     and a blocked run day, or no run at all) it is the last long run planned, whatever its week, until a normal
     week's long run."""
     a_race = D.fromisoformat(plan["race"]["date"])
@@ -1052,9 +1052,23 @@ def long_step_problems(plan, step_km=2.0):
         if gap:
             ref = lmax
             gap = w["kind"] != "normal"
-        elif w["kind"] == "normal" and (a_race - D.fromisoformat(longs[0]["date"])).days >= 21:
-            ref = max(ref, lmax)
+        elif w["kind"] == "normal" and (a_race - D.fromisoformat(longs[0]["date"])).days >= 21 \
+                and not _b_held(plan, longs[0]["date"]):
+            ref = lmax
     return out
+
+
+def _b_held(plan, day):
+    """True when rule 7 holds a long run on `day`: 5-13 days before a B race, or the first long run after one."""
+    d = D.fromisoformat(day)
+    longs = sorted(s["date"] for w in plan["weeks"] for s in w["sessions"] if s["role"] == "long")
+    for b in plan["b_races"]:
+        bd = D.fromisoformat(b["date"])
+        if 5 <= (bd - d).days <= 13:
+            return True
+        if d > bd and not any(b["date"] < x < day for x in longs):
+            return True
+    return False
 
 
 class OwnerCase(unittest.TestCase):
@@ -1118,6 +1132,19 @@ class OwnerCase(unittest.TestCase):
         self.assertIn("long_step", failed)
         self.assertIn("week 5: long", failed["long_step"])
         self.assertIn("> 18.5 + 2 km", failed["long_step"])
+
+    def test_the_step_counts_from_the_last_long_run_not_the_longest(self):
+        # the mutation test's known gap: G4's week 10 long run cut to 23 km, week 11 back at 32 km (+39%)
+        plan = build("G4")
+        weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
+        w10, w11 = (next(w for w in weeks if w.number == n) for n in (10, 11))
+        self.assertEqual((w10.kind, w11.kind), ("normal", "normal"))
+        i, s = next((i, s) for i, s in enumerate(w10.sessions) if s.role == "long")
+        self.assertEqual(max(x.distance for x in w11.sessions if x.role == "long"), 32000.0)
+        w10.sessions[i] = pe.make_session(s.key, s.date, "long", pe.Meters(23000.0), ctx.paces, ctx.rules)
+        failed = {x["id"]: x["detail"] for x in pe.check_invariants(plan) if not x["ok"]}
+        self.assertIn("week 11: long 32.0 km > 23.0 + 2 km", failed.get("long_step", ""))
+        self.assertTrue(long_step_problems(pe.plan_answer(build("G4"))) == [])
 
     def test_a_week_with_every_run_day_blocked_gets_one_warning(self):
         week = [x for x in self.plan["warnings"] if "2026-12-14" in x["dates"] or "2026-12-20" in x["dates"]]
