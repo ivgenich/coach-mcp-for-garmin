@@ -239,11 +239,11 @@ def _pos_int(value: Any) -> Optional[int]:
 
 
 def schedule_id_of(payload: Any) -> Optional[int]:
-    """The calendar entry id in a schedule answer or a calendar entry (field name unverified until spike S0.2:
-    workoutScheduleId, scheduleId or id)."""
+    """The calendar entry id: `workoutScheduleId` in the schedule POST's answer, `scheduledWorkoutId` in a
+    calendar entry of the GraphQL read (the same number; spike S0.2)."""
     if not isinstance(payload, dict):
         return None
-    for name in ("workoutScheduleId", "scheduleId", "id"):
+    for name in ("workoutScheduleId", "scheduledWorkoutId"):
         n = _pos_int(payload.get(name))
         if n is not None:
             return n

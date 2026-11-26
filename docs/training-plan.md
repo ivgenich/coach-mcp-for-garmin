@@ -342,30 +342,39 @@ plans still have workouts on Garmin from today on: run `--plan-cleanup` first.
   iterations 7; targets no target 1, pace zone 6; running sport 1), checked at build time by
   `plan_dto.selfcheck()`.
 - Pace targets are speeds in m/s; the workout JSON puts the slower speed in `targetValueOne` and the faster
-  in `targetValueTwo`. Which order Garmin expects is not verified yet (spike S0.2).
+  in `targetValueTwo`, and Garmin keeps them in that order (spike S0.2).
 - A distance step's `endConditionValue` is in meters in every pool, a yard pool too (even with
   `poolLengthUnit` and the step's `preferredEndConditionUnit` both `yard`): the distance
   steps add up exactly to the workout's `estimatedDistanceInMeters`. Verified by spike S0.3 on real 25 yd
   pool workouts; `status_common.step_distance_m` reads the value as meters, with no conversion.
 
-Unverified until spikes S0.2 (writes) and S0.5 (confirmation) run; the write path is coded to these
-assumptions, behind `PLAN_WRITES` (default off):
+Verified by spike S0.2 (2026-11-26, one test workout on the owner's account, scheduled, seen in Garmin
+Connect, then removed):
 
-- Upload: `POST workout-service/workout` answers JSON with `workoutId`.
-- Schedule: `POST workout-service/schedule/<workoutId>` with `{"date": ...}` creates one calendar entry
-  (a second POST makes a second entry, which is why the helper reads the calendar first), and its
-  answer carries the entry's id as `workoutScheduleId` (or `scheduleId`, `id`); the calendar read
-  (`workoutScheduleSummariesScalar`) carries `workoutId` and the same entry id.
-- Unschedule: `DELETE workout-service/schedule/<entry id>`; delete: `DELETE workout-service/workout/<id>`;
-  both answer 404 once the thing is gone, and deleting a workout also removes its calendar entries
-  (when no entry id is known, the helper deletes the workout only).
-- The library listing (`get_workouts`) carries each workout's `description`, so a create whose answer
-  was lost is found again by its marker.
+- Upload: `POST workout-service/workout` answers 200 with the workout JSON, `workoutId` included; reading
+  it back returns the steps, pace targets (same order) and `description` exactly as sent.
+- The library listing (`workout-service/workouts`) lists the newest workout first and carries each
+  workout's `description`, so a create whose answer was lost is found again by its marker.
+- Schedule: `POST workout-service/schedule/<workoutId>` with `{"date": ...}` answers 200 with the entry id
+  as `workoutScheduleId`. A second POST for the same workout and date makes a second calendar entry,
+  which is why the helper reads the calendar first.
+- Unschedule: `DELETE workout-service/schedule/<entry id>` answers 204 and the entry leaves the calendar;
+  delete: `DELETE workout-service/workout/<id>` answers 204. Afterwards a GET or a second DELETE fails
+  with garminconnect's `GarminConnectConnectionError("API Error 404 - ...")` and no response attached;
+  `plan_writes.classify` reads the status from that text (404 = gone).
+- Each request took about 0.3 s; nine writes about 1.2 s apart met no rate limit.
+
+Still unverified, and coded to these assumptions behind `PLAN_WRITES` (default off):
+
+- The GraphQL calendar read (`workoutScheduleSummariesScalar`) carries `workoutId` and the same entry id
+  for a workout we scheduled (the spike checked the REST calendar, `calendar-service/year/<y>/month/<m>`,
+  whose month is 0-based and whose entry `id` is the `workoutScheduleId`).
+- Deleting a workout also removes its calendar entries (the spike unscheduled first).
 - garminconnect's re-send after a 401 does not duplicate a write; a read timeout or a 5xx may have
   written.
-- Garmin's write rate limits, and the client's tool-call timeout: the budget (8 writes, 15 s to start
-  them, 1 s apart, 8 s read timeout) is a guess.
-- The workouts show on the watch (Fenix) after a sync, with their pace targets.
+- Garmin's write rate limits under load, and the client's tool-call timeout: the budget (8 writes, 15 s
+  to start them, 1 s apart, 8 s read timeout) is a guess.
+- The workout reaches the watch (Fenix) after a sync with its pace targets (it showed in Garmin Connect).
 - claude.ai prompts the user before a tool whose hints say it writes, shows MCP elicitation forms
   (web, desktop, mobile) and waits for the answer (the confirmation times out after 180 s). Known: the
   image serves stateless HTTP (`GARMIN_MCP_STATELESS_HTTP=true`), where mcp 2.x has no channel for a

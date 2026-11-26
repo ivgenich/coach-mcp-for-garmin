@@ -135,7 +135,7 @@ class DeepRaw:
             sid = self.g.next_id()
             w = self.g.library[wid]
             self.g.calendar.append({"workoutId": wid, "scheduleDate": json["date"], "workoutName": w["workoutName"],
-                                    "workoutType": "running", "id": sid})
+                                    "workoutType": "running", "scheduledWorkoutId": sid})
         return self._finish(fault, {"workoutScheduleId": sid, "workout": {"workoutId": wid}}, sid)
 
     def delete(self, domain, path, timeout=None, **kwargs):
@@ -150,14 +150,14 @@ class DeepRaw:
         n = int(m.group(2))
         if step == "delete" and n in self.g.reject_delete_ids:
             raise http(400)
-        if step == "unschedule" and any(e.get("id") == n and e.get("workoutId") in self.g.reject_delete_ids
+        if step == "unschedule" and any(e.get("scheduledWorkoutId") == n and e.get("workoutId") in self.g.reject_delete_ids
                                         for e in self.g.calendar):
             raise http(400)
         fault = self._fault(step)
         with self.g.lock:
             if step == "unschedule":
                 before_n = len(self.g.calendar)
-                self.g.calendar = [e for e in self.g.calendar if e.get("id") != n]
+                self.g.calendar = [e for e in self.g.calendar if e.get("scheduledWorkoutId") != n]
                 if len(self.g.calendar) == before_n:
                     raise http(404)
             else:

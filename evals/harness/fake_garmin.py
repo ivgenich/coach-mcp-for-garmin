@@ -245,7 +245,7 @@ class World:
                             "workoutType": ((w.get("sportType") or {}).get("sportTypeKey") or "running"),
                             "estimatedDurationInSecs": w.get("estimatedDurationInSecs"),
                             "estimatedDistanceInMeters": w.get("estimatedDistanceInMeters"),
-                            "isRestDay": False, "workoutId": entry["workoutId"], "workoutScheduleId": sid,
+                            "isRestDay": False, "workoutId": entry["workoutId"], "scheduledWorkoutId": sid,
                             "associatedActivityId": None})
             return out
 

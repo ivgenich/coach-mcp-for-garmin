@@ -105,7 +105,7 @@ class FakeRaw:
             sid = self.g.next_id()
             w = self.g.library[wid]
             self.g.calendar.append({"workoutId": wid, "scheduleDate": json["date"], "workoutName": w["workoutName"],
-                                    "workoutType": "running", "id": sid})
+                                    "workoutType": "running", "scheduledWorkoutId": sid})
         return Resp({"workoutScheduleId": sid, "workout": {"workoutId": wid}})
 
     def delete(self, domain, path, timeout=None, **kwargs):
@@ -118,7 +118,7 @@ class FakeRaw:
         with self.g.lock:
             if m.group(1) == "schedule":
                 before = len(self.g.calendar)
-                self.g.calendar = [e for e in self.g.calendar if e.get("id") != n]
+                self.g.calendar = [e for e in self.g.calendar if e.get("scheduledWorkoutId") != n]
                 if len(self.g.calendar) == before:
                     raise ConnectionError("API Error 404 - Not Found")
             else:
@@ -936,10 +936,16 @@ class Classify(unittest.TestCase):
         class NewConnectionError(Exception):
             pass
 
+        class GarminConnectConnectionError(Exception):
+            pass
+
         reason = NewConnectionError()
         wrapped = MaxRetry(types.SimpleNamespace(reason=reason))
         cases = {GarminConnectTooManyRequestsError("x"): pw.RATE, ConnectionError("API Error 429"): pw.RATE,
                  ConnectionError("API Error 404 - Not Found"): pw.GONE, ConnectionError("API Error 500"): pw.MAYBE,
+                 # garminconnect 0.3.2's real answer for a deleted workout (spike S0.2): no response attached
+                 GarminConnectConnectionError("API Error 404 - {'message': None, 'error': 'NotFoundException'}"):
+                     pw.GONE,
                  ConnectionError("API Error 400"): pw.REJECTED, ConnectTimeout(): pw.NEVER_SENT,
                  ReadTimeout(): pw.MAYBE, wrapped: pw.NEVER_SENT, garmin_paths.GarminMethodRefused(): pw.NEVER_SENT,
                  TimeoutError(): pw.MAYBE}
@@ -949,8 +955,13 @@ class Classify(unittest.TestCase):
 
     def test_schedule_id_fields(self):
         self.assertEqual(pw.schedule_id_of({"workoutScheduleId": 5}), 5)
-        self.assertEqual(pw.schedule_id_of({"id": "7"}), 7)
-        self.assertIsNone(pw.schedule_id_of({"id": True}))
+        # A real GraphQL calendar entry (spike S0.2): the entry id is scheduledWorkoutId, and there is no "id"
+        entry = {"workoutId": 1769286062, "scheduledWorkoutId": 1848249827, "scheduleDate": "2026-11-23",
+                 "workoutUuid": "x", "associatedActivityId": None}
+        self.assertEqual(pw.schedule_id_of(entry), 1848249827)
+        self.assertEqual(pw.schedule_id_of({"scheduledWorkoutId": "7"}), 7)
+        self.assertIsNone(pw.schedule_id_of({"scheduledWorkoutId": True}))
+        self.assertIsNone(pw.schedule_id_of({"id": 7}), "a guessed field name is not read")
         self.assertIsNone(pw.schedule_id_of(None))
 
 
@@ -1089,7 +1100,7 @@ class Cleanup(Base):
         with self.garmin.lock:
             self.garmin.library[wid] = {"workoutId": wid, "workoutName": "Coach Easy", "description": desc}
             if day is not None:
-                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "id": wid + 1000,
+                self.garmin.calendar.append({"workoutId": wid, "scheduleDate": day.isoformat(), "scheduledWorkoutId": wid + 1000,
                                              "workoutName": "Coach Easy", "workoutType": "running",
                                              "associatedActivityId": linked})
 
