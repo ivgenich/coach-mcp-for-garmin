@@ -67,7 +67,7 @@ def plan_case(draw):
     run_days = tuple(sorted(draw(st.one_of(st.sets(st.integers(0, 6), min_size=3, max_size=7),
                                            st.just(set(range(7)))))))
     rest = tuple(sorted(set(range(7)) - set(run_days)))
-    long_day = draw(st.sampled_from(run_days))
+    long_day = draw(st.one_of(st.sampled_from(run_days), st.integers(0, 6)))   # a rest day too (rule 6)
     km_lo, km_hi = draw(st.sampled_from(((8000, 90000), (60000, 100000))))
     km_weeks = tuple(pe.Meters(draw(st.floats(km_lo, km_hi))) for _ in range(8))
     longest = pe.Meters(draw(st.floats(5000, 32000)))
@@ -389,7 +389,7 @@ def owner_like_case(draw):
     race = first + dt.timedelta(days=7 * (weeks - 1) + draw(st.integers(4, 6)))
     run_days = tuple(sorted(draw(st.sets(st.integers(0, 6), min_size=4, max_size=5))))
     rest = tuple(sorted(set(range(7)) - set(run_days)))
-    long_day = draw(st.sampled_from(run_days))
+    long_day = draw(st.one_of(st.sampled_from(run_days), st.integers(0, 6)))   # a rest day too (rule 6)
     km0 = draw(st.floats(30.0, 60.0))
     history = [km0 * draw(st.floats(0.85, 1.15)) for _ in range(8)]
     if draw(st.booleans()):   # a week without runs in the history (travel before today)
@@ -489,7 +489,12 @@ class OwnerLikeProperties(unittest.TestCase):
         self.assertTrue(inv["easy_share"]["ok"])
         uncapped = pe.build_plan(inputs, snap, dict(pe.RULES, acwr=dict(pe.RULES["acwr"], max=99.0)),
                                  what_if_runs=False)
+        # (a week an easy override took under 80% easy warns override_relaxed instead: easy_share counts it as
+        # built, before the override)
+        relaxed = {x["dates"][0] for x in plan["warnings"] if x["id"] == "override_relaxed" and x["dates"]}
         for week, loose in zip(plan["weeks"], uncapped["weeks"]):
+            if week["start"] in relaxed:
+                continue
             counted = [s for s in week["sessions"] if s["role"] not in ("race", "b_race")]
             hard = sum(_times(s)[0] for s in counted)
             total = sum(_times(s)[1] for s in counted)
@@ -562,15 +567,46 @@ class PaceProperties(unittest.TestCase):
         v5k = pe.prediction_speed(snap, "5k", pe.RULES)
         intervals, threshold = paces.band("intervals"), paces.band("threshold")
         assume(intervals is not None and threshold is not None and v5k is not None)
-        # never faster than the 3K equivalent of the 5K pace, unless the threshold band's floor (0.91 x LT, so
-        # get_daily_status still calls it hard) is above the 5K pace (a 10K far slower than LT): then of that
-        floor = max(v5k, threshold[1])
-        self.assertLessEqual(intervals[1], floor * (5 / 3) ** 0.06 + 0.001)
-        if v5k >= 0.97 * snap.lt_speed_mps:
-            self.assertLessEqual(intervals[1], v5k * (5 / 3) ** 0.06 + 0.001)
+        # rule 5: never faster than the 3K equivalent of the 5K pace, whatever the LT says
+        self.assertLessEqual(intervals[1], v5k * (5 / 3) ** 0.06 + 0.001)
         self.assertGreaterEqual(intervals[0], v5k - 0.001)
         self.assertGreaterEqual(intervals[0], threshold[1] - 0.001)   # intervals above the threshold band
-        self.assertGreater((threshold[0] + threshold[1]) / 2, 0.90 * snap.lt_speed_mps)   # still hard daily
+
+    @settings(**PACE_PROPS)
+    @given(pace_case())
+    def test_threshold_is_never_faster_than_the_10k_pace(self, case):
+        inputs, snap = case
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        threshold = plan["_check"]["ctx"].paces.band("threshold")
+        v5k = pe.prediction_speed(snap, "5k", pe.RULES)
+        assume(threshold is not None and v5k is not None)
+        v10k = min(pe.prediction_speed(snap, "10k", pe.RULES) or v5k, v5k)
+        self.assertLessEqual(threshold[1], v10k + 0.001)
+        self.assertLess(threshold[0], threshold[1])
+        # the 0.91 x LT floor yields to the 10K bound only with a warning
+        if threshold[0] < 0.91 * snap.lt_speed_mps - 0.001:
+            self.assertIn("threshold_anchor_conflict", [w["id"] for w in plan["warnings"]])
+        else:
+            self.assertGreater((threshold[0] + threshold[1]) / 2, 0.90 * snap.lt_speed_mps)   # still hard daily
+
+    @settings(**PACE_PROPS)
+    @given(pace_case())
+    def test_a_goal_feasibility_accepts_is_inside_the_race_pace_band(self, case):
+        inputs, snap = case
+        assume(inputs.goal_time_s)
+        dist = float(pe.DISTANCES[inputs.race_distance])
+        goal = dist / inputs.goal_time_s
+        lo = float(pe.by_distance(pe.RULES, inputs.race_distance, "mp_of_lt_sanity")[0])
+        accept = pe.accepted_speed(inputs, snap, pe.RULES)
+        assume(accept is not None and lo * snap.lt_speed_mps <= goal <= accept)
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        band = plan["_check"]["ctx"].paces.band("mp")
+        assume(band is not None)
+        self.assertLessEqual(band[0], goal + 0.001)
+        self.assertGreaterEqual(band[1], goal - 0.001)
+        race = [s for w in plan["weeks"] for s in w["sessions"] if s["role"] == "race"]
+        self.assertTrue(race and race[0]["steps"][0]["speed_mps"] == [band[0], band[1]])
 
     @settings(**PACE_PROPS)
     @given(pace_case(), st.sampled_from((0.0, 0.03, 0.10)))

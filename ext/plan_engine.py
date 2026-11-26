@@ -157,9 +157,12 @@ RULES: Dict[str, Any] = {
              "b_race_minutes": {"tri_full": 750, "tri_half": 330, "run": 120}},
     # v2: race pacing from a course's climbs (item 13)
     "race_pacing": {"uphill_slowdown_per_grade_pct": 0.03, "course_distance_tolerance": 0.05},
-    # each race distance's own volume rules over the ones above (the marathon uses those): a half marathon
-    # grows to a lower peak ceiling and its long run stops at 24 km
-    "by_distance": {"half": {"peak_ceiling": {"of_max_week": 1.2, "over_km0_km": 18}, "max_long_km": 24.0}},
+    # each race distance's own rules over the ones above (the marathon uses those): a half marathon grows to a
+    # lower peak ceiling and its long run stops at 24 km; its race pace's sanity band reaches the fastest goal
+    # its feasibility accepts (max_goal_of_lt 1.02), its slow end the marathon's (a Garmin LT that reads fast
+    # puts a realistic half goal near 0.86 x LT)
+    "by_distance": {"half": {"peak_ceiling": {"of_max_week": 1.2, "over_km0_km": 18}, "max_long_km": 24.0,
+                             "mp_of_lt_sanity": [0.85, 1.02]}},
 }
 # A jog speed for distance estimates of timed recoveries when the LT speed is unknown.
 FALLBACK_JOG_MPS = MetersPerSecond(2.5)
@@ -387,9 +390,13 @@ class Paces:
 
     def __init__(self, lt: Optional[MetersPerSecond], mp: Optional[MetersPerSecond], rules: Mapping[str, Any],
                  easy_slowdown: float = 0.0,
-                 anchored: Optional[Mapping[str, Tuple[float, float]]] = None):
+                 anchored: Optional[Mapping[str, Tuple[float, float]]] = None,
+                 mp_estimate: Optional[float] = None):
         self.lt = lt
         self.mp = mp
+        # a race-pace speed for time estimates only (never a pace target): feasibility's corrected goal, set by
+        # context(); hard_seconds() times MP work with it when there is no MP (no goal and no prediction)
+        self.mp_estimate = mp_estimate
         self.rules = rules
         self.easy_slowdown = easy_slowdown   # the easy and long bands this share slower (Stage 4, rule A4)
         self.anchored: Dict[str, Tuple[float, float]] = dict(anchored or {})   # anchored_bands()
@@ -469,15 +476,33 @@ def session_seconds(s: Session, paces: Paces) -> Optional[Seconds]:
     return Seconds(sum(p for p in parts if p is not None))
 
 
+def _estimated_seconds(st: Step, paces: Paces) -> Optional[Seconds]:
+    """step_seconds(), and for a distance step whose band has no pace target its time at the middle of the band
+    before the speed limits (a band outside them), or, for marathon-pace work without an MP (no goal, no
+    prediction), at paces.mp_estimate (else the marathon's corrected goal, 0.93 x LT): so a session's work and
+    its total are both in seconds. None without an LT speed."""
+    secs = step_seconds(st, paces)
+    if secs is None and st.end == "distance" and paces.lt is not None:
+        raw = paces.raw_band(st.band or "easy")
+        speed = (raw[0] + raw[1]) / 2 if raw is not None else None
+        if speed is None and st.band == "mp":
+            speed = paces.mp_estimate or paces.lt * float(paces.rules["feasibility"]["marathon"]["corrected_of_lt"])
+        if speed:
+            secs = Seconds(st.value / speed)
+    return secs
+
+
 def hard_seconds(s: Session, paces: Paces) -> Tuple[float, float]:
-    """(seconds or metres at quality pace, total) of a session: the interval steps of a quality role count."""
+    """(seconds at quality pace, total seconds) of a session: the interval steps of a quality role count. Both
+    in metres instead when there is no LT speed (no time can be estimated)."""
     def walk(steps: Iterable[Step], times: int) -> Tuple[float, float]:
         hard = total = 0.0
         for st in steps:
             if st.kind == "repeat":
                 h, t = walk(st.children, times * st.times)
             else:
-                t = float(step_seconds(st, paces) or step_distance(st, paces)) * times
+                secs = _estimated_seconds(st, paces)
+                t = float(secs if secs is not None else step_distance(st, paces)) * times
                 h = t if st.kind == "interval" and st.band in ("threshold", "intervals", "mp") else 0.0
             hard += h
             total += t
@@ -948,7 +973,7 @@ def assign_targets(weeks: List[Week], ctx: Context, place: Callable[[Week], None
         ref_long = peak_long if peak_long > 0 else long_cap(ctx, last_normal, step_ref)
         if w.kind != "normal":
             w.long_ref = ref_long
-        long_day = w.start + dt.timedelta(days=ctx.inputs.long_run_day)
+        long_day = w.start + dt.timedelta(days=long_run_weekday(ctx.inputs))
         late = (ctx.inputs.race_date - long_day).days < int(r["late_long_days"])
         late_cap = late_long_limit(ctx, long_day)
         if w.kind == "normal":
@@ -1049,6 +1074,28 @@ def _adjacent_ok(day: dt.date, hard_days: Set[dt.date]) -> bool:
     return (day - dt.timedelta(days=1)) not in hard_days and (day + dt.timedelta(days=1)) not in hard_days
 
 
+def long_run_weekday(inputs: PlanInputs) -> int:
+    """Rule 6: the weekday the long runs go on. The long-run day, or, when it is a rest day or not a run day,
+    the run day nearest to it within the week (the later of two equally near)."""
+    run_days = set(inputs.run_days) - set(inputs.rest_days)
+    if inputs.long_run_day in run_days or not run_days:
+        return inputs.long_run_day
+    return min(run_days, key=lambda d: (abs(d - inputs.long_run_day), -d))
+
+
+def long_day_options(w: Week, ctx: Context) -> List[dt.date]:
+    """Rule 6: the days of week `w` its long run may go on, best first: the long-run day, the day before, the
+    day after. When the long-run day is a rest day or not a run day, every run day of the week, nearest to it
+    first (the later of two equally near), so a weekend rest never leaves the plan without long runs."""
+    i = ctx.inputs
+    pref = w.start + dt.timedelta(days=i.long_run_day)
+    if long_run_weekday(i) == i.long_run_day:
+        return [pref, pref - dt.timedelta(days=1), pref + dt.timedelta(days=1)]
+    run_days = set(i.run_days) - set(i.rest_days)
+    days = [w.start + dt.timedelta(days=k) for k in sorted(run_days)]
+    return sorted(days, key=lambda d: (abs((d - pref).days), -d.toordinal()))
+
+
 def place_week(w: Week, ctx: Context, hard_before: Set[dt.date]) -> Tuple[Optional[dt.date], List[Tuple[str, dt.date]]]:
     """(long run day, [(quality role, day)]) for week `w`: no two hard-or-long days touch, counting fixed
     sessions, the races and `hard_before` (the plan's hard days so far). Fallbacks, in order: drop Q2, move the
@@ -1064,12 +1111,12 @@ def place_week(w: Week, ctx: Context, hard_before: Set[dt.date]) -> Tuple[Option
     taken = set(hard_before) | {d for d in w.days() + [w.start - dt.timedelta(days=1), w.end + dt.timedelta(days=1)]
                                 if ctx.event_hard(d)}
     want_long = w.long_target > 0
+    options = long_day_options(w, ctx)
     if want_long and w.kind == "b_race":
-        near = [w.start + dt.timedelta(days=ctx.inputs.long_run_day + k) for k in (0, -1, 1)]
-        want_long = any(d in free for d in near)
-    pref = w.start + dt.timedelta(days=ctx.inputs.long_run_day)
-    long_opts: List[Optional[dt.date]] = [d for d in (pref, pref - dt.timedelta(days=1), pref + dt.timedelta(days=1))
-                                          if d in free and w.start <= d <= w.end] if want_long else [None]
+        want_long = any(d in free for d in options[:3])
+    pref = options[0]
+    long_opts: List[Optional[dt.date]] = [d for d in options if d in free and w.start <= d <= w.end] \
+        if want_long else [None]
     hard_q = [q for q in w.quality if q in QUALITY_ROLES or q == "mp_short"]
     soft_q = [q for q in w.quality if q == "strides"]
 
@@ -1414,13 +1461,16 @@ def riegel_speed(speed: float, from_m: float, to_m: float, exponent: float) -> f
     return float(speed * (from_m / to_m) ** (exponent - 1.0))
 
 
-def anchored_bands(lt: Optional[MetersPerSecond], snap: Snapshot,
-                   rules: Mapping[str, Any]) -> Dict[str, Tuple[float, float]]:
+def anchored_bands(lt: Optional[MetersPerSecond], snap: Snapshot, rules: Mapping[str, Any],
+                   warnings: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Tuple[float, float]]:
     """The bands Garmin's predictions anchor (rules "pace_anchors"), only those they change; empty without an
     LT speed (LT multiples then). Easy and long: fractions of the marathon's corrected-goal speed (from the
-    marathon prediction, or the half's by Riegel). With a 5K or 10K prediction, intervals: the 5K pace to its 3K equivalent. Threshold: the LT band, moved down when its fast end is
-    faster than the 10K pace (at most until its slow end is threshold_min_of_lt x LT), its slow end then
-    no slower than the half-marathon pace."""
+    marathon prediction, or the half's by Riegel). With a 5K or 10K prediction, intervals: the 5K pace to its
+    3K equivalent, never faster. Threshold: the LT band, moved down when its fast end is faster than the 10K
+    pace until its fast end is the 10K pace, never faster; its slow end then no slower than the half-marathon
+    pace. When the moved band's slow end falls under threshold_min_of_lt x LT (the floor that keeps it hard
+    for get_daily_status), the 10K bound wins: the band narrows to that floor (at most to half its width), or
+    keeps its width under it, and `warnings` gets threshold_anchor_conflict."""
     pa = rules["pace_anchors"]
     exp = float(pa["riegel_exponent"])
     out: Dict[str, Tuple[float, float]] = {}
@@ -1441,17 +1491,33 @@ def anchored_bands(lt: Optional[MetersPerSecond], snap: Snapshot,
     slow_m, fast_m = (float(x) for x in pa["intervals_m"])
     t_lo, t_hi = (float(x) for x in rules["bands_of_lt"]["threshold"])
     low, high = lt * t_lo, lt * t_hi
-    v10k = prediction_speed(snap, "10k", rules) or v5k
+    v10k = min(prediction_speed(snap, "10k", rules) or v5k, v5k)   # a 10K pace never faster than the 5K
     if high > v10k:
-        shift = max(v10k / high, float(pa["threshold_min_of_lt"]) / t_lo)
-        low, high = low * shift, high * shift
+        width = t_lo / t_hi
+        low, high = v10k * width, v10k
+        floor = float(pa["threshold_min_of_lt"]) * lt
+        if floor > low:
+            # the floor and the 10K anchor conflict: rule 5's bound (never faster than the 10K pace) wins
+            narrowest = v10k * (1.0 - (1.0 - width) / 2.0)
+            low = min(floor, narrowest)
+            if warnings is not None:
+                kept = (f"narrowed to {pace_text(high)}-{pace_text(low)}/km, its slow end at "
+                        f"{round(low / lt * 100)}% of threshold speed" if low >= floor - 1e-9 else
+                        f"{pace_text(high)}-{pace_text(low)}/km, its middle at "
+                        f"{round((low + high) / 2 / lt * 100)}% of threshold speed: get_daily_status may not "
+                        f"call it hard")
+                warnings.append({"id": "threshold_anchor_conflict", "dates": [],
+                                 "detail": f"the 10K pace {pace_text(v10k)}/km is slower than "
+                                           f"{round(float(pa['threshold_min_of_lt']) * 100)}% of the lactate "
+                                           f"threshold {pace_text(lt)}/km allows a full threshold band: the band "
+                                           f"is {kept}"})
         v_half = prediction_speed(snap, "half", rules)
         if v_half is not None and low < v_half < high:
             low = v_half
         out["threshold"] = (low, high)
-    i_lo = riegel_speed(v5k, 5000.0, slow_m, exp)
-    i_hi = riegel_speed(v5k, 5000.0, fast_m, exp)
-    out["intervals"] = (max(i_lo, high), max(i_hi, high * (i_hi / i_lo)))
+    # never faster than the 3K equivalent; the threshold band's fast end is at most the 10K pace, slower than
+    # the 5K pace, so the intervals stay above it
+    out["intervals"] = (riegel_speed(v5k, 5000.0, slow_m, exp), riegel_speed(v5k, 5000.0, fast_m, exp))
     return out
 
 
@@ -1500,7 +1566,7 @@ def marathon_pace(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any],
     corrected = corrected_goal_s(inputs, snap, rules)
     mp = dist / (goal or corrected or 1)
     what = "goal pace" if goal else f"the corrected goal {hms(corrected or 0)}"
-    lo, hi = rules["mp_of_lt_sanity"]
+    lo, hi = (float(x) for x in by_distance(rules, inputs.race_distance, "mp_of_lt_sanity"))
     ratio = mp / lt
     if ratio > hi:
         mp = lt * hi
@@ -1547,8 +1613,15 @@ def context(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any]) -> Con
     fixed: Dict[dt.date, List[FixedSession]] = {}
     for f in snap.fixed:
         fixed.setdefault(f.date, []).append(f)
-    paces = Paces(snap.lt_speed_mps, mp, rules, anchored=anchored_bands(snap.lt_speed_mps, snap, rules))
+    corrected = corrected_goal_s(inputs, snap, rules)
+    paces = Paces(snap.lt_speed_mps, mp, rules, anchored=anchored_bands(snap.lt_speed_mps, snap, rules, warnings),
+                  mp_estimate=float(DISTANCES[inputs.race_distance]) / corrected if corrected else None)
     report_out_of_limits(paces, warnings, missing)
+    long_wd = long_run_weekday(inputs)
+    if long_wd != inputs.long_run_day:   # rule 6: a long-run day that is a rest day or not a run day
+        warnings.append({"id": "long_run_day_not_a_run_day", "dates": [],
+                         "detail": f"the long-run day ({WEEKDAYS[inputs.long_run_day]}) is not a run day: the long "
+                                   f"runs go on the nearest run day ({WEEKDAYS[long_wd]})"})
     return Context(inputs, snap, rules, paces, km0, longest, [], fixed,
                    warnings, missing)
 
@@ -2225,6 +2298,8 @@ def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any
         saved_warnings = len(ctx.warnings)
         before = {i["id"] for i in check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules)
                   if not i["ok"]}
+        reduce_only = o.kind in REDUCE_ONLY_OVERRIDES
+        relaxed_before = _relaxed_problems(weeks, ctx) if reduce_only else {}
         was = {s.key: (w, s) for w in weeks for s in w.sessions}
         ok, no = _apply_one(weeks, ctx, o)
         if ok and o.kind in REDUCE_ONLY_OVERRIDES:
@@ -2250,10 +2325,43 @@ def apply_overrides(weeks: List[Week], ctx: Context) -> Tuple[List[Dict[str, Any
                 del ctx.warnings[saved_warnings:]
                 refused.append(_refuse(o, after[0]["id"], after[0]["detail"], "the plan's rules"))
                 continue
+            if reduce_only:
+                _warn_relaxed(o, weeks, ctx, relaxed_before, was)
             ctx.applied_overrides.append(o)
         applied += ok
         refused += no
     return applied, refused
+
+
+# Rules a reduce-only override never breaks (the invariants count what it changed as it was, _as_built_week):
+# what it does to them on the plan as it is becomes the warning override_relaxed on the edited week.
+RELAXED_BY_REDUCING = ("long_cap", "long_step", "easy_share")
+
+
+def _relaxed_problems(weeks: Sequence[Week], ctx: Context) -> Dict[str, Set[str]]:
+    """{rule: problems} of RELAXED_BY_REDUCING on the plan exactly as it is (no session counted as built)."""
+    inv = check_invariants({"_check": {"weeks": weeks, "ctx": ctx}}, ctx.rules, as_built=False)
+    return {i["id"]: set(filter(None, i["detail"].split("; "))) for i in inv
+            if i["id"] in RELAXED_BY_REDUCING and not i["ok"]}
+
+
+def _warn_relaxed(o: Override, weeks: Sequence[Week], ctx: Context, before: Mapping[str, Set[str]],
+                  was: Mapping[str, Tuple[Week, Session]]) -> None:
+    """The warning override_relaxed on the week reduce-only override `o` edited, when the plan as it is now
+    breaks the long-run step, the long-run cap or 80% easy where it did not before (a sick athlete may always
+    rest; the next long run then steps from the long run as built, not from the reduced one)."""
+    now = _relaxed_problems(weeks, ctx)
+    new = [f"{rule}: {p}" for rule in RELAXED_BY_REDUCING for p in sorted(now.get(rule, set()) - before.get(rule, set()))]
+    if not new:
+        return
+    day = o.week_start or o.date
+    if day is None and o.key:
+        found = was.get(o.key)
+        day = found[1].date if found is not None else None
+    w = next((x for x in weeks if day is not None and x.start <= day <= x.end), None)
+    dates = [w.start.isoformat(), w.end.isoformat()] if w is not None else []
+    ctx.warnings.append({"id": "override_relaxed", "dates": dates,
+                         "detail": f"{o.kind} below the plan's rules, as the plan now is: " + "; ".join(new[:3])})
 
 
 def _apply_one(weeks: List[Week], ctx: Context, edit: Override) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -2476,9 +2584,27 @@ def _adjacent_hard_pairs(weeks: Sequence[Week], ctx: Context) -> List[Tuple[dt.d
     return out
 
 
-def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) -> List[Dict[str, Any]]:
+def _as_built_week(w: Week, ctx: Context) -> Week:
+    """Week `w` as rules 3 and 4 count it after reduce-only overrides (easy, cap_km, cap_long, rest,
+    cap_week_km): a session such an override changed counts as it was before it, and a run it removed counts
+    too, as the ratio cap counts them (_cap_sessions). So a long run reduced or removed by an override never
+    becomes the step reference, and such an override never breaks the step, the long-run cap or 80% easy (it
+    warns override_relaxed instead, apply_overrides)."""
+    if not ctx.cap_as and not ctx.cap_ghosts:
+        return w
+    sessions = [dataclasses.replace(ctx.cap_as[s.key], date=s.date) if s.key in ctx.cap_as else s
+                for s in w.sessions]
+    sessions += [g for gw, g in ctx.cap_ghosts.values() if gw.start == w.start]
+    sessions.sort(key=lambda s: (s.date, s.key))
+    return dataclasses.replace(w, sessions=sessions)
+
+
+def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, *,
+                     as_built: bool = True) -> List[Dict[str, Any]]:
     """Every rule checked on a finished plan dict (build_plan's answer): [{id, ok, detail}] in a fixed order.
-    The plan carries what the checks need ("_check" is internal and never part of the answer)."""
+    The plan carries what the checks need ("_check" is internal and never part of the answer). as_built: the
+    long-run step and cap and 80% easy count the sessions reduce-only overrides changed or removed as they were
+    (_as_built_week); False checks the plan exactly as it is (apply_overrides' warnings)."""
     chk = plan["_check"]
     weeks: List[Week] = chk["weeks"]
     ctx: Context = chk["ctx"]
@@ -2507,10 +2633,14 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
                                                     "a_taper", "long_cap", "long_step", "easy_share",
                                                     "peak_ceiling")}
     prev_reduced = False
-    for w in weeks:
-        if w.kind == "week0":
+    long_wd = long_run_weekday(ctx.inputs)
+    early_normal = early_long = early_clean = 0   # normal weeks 21+ days out: all, with a long run, clean
+    for w_now in weeks:
+        if w_now.kind == "week0":
             continue
-        p = planned(w)
+        p = planned(w_now)
+        # rules 3 and 4 below on the week as built (reduce-only overrides counted as they were), the rest on it now
+        w = _as_built_week(w_now, ctx) if as_built else w_now
         long_s = [s for s in w.sessions if s.role == "long"]
         lmax = max((s.distance for s in long_s), default=0.0)
         step_ref = run_long
@@ -2533,7 +2663,7 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
             # is at most what was placed plus the blocked days' share
             target = min(last_normal * growth, float(ceiling))
             # (what rule 7 took off a long run around a B race is no shortfall either)
-            got = w.acwr_from if w.acwr_from[0] > p else (p, sum(1 for s in w.sessions if s.counts))
+            got = w.acwr_from if w.acwr_from[0] > p else (p, sum(1 for s in w_now.sessions if s.counts))
             if not ctx.inputs.overrides and not calendar_week(w, ctx) \
                     and w.base > week_base(float(w.target), got[0] + w.b_cut, got[1], None) + EPS_M:
                 probs["growth_cap"].append(f"week {w.number}: grows from {km(w.base)} km, placed {km(p)} km")
@@ -2545,6 +2675,11 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
                 if step_counts(dataclasses.replace(ctx, rules=rules), long_s[0], weeks):
                     run_long = lmax
                 peak_long = max(peak_long, lmax)
+            if (ctx.inputs.race_date - (w.start + dt.timedelta(days=long_wd))).days >= days_late:
+                early_normal += 1
+                early_long += bool(long_s)
+                early_clean += (not calendar_week(w, ctx) and any(ctx.runnable(d) for d in w.days())
+                                and all(ctx.window_factor(d) is None for d in w.days()))
             prev_reduced = False
         else:
             prev_reduced = True
@@ -2577,6 +2712,10 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
                 and w.target - w.b_cut - fixed_m >= float(rules["easy_min_km"]) * 1000.0 \
                 and any(ctx.runnable(d) and d not in used and ctx.window_factor(d) is None for d in w.days()):
             probs["easy_share"].append(f"week {w.number}: no easy run")
+    if early_clean and not early_long:
+        # rule 3: a marathon or half plan needs long runs; their fallbacks may drop some, never every one
+        probs["long_cap"].append(f"no long run in any normal week 21 or more days before the race "
+                                 f"({early_normal} weeks)")
     for k in ("growth_cap", "no_makeup"):
         add(k, probs[k])
     # deload cadence: at most 3 normal weeks in a row, 4 when a B week follows
@@ -2720,9 +2859,9 @@ def feasibility(inputs: PlanInputs, snap: Snapshot, weeks_to_race: Optional[int]
         check("base_km", "warn", km0_km < float(f["min_km0"]), km0_km, float(f["min_km0"]))
     if peak_km is not None:
         check("peak_km", "warn", peak_km < float(f["min_peak_km"]), peak_km, float(f["min_peak_km"]))
-    if longest_planned_km is not None:
-        check("long_run_km", "warn", longest_planned_km < float(f["min_long_km"]), longest_planned_km,
-              float(f["min_long_km"]))
+    if longest_planned_km is not None:   # None: unknown (no plan); 0: the plan has no long run, not feasible
+        check("long_run_km", "warn" if longest_planned_km > 0 else "fail",
+              longest_planned_km < float(f["min_long_km"]), longest_planned_km, float(f["min_long_km"]))
     if goal:
         if lt is not None:
             ratio = round((dist / goal) / lt, 3)
@@ -2826,13 +2965,14 @@ def build_plan(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RU
     if inputs.easy_band_slowdown:
         # Stage 4 (plan_review A4): the easy and long runs keep their planned distances, only their pace band
         # (and so their minutes) is slower in the answer and the workouts; every rule above ran on the plan's bands.
-        paces = Paces(ctx.paces.lt, ctx.paces.mp, rules, inputs.easy_band_slowdown, ctx.paces.anchored)
+        paces = Paces(ctx.paces.lt, ctx.paces.mp, rules, inputs.easy_band_slowdown, ctx.paces.anchored,
+                      ctx.paces.mp_estimate)
         report_out_of_limits(paces, ctx.warnings, ctx.missing)
     week_list = [week_json(w, paces) for w in weeks]
     echo = inputs.echo()
     summ = summary(weeks)
     real = [w for w in weeks if w.kind != "week0"]
-    feas = feasibility(inputs, snap, len(real), summ["peak_km"], summ["peak_long_km"], km(ctx.km0), rules)
+    feas = feasibility(inputs, snap, len(real), summ["peak_km"], summ["peak_long_km"] or 0.0, km(ctx.km0), rules)
     acwr = acwr_answer(weeks, ctx)
     pacing = race_pacing(inputs, snap, rules, ctx.warnings)
     if ctx.load is not None and not ctx.load.lpm:
@@ -2940,7 +3080,7 @@ def assess(inputs: PlanInputs, snap: Snapshot, rules: Mapping[str, Any] = RULES)
         first = week1_start(snap.today)
         if inputs.race_date > first:
             n = (monday(inputs.race_date) - first).days // 7 + 1
-    feas = feasibility(inputs, snap, n, peak, longest, km0, rules)
+    feas = feasibility(inputs, snap, n, peak, (longest or 0.0) if peak is not None else None, km0, rules)
     pred = snap.prediction(inputs.race_distance)
     return {
         "kind": "plan_assessment", "rules_version": RULES_VERSION,

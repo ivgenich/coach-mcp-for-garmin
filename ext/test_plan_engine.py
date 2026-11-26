@@ -835,9 +835,11 @@ class OwnerAcwr(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)), ids)
 
     def test_a_refused_override_leaves_no_trace(self):
-        inputs, snap = owner_case([pe.Override("easy", key=_key_of(self.plan, 5, "long"))])   # under 80% easy: refused
+        # the last long run before the half-distance triathlon cut to 8 km: the first one after it would be over
+        # 0.75 x it (rule 7 follows the plan as it is), so the edit is undone and refused
+        inputs, snap = owner_case([pe.Override("cap_long", key=_key_of(self.plan, 8, "long"), km=8.0)])
         plan = pe.build_plan(inputs, snap, what_if_runs=False)
-        self.assertEqual(plan["overrides"]["refused"][0]["rule"], "easy_share")
+        self.assertEqual(plan["overrides"]["refused"][0]["rule"], "b_windows")
         self.assertEqual(plan["weeks"], self.plan["weeks"])
         self.assertEqual(plan["warnings"], self.plan["warnings"])
         self.assertEqual(plan["acwr"], self.plan["acwr"])
@@ -1177,8 +1179,15 @@ def long_step_problems(plan, step_km=2.0):
     ref = plan["start"]["longest_run_8w_km"] or 0.0
     gap = False
     out = []
+    # a week a reduce-only override took under the rules (override_relaxed) keeps its long run as built for the
+    # step, which the answer does not show: the next normal week's long run is not checked, the step resumes from it
+    relaxed = {x["dates"][0] for x in plan["warnings"] if x["id"] == "override_relaxed" and x["dates"]}
+    unknown = False
     for w in plan["weeks"]:
         if w["kind"] == "week0":
+            continue
+        if w["start"] in relaxed:
+            unknown = True
             continue
         longs = [s for s in w["sessions"] if s["role"] == "long"]
         runs = [s for s in w["sessions"] if s["role"] not in ("race", "b_race")]
@@ -1192,11 +1201,12 @@ def long_step_problems(plan, step_km=2.0):
             continue
         lmax = max(s["km"] for s in longs)
         allowed = ref + (0.0 if gap else step_km)
-        if lmax > allowed + 0.05:
+        if lmax > allowed + 0.05 and not unknown:
             out.append(f"{w['start']}: long {lmax} km > {ref} km" + (" (after a gap)" if gap else f" + {step_km} km"))
         gap = False
         if (a_race - D.fromisoformat(longs[0]["date"])).days >= 21 and not _b_held(plan, longs[0]["date"]):
             ref = lmax
+            unknown = False
     return out
 
 
@@ -1258,11 +1268,17 @@ class OwnerCase(unittest.TestCase):
 
     def test_after_the_travel_week_the_long_run_returns_to_the_one_before_it(self):
         # the first normal week after the gap returns to the last normal week's long run (23.8 km), no +2 km;
-        # the deload in between (18.5 km) does not reset it
+        # the deload in between (18.5 km) does not reset it. These loads track Garmin, so the ratio cap (rule 12)
+        # then cuts the return week's long run (to 18.4 km since its marathon-pace session counts in seconds, not
+        # metres): it was placed at 23.8 km before the cut, and the next week steps from the cut one
         runs = _runs(self.plan)
         self.assertEqual(long_step_problems(self.plan), [])
-        self.assertEqual([runs[d]["km"] for d in ("2026-12-11", "2026-12-25", "2027-01-01")], [23.8, 18.5, 23.8])
-        self.assertLessEqual(runs["2027-01-08"]["km"], 23.8 + 2.0 + 0.05)
+        self.assertEqual([runs[d]["km"] for d in ("2026-12-11", "2026-12-25")], [23.8, 18.5])
+        w5 = next(w for w in self.plan["_check"]["weeks"] if w.start == D(2026, 12, 28))
+        built = {op[3].isoformat(): (op[0], op[1]) for op in w5.acwr_ops.values()}
+        self.assertEqual(built["2027-01-01"], ("long", 23800.0))
+        self.assertLessEqual(runs["2027-01-01"]["km"], 23.8)
+        self.assertLessEqual(runs["2027-01-08"]["km"], runs["2027-01-01"]["km"] + 2.0 + 0.05)
 
     def test_real_data_shape_returns_to_23_8_then_steps_2_km(self):
         plan = pe.build_plan(owner_inputs(), real_snap(), what_if_runs=False)
@@ -1288,7 +1304,7 @@ class OwnerCase(unittest.TestCase):
         weeks, ctx = self.plan["_check"]["weeks"], self.plan["_check"]["ctx"]
         w = next(w for w in weeks if w.start == D(2026, 12, 28))
         i, s = next((i, s) for i, s in enumerate(w.sessions) if s.role == "long")
-        w.sessions[i] = pe.make_session(s.key, s.date, "long", pe.Meters(s.distance + 500.0), ctx.paces, ctx.rules)
+        w.sessions[i] = pe.make_session(s.key, s.date, "long", pe.Meters(24300.0), ctx.paces, ctx.rules)   # 23.8 + 0.5
         failed = {x["id"]: x["detail"] for x in pe.check_invariants(self.plan) if not x["ok"]}
         self.assertIn("long_step", failed)
         self.assertIn("week 5: long 24.3 km > 23.8 km (the first normal week after a gap: no step)",
