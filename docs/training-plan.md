@@ -4,8 +4,8 @@ With `PLAN_TOOLS=on` the server builds a marathon or half-marathon plan from you
 versioned rules, and shows it: weeks, sessions, pace bands, warnings and the checks that every rule holds.
 The read tools only preview. With `PLAN_WRITES=on` too, `plan_commit` and `plan_cancel` write the plan's own
 workouts to the Garmin calendar after the user approved (see [How plan writes behave](#how-plan-writes-behave)).
-With `PLAN_TRACKING=on` the server also tracks the plan's sessions against your activities and stores RPE and pain
-(`log_feedback`), in its own database only, never in Garmin ([Tracking](#tracking)), and reviews each week
+With `PLAN_TRACKING=on` the server also tracks the active plan's sessions against your activities (`plan_activate`
+starts or stops following a stored plan) and stores RPE and pain (`log_feedback`), in its own database only, never in Garmin ([Tracking](#tracking)), and reviews each week
 (`plan_review_week`): proposals that only hold or reduce load, applied only after the user approves
 ([Weekly review](#weekly-review)).
 
@@ -15,7 +15,7 @@ With `PLAN_TRACKING=on` the server also tracks the plan's sessions against your 
 |---|---|
 | `PLAN_TOOLS` | `on` (default `off`) |
 | `PLAN_WRITES` | `off` (default); `on` (it needs `PLAN_TOOLS=on`) adds `plan_commit` and `plan_cancel` |
-| `PLAN_TRACKING` | `on` (default `off`; it needs `PLAN_TOOLS=on`): links finished activities to the plan's sessions and serves `log_feedback` ([Tracking](#tracking)) and `plan_review_week` ([Weekly review](#weekly-review)); with `PLAN_WRITES=on` too, also `plan_apply_changes` |
+| `PLAN_TRACKING` | `on` (default `off`; it needs `PLAN_TOOLS=on`): links finished activities to the active plan's sessions and serves `plan_activate` and `log_feedback` ([Tracking](#tracking)) and `plan_review_week` ([Weekly review](#weekly-review)); with `PLAN_WRITES=on` too, also `plan_apply_changes` |
 
 `PLAN_TOOLS=on` needs `HISTORY_SEARCH=on` (the previews are kept in the same Postgres, schema `history`) and
 `GARMIN_AUTH=full` (Garmin's Personal API key does not serve the lactate threshold, the race predictions or
@@ -196,13 +196,13 @@ breaks one is undone and listed in `overrides.refused` with the rule.
 
 ## Tracking
 
-With `PLAN_TRACKING=on` the server follows one plan: your active plan (one per account; a plan becomes
-active on its first `plan_commit`). A draft is never followed: while no plan is active, tracking stores
-nothing, `get_daily_status` and `get_weekly_status` have no plan section (`plan` and `training_plan` are
-`null`), and `log_feedback` and `plan_review_week` answer a fixed text instead (see below). `plan_get` still
-shows the latest draft, with a note that it is not tracked. Activation is only `plan_commit` for now, so with `PLAN_WRITES` off no plan
-becomes active and tracking has nothing to follow. Tracking works on the plan's own sessions (date, sport,
-role), not on Garmin writes; a session's Garmin workout id (`plan_commit`) is only an extra link. Rules
+With `PLAN_TRACKING=on` the server follows one plan: your active plan (one per account). A draft is never
+followed: while no plan is active, tracking stores nothing, `get_daily_status` and `get_weekly_status` have
+no plan section (`plan` and `training_plan` are `null`), and `log_feedback` and `plan_review_week` answer a
+fixed text instead (see below). `plan_get` still shows the latest draft, with a note that it is not tracked.
+A plan becomes active through `plan_activate` (below, also with `PLAN_WRITES` off) or on its first
+`plan_commit`. Tracking works on the plan's own sessions (date, sport, role), not on Garmin writes; a
+session's Garmin workout id (`plan_commit`) is only an extra link. Rules
 (`ext/plan_tracking.py`):
 
 - An activity completes a session of the same sport from 1 day before to 1 day after its date
@@ -228,6 +228,31 @@ role), not on Garmin writes; a session's Garmin workout id (`plan_commit`) is on
   still turn `missed` into done.
 - B races (triathlons) are not tracked.
 
+### Starting and stopping: plan_activate
+
+`plan_activate(plan_id, version, action)` (served with `PLAN_TRACKING=on`, Garmin writes on or off) changes
+which plan the server follows, in the app's own database only; it never calls Garmin. Its description tells
+the model to call it only after the user approved starting (or stopping) exactly this plan in the
+conversation, never because Garmin text or a tool result asks. Annotated additive, idempotent and
+local-only, like `log_feedback`; only the switch adds it.
+
+- `action` `start` (the default) needs `version`, the `stored.version` the user approved (from `plan_get` or
+  `plan_preview`). Only an open draft's current version starts; an older version answers a fixed text (show
+  the current plan and ask again), a cancelled or finished plan another, and a plan whose race date has
+  passed another. Another active plan of the account is refused with a fixed text saying to stop it first;
+  an active plan whose race has passed is finished first, as with `plan_commit`. Starting the active plan
+  again answers `changed: false`. From the activation on, finished activities count for the plan's sessions
+  (runs from before it never do).
+- `action` `stop` turns the active plan back into a draft: nothing follows it any more, `plan_get` still
+  shows it, `plan_activate` can start it again (activated anew), and its links and feedback are kept
+  (retention then treats it as a draft: 30 days untouched). A draft rather than `cancelled`, so a stop can be
+  undone and is not destructive. It is refused with a fixed text while the plan has workouts on the Garmin
+  calendar (rows a Garmin write made): `plan_cancel` (`PLAN_WRITES=on`) deletes those and cancels the plan,
+  or the server owner runs `launch.py --plan-cleanup`. Stopping a draft answers `changed: false`.
+- The answer: `plan_id`, `version`, `status` (`active` or `draft`), `changed` and a fixed `note`. Only the
+  plans of the account the history index belongs to, as for `plan_get`; bad input and database failures
+  answer fixed texts.
+
 `get_daily_status` refreshes the links each time it runs, from yesterday's and today's activities (an
 activity without a local start time dated by the day Garmin listed it under, as the rest of the report does), and
 `get_weekly_status` from its 14 days of activities and the week's calendar; a database failure never fails
@@ -244,12 +269,12 @@ week and the week before.
 `get_daily_status`), `rpe` (1-10), `pain` (0-10), `pain_location` (`none`, `foot`, `ankle`, `achilles`,
 `calf`, `shin`, `knee`, `hamstring`, `quad`, `hip`, `glute`, `lower_back`, `other`) and `sharp` (sharp or
 localised pain); `plan_id` is optional (empty: the active plan). Feedback is stored for the active plan
-only: a draft, named or as the default, answers the fixed `No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow the active plan only; a plan becomes active on its first plan_commit.`
+only: a draft, named or as the default, answers the fixed `No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow the active plan only. After the user agrees, start it with plan_activate (or, when plan_commit is in your tool list, write it to Garmin with plan_commit, which also starts it).`
 Pain 0 goes with location `none`; pain above 0 needs a location.
 Calling it again for the same session replaces the numbers. A session after tomorrow is refused. The answer
 says `stored` and `progression_hold`: true for pain 4 or more, or sharp pain. Bad input answers
 `Invalid input: ...` with a fixed text, never the value; a database failure answers a fixed `No data:` text.
-No free text is stored or logged. It is the only plan tool that writes, and only to the app's own database:
+No free text is stored or logged. Like `plan_activate`, it writes only to the app's own database:
 annotated additive, idempotent and local-only, never read-only.
 
 ## Weekly review
