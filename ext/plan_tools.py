@@ -22,6 +22,7 @@ first call answers like the status tools ("Error: <source phrase>"); a database 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -64,6 +65,9 @@ NOTE = ("Every number, date, pace and warning was computed by the server's fixed
         "Report them as given and change none; to change the plan, call plan_preview again with other inputs or "
         "overrides. Training guidance, not medical advice.")
 NOTE_NOT_SAVED = "The preview was not stored: {why}."
+NOTE_NO_OVERRIDE = ("The server refused every override (overrides.refused names the rule, the value and the "
+                    "limit), so the plan did not change and no new version was stored; this is the current version. "
+                    "Training guidance, not medical advice.")
 NOTE_STORED = ("A stored preview from {day}: the numbers are those of that day. plan_preview with the same inputs "
                "builds it again from today's numbers.")
 
@@ -76,9 +80,11 @@ _INTAKE = (
 _CRITIC = (
     "Role: coach critic. After a preview, read the warnings, the feasibility and the invariants and say in plain "
     "words what is risky. You may propose edits only through the overrides argument: they can move a session "
-    "within its week, make a day a rest day, make a session easy, cap a week's km or move a week's long run. "
-    "No edit can add load; the server refuses any edit that breaks a rule and says which (overrides.refused). "
-    "Report refused edits; do not work around them.")
+    "within its week, make a day a rest day, make a session easy, cap a week's km, shorten one long run "
+    "(cap_long) or move a week's long run. No edit can add load; the server refuses any edit that breaks a rule "
+    "and says which (overrides.refused, with the rule, the value and the limit). A refused edit is not stored, "
+    "and when no edit applies to a stored plan_id no new version is stored. Report refused edits; do not work "
+    "around them.")
 _ARGS = (
     "Arguments: race_date YYYY-MM-DD (required); race_distance marathon or half; goal_time H:MM:SS or empty; "
     "b_races 'YYYY-MM-DD:kind' items separated by commas; run_days and rest_days weekday names (mon,tue,...) "
@@ -98,9 +104,11 @@ PREVIEW_DESCRIPTION = (
     "feasibility, what-if variants, the rule checks (invariants) and 'window', the next 7 days as Garmin "
     "workouts would show them. The preview is stored as a draft (plan_id) for plan_get. Nothing is written "
     "to Garmin.\n\n" + _CRITIC + "\n\n" + _ARGS + " blocked_dates: YYYY-MM-DD dates separated by commas (no "
-    "run). overrides: a JSON list of edits, each {\"kind\": move|swap|rest|easy|cap_week_km|long_run_day, ...}: "
-    "move {key, date}, swap {date, date_b}, rest {date}, easy {key}, cap_week_km {week_start, km}, "
-    "long_run_day {week_start, weekday}; keys are the sessions' 'key' values. plan_id: the draft to add a "
+    "run). overrides: a JSON list of edits, each {\"kind\": move|swap|rest|easy|cap_week_km|long_run_day|"
+    "cap_long, ...}: move {key, date}, swap {date, date_b}, rest {date}, easy {key}, cap_week_km {week_start, "
+    "km}, long_run_day {week_start, weekday}, cap_long {date, km} (that day's long run at most km, the rest of "
+    "its week unchanged; refused above the planned km, under 4 km or on a day without a long run); keys are "
+    "the sessions' 'key' values, but prefer a session's date where the edit takes one. plan_id: the draft to add a "
     "version to (empty: a new draft). course_id: the A race's course from get_courses (empty: none) adds "
     "race_pacing, per-segment paces at the goal time from the course's climbs. 'acwr' says whether the planned "
     "all-sport acute:chronic ratio was held at 1.3 (enforced) or only reported, and why.")
@@ -219,7 +227,7 @@ def parse_overrides(value: Any) -> Tuple[pe.Override, ...]:
         return ()
     try:
         raw = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):   # deep nesting too
         raise BadInput("overrides must be a JSON list of edits") from None
     if not isinstance(raw, list) or not all(isinstance(o, dict) for o in raw):
         raise BadInput("overrides must be a JSON list of edits")
@@ -236,6 +244,8 @@ def parse_overrides(value: Any) -> Tuple[pe.Override, ...]:
         if km_value is not None and (isinstance(km_value, bool) or not isinstance(km_value, (int, float))
                                      or not 0 <= km_value <= 300):
             raise BadInput("an override km must be a number from 0 to 300")
+        if o["kind"] == "cap_long" and (km_value is None or not (o.get("date") or key)):
+            raise BadInput("a cap_long override needs km and the long run's date (or its key)")
         out.append(pe.Override(
             kind=o["kind"], key=key,
             date=parse_date(o["date"], "an override date") if o.get("date") else None,
@@ -622,6 +632,18 @@ class PlanService:
             return f"Error: {exc}"
         try:
             plan = pe.build_plan(inputs, snap)
+            refused = plan["overrides"]["refused"]
+            if refused:
+                # A refused edit is never stored: the version keeps only the edits that applied (its inputs and
+                # content_hash), and with none applied to a stored plan no new version is made.
+                kept = tuple(plan["_check"]["ctx"].applied_overrides)
+                if pid is not None and not kept:
+                    same = await asyncio.to_thread(self._unchanged, pid, profile, refused)
+                    if same is not None:
+                        return sc.compact_json(same)
+                inputs = dataclasses.replace(inputs, overrides=kept)
+                plan = pe.build_plan(inputs, snap)
+                plan["overrides"]["refused"] = refused + plan["overrides"]["refused"]
         except pe.PlanError as exc:
             return bad_input_text(str(exc))
         answer = with_dto_checks(pe.plan_answer(plan), snap.lt_speed_mps)
@@ -717,6 +739,24 @@ class PlanService:
             log.warning("plans: no commit token (%s)", type(exc).__name__)
             return {"token": None, "why": "the plan database did not answer"}
 
+    def _unchanged(self, pid: str, profile: Optional[str], refused: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Every override refused for a stored plan: its current version, unchanged (no new version), or None
+        when that plan cannot be read (the preview then answers as usual and says why it was not stored)."""
+        if profile is None:
+            return None
+        try:
+            store = self._store()
+            row = store.get_plan(store.account_fp(profile), pid)
+        except (ps.StoreError, ValueError) as exc:
+            log.warning("plans: the stored plan could not be read (%s)", type(exc).__name__)
+            return None
+        if row is None or not row.get("version_row") or row.get("status") not in ps.OPEN_STATUSES:
+            return None
+        version = row["current_version"]
+        return {"kind": "plan_overrides", "plan_id": pid, "version": version,
+                "overrides": {"applied": [], "refused": refused},
+                "stored": {"plan_id": pid, "version": version, "changed": False}, "note": NOTE_NO_OVERRIDE}
+
     def _save(self, answer: Dict[str, Any], inputs: pe.PlanInputs, pid: Optional[str],
               profile: Optional[str]) -> Dict[str, Any]:
         if profile is None:
@@ -727,6 +767,8 @@ class PlanService:
             store = self._store()
             fp = store.account_fp(profile)
             body = {k: v for k, v in answer.items() if k not in ("window", "sources_failed")}
+            if isinstance(body.get("overrides"), dict):   # refused edits are answered, never stored
+                body["overrides"] = {**body["overrides"], "refused": []}
             new_id, version, changed = store.save_preview(fp, pid, inputs.race_date, pe.RULES_VERSION,
                                                           inputs.echo(), body, answer["content_hash"])
         except ps.PlanNotFound:
