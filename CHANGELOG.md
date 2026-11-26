@@ -169,6 +169,28 @@ and so what a MAJOR, MINOR or PATCH release may change:
   full page of 100 activities settles nothing before the day after its oldest activity.
 - Plan tracking in the daily status: an activity with only a GMT start time is dated by the day
   Garmin listed it under, as the rest of the daily report dates it.
+- Training plans, from an independent review of the engine (each case a regression test,
+  `ext/test_plan_engine_repros.py`; the golden plans are unchanged):
+  - A long-run day that is a rest day (runs Monday to Friday, the long run left on Sunday) planned
+    no long run at all while every invariant passed. The long runs now go on the nearest run day
+    (the later of two), with one warning `long_run_day_not_a_run_day`; `long_cap` fails a plan
+    with no long run in its normal weeks, and feasibility fails `long_run_km` when nothing was
+    planned (it skipped the check).
+  - A half marathon's race pace was clamped to the marathon's 0.85-0.96 x LT while its
+    feasibility accepts goals up to 1.02 x LT: a feasible 1:30 goal trained and raced at
+    4:20-4:28/km instead of 4:16. The half has its own band, 0.85-1.02 (`rules.by_distance`).
+  - Anchored bands: the threshold band's fast end is never faster than the 10K pace and the
+    intervals never faster than the 3K equivalent (the 0.91 x LT floor had stopped the shift, so
+    LT 4:10 with a 4:24 5K gave threshold up to 4:19/km); when the floor conflicts the band
+    narrows and warns `threshold_anchor_conflict`.
+  - Reduce-only overrides (`rest`, `easy`, `cap_km`, `cap_long`, `cap_week_km`) on a long-run
+    day were refused (`long_cap`, `easy_share`): resting a sick day was impossible. They are no
+    longer refused for `long_step`, `long_cap` or `easy_share`; those rules count the edited
+    sessions as built, so a reduced long run is not the step reference, and the edited week warns
+    `override_relaxed`. An emptied week (`cap_week_km` 0) is no longer a gap that refuses the edit.
+  - Marathon-pace work without a pace target (no goal and no prediction) counted metres as
+    seconds in the 80%-easy check, so MP sessions shrank to 3 km or were dropped; it is timed at
+    the corrected goal's pace now (and a step whose band is outside the speed limits at that band).
 
 ## [1.0.5] - 2026-11-25
 
