@@ -45,7 +45,12 @@ and so what a MAJOR, MINOR or PATCH release may change:
   return or a line feed; no `data` or `files` body beside the checked `json`), and only with
   `PLAN_WRITES=on` the four workout-service paths the plan writes use.
 - Plan tracking, off by default (`PLAN_TRACKING=on`, which needs `PLAN_TOOLS=on`): finished
-  activities are linked to the plan's sessions without any Garmin write, refreshed by the status
+  activities are linked to the active plan's sessions without any Garmin write (a draft is never
+  tracked: no plan section in the status reports, and `log_feedback` and `plan_review_week` refuse
+  it with a fixed text; `plan_get` still shows it); `plan_activate` starts following a stored draft
+  or stops following the active plan (it becomes a draft again; refused while the plan has workouts
+  on the Garmin calendar), in the app's own database only and without any Garmin call, so tracking
+  works with `PLAN_WRITES` off (`plan_commit` also starts a plan); refreshed by the status
   tools and shown by `plan_get`; `log_feedback` stores RPE, pain and a fixed pain location in the
   app's own database only; `plan_review_week` reviews a week by plan review rules v1 and proposes
   changes that only hold or reduce load, which `plan_preview` (`accept_changes`) applies to the

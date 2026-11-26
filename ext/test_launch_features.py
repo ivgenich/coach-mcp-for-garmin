@@ -736,7 +736,7 @@ class PlanToolPolicy(UpstreamCase):
         writes = self.launch.allowed_tools(self.on(PLAN_WRITES="on"))
         self.assertEqual(writes, allowed | {"plan_commit", "plan_cancel"})
         self.assertFalse(self.launch.OWN_WRITE_TOOLS & allowed)
-        self.assertFalse({"log_feedback", "plan_apply_changes"} & writes)
+        self.assertFalse({"log_feedback", "plan_activate", "plan_apply_changes"} & writes)
         self.assertEqual(self.launch.allowed_tools(self.on(GARMIN_ENABLED_TOOLS="plan_get,get_stats")),
                          {"plan_get", "get_stats"})
 
@@ -758,42 +758,48 @@ class PlanToolPolicy(UpstreamCase):
         default = self.launch.allowed_tools(self.on())
         self.assertNotIn("log_feedback", default)
         allowed = self.launch.allowed_tools(self.on(PLAN_TRACKING="on"))
-        self.assertEqual(allowed, default | {"log_feedback", "plan_review_week"})
+        self.assertEqual(allowed, default | {"log_feedback", "plan_activate", "plan_review_week"})
         self.assertNotIn("plan_review_week", default)
         self.assertIn("plan_review_week", self.launch.OWN_READ_TOOLS)
         self.assertEqual(self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_review_week")),
-                         {"plan_review_week", "log_feedback"})
+                         {"plan_review_week", "log_feedback", "plan_activate"})
         with self.assertRaises(self.launch.ConfigError):
             self.launch.allowed_tools(self.on(GARMIN_ENABLED_TOOLS="plan_review_week"))
         # Only the switch admits it: GARMIN_ENABLED_TOOLS cannot name it, and narrowing keeps it.
-        with self.assertRaises(self.launch.ConfigError):
-            self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="log_feedback"))
+        for name in ("log_feedback", "plan_activate"):
+            with self.assertRaises(self.launch.ConfigError):
+                self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS=name))
         self.assertEqual(self.launch.allowed_tools(self.on(PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_get")),
-                         {"plan_get", "log_feedback"})
+                         {"plan_get", "log_feedback", "plan_activate"})
         for env in (self.on(PLAN_TRACKING="on", GARMIN_AUTH="key"), self.on(PLAN_TRACKING="on", ROLE="worker"),
                     {**FULL, "HISTORY_SEARCH": "on", "PLAN_TRACKING": "on"}):
             with self.subTest(env=sorted(env.items())):
                 try:
-                    self.assertFalse({"log_feedback", "plan_review_week"} & self.launch.allowed_tools(env))
+                    self.assertFalse({"log_feedback", "plan_activate", "plan_review_week"}
+                                     & self.launch.allowed_tools(env))
                 except self.launch.ConfigError:
                     pass
         self.assertIn("log_feedback", self.launch.NO_GARMIN_TOOLS)
+        self.assertIn("plan_activate", self.launch.NO_GARMIN_TOOLS)   # never calls Garmin: the guard skips it
 
     def test_tracking_annotations_only_with_the_switch(self):
         self.launch.patch()
-        for name in ("ADDITIVE_TOOLS", "IDEMPOTENT_TOOLS", "LOCAL_ONLY_TOOLS", "READ_ONLY_TOOLS"):
-            self.assertNotIn("log_feedback", getattr(self.annotations, name))
+        for tool in ("log_feedback", "plan_activate"):
+            for name in ("ADDITIVE_TOOLS", "IDEMPOTENT_TOOLS", "LOCAL_ONLY_TOOLS", "READ_ONLY_TOOLS"):
+                self.assertNotIn(tool, getattr(self.annotations, name))
         self.launch._FEATURES = feature_config.load(self.on(PLAN_TRACKING="on"))
         self.launch.patch()
-        self.assertIn("log_feedback", self.annotations.ADDITIVE_TOOLS)
-        self.assertIn("log_feedback", self.annotations.IDEMPOTENT_TOOLS)
-        self.assertIn("log_feedback", self.annotations.LOCAL_ONLY_TOOLS)
-        self.assertNotIn("log_feedback", self.annotations.READ_ONLY_TOOLS)
-        hints = self.annotations.annotations_for("log_feedback")
-        self.assertFalse(hints.read_only_hint)
-        self.assertFalse(hints.destructive_hint)
-        self.assertTrue(hints.idempotent_hint)
-        self.assertFalse(hints.open_world_hint)
+        for tool in ("log_feedback", "plan_activate"):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, self.annotations.ADDITIVE_TOOLS)
+                self.assertIn(tool, self.annotations.IDEMPOTENT_TOOLS)
+                self.assertIn(tool, self.annotations.LOCAL_ONLY_TOOLS)
+                self.assertNotIn(tool, self.annotations.READ_ONLY_TOOLS)
+                hints = self.annotations.annotations_for(tool)
+                self.assertFalse(hints.read_only_hint)
+                self.assertFalse(hints.destructive_hint)
+                self.assertTrue(hints.idempotent_hint)
+                self.assertFalse(hints.open_world_hint)
     def test_write_tools_only_from_the_switch(self):
         for env in (self.on(PLAN_WRITES="on", GARMIN_AUTH="key"), self.on(PLAN_WRITES="on", PLAN_TOOLS="off"),
                     {**FULL, "PLAN_WRITES": "on"}):
@@ -807,7 +813,8 @@ class PlanToolPolicy(UpstreamCase):
         self.assertEqual(narrowed, {"plan_get", "plan_commit", "plan_cancel"})
         # plan_apply_changes needs both switches (its token comes from plan_review_week).
         both = self.launch.allowed_tools(self.on(PLAN_WRITES="on", PLAN_TRACKING="on", GARMIN_ENABLED_TOOLS="plan_get"))
-        self.assertEqual(both, {"plan_get", "plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback"})
+        self.assertEqual(both, {"plan_get", "plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback",
+                                "plan_activate"})
         self.assertNotIn("plan_apply_changes", self.launch.allowed_tools(self.on(PLAN_TRACKING="on")))
         for name in ("plan_cancel", "log_feedback"):
             with self.assertRaises(self.launch.ConfigError) as cm:
@@ -863,7 +870,7 @@ class PlanToolPolicy(UpstreamCase):
     def test_check_config_line_names_the_write_tools_only_with_writes(self):
         """Every PLAN_WRITES x PLAN_TRACKING combination: only the read-only tools are counted as read-only."""
         base = len(self.launch.allowed_tools(self.on()))
-        feedback = "; log_feedback writes only the app's database"
+        feedback = "; log_feedback and plan_activate write only the app's database"
         for writes in ("off", "on"):
             for tracking in ("off", "on"):
                 env = self.on(PLAN_WRITES=writes, PLAN_TRACKING=tracking)

@@ -103,7 +103,12 @@ With plan tracking on too (`PLAN_TRACKING=on`, which needs `PLAN_TOOLS=on`), the
 for one session of the plan. It writes only the app's own database, never Garmin (the server's
 instructions say so instead of "No tool changes any data."), so it is annotated additive, idempotent and local-only (never read-only); only the switch adds
 it (`config/enabled-tools.txt` and `GARMIN_ENABLED_TOOLS` cannot name it). The same switch links finished
-activities to the plan's sessions; `plan_get` shows those links.
+activities to the plan's sessions; `plan_get` shows those links. Tracking follows the active plan only, so
+the switch also adds `plan_activate`: it starts following a stored draft (`action` `start`, with the
+`version` you approved) or stops following the active plan (`stop`: it becomes a draft again; refused while
+the plan has workouts on the Garmin calendar). It never calls Garmin, writes only the app's own database and
+is annotated like `log_feedback`; its description tells Claude to call it only after you agreed in the
+conversation. With `PLAN_WRITES=on`, `plan_commit` also starts a plan.
 [Training plans: tracking](training-plan.md#tracking).
 
 The same switch adds `plan_review_week`, the weekly review: it reads the week from Garmin and the plan database

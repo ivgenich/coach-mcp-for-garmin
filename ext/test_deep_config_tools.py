@@ -23,7 +23,7 @@ from test_launch_support import (enabled_tools, fake_db_url, FULL, HAVE_UPSTREAM
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY_FILE = os.path.join(HERE, os.pardir, "config", "enabled-tools-key.txt")
-OWN_WRITES = frozenset({"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback"})
+OWN_WRITES = frozenset({"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback", "plan_activate"})
 SWITCH_TOOLS = frozenset({"find_similar_weeks", "search_history", "plan_assess", "plan_preview", "plan_get",
                           "plan_review_week"}) | OWN_WRITES
 NOT_SHOWN = "GARMIN_ENABLED_TOOLS: an entry is not a tool name (it is not shown)"

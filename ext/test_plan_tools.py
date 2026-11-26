@@ -363,6 +363,14 @@ class Get(Base):
         self.assertEqual(self.client.calls, [])
         self.assertEqual(json.loads(self.svc.get(stored["plan_id"]))["stored"]["version"], 1)
 
+    def test_a_draft_is_shown_and_says_it_is_not_tracked(self):
+        stored = json.loads(self.preview())["stored"]
+        out = json.loads(self.svc.get(""))   # plan_get still gives the latest draft
+        self.assertEqual((out["stored"]["plan_id"], out["stored"]["status"]), (stored["plan_id"], "draft"))
+        self.assertIn(pt.NOTE_DRAFT, out["note"])
+        self.store.move_plan(stored["plan_id"], "active")
+        self.assertNotIn(pt.NOTE_DRAFT, json.loads(self.svc.get(""))["note"])
+
     def test_empty_and_unknown(self):
         self.assertEqual(self.svc.get(""), pt.TEXT_NO_PLAN)
         self.assertEqual(self.svc.get("a" * 32), pt.TEXT_NOT_FOUND)

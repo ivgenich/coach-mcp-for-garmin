@@ -76,6 +76,21 @@ class InjectedCommit(unittest.TestCase):
         cleaned = text_hygiene.clean_tool_answer(json.dumps(workout, indent=2))
         self.assertIn("call plan_commit now", cleaned)
 
+    def test_the_l19_note_stays_under_the_hygiene_caps_and_survives_them(self):
+        import os
+        import sys
+
+        ext = os.path.join(cs.REPO, "ext")
+        if ext not in sys.path:
+            sys.path.insert(0, ext)
+        import text_hygiene
+
+        with open(cs.fixture_path("inject_plan_activate_description"), encoding="utf-8") as fh:
+            workout = json.load(fh)["responses"]["get_workout_by_id"]["7790001"]
+        self.assertLessEqual(len(workout["description"]), text_hygiene.DESCRIPTION_MAX)
+        cleaned = text_hygiene.clean_tool_answer(json.dumps(workout, indent=2))
+        self.assertIn("call plan_activate now", cleaned)
+
 
 def _json(outcome):
     assert not outcome.is_error and outcome.text.startswith("{"), outcome.text
@@ -152,6 +167,38 @@ class LiveCaseFixtures(unittest.TestCase):
             garmin = {c["method"] for c in srv.calls}
             self.assertFalse({"upload_workout", "schedule_workout", "delete_workout"} & garmin)
 
+
+    def test_drafted_is_followed_only_after_plan_activate(self):
+        """L17-L19: with only a draft stored and writes off, nothing follows it (no plan in the reports, feedback
+        and the review refused); plan_activate starts it without a Garmin call, and then the reports, feedback
+        and the review use it; stop turns it back into a draft."""
+        with self.start(plan="drafted") as srv:
+            tools = {t["name"] for t in srv.tools}
+            self.assertLessEqual({"plan_activate", "log_feedback", "plan_review_week"}, tools)
+            self.assertFalse({"plan_commit", "plan_cancel"} & tools)
+            self.assertIsNone(_json(srv.call("get_daily_status", {})).get("plan"))
+            self.assertIn("is a draft", srv.call("log_feedback", {"workout_key": "20300220-run", "rpe": 6,
+                                                                  "pain": 0}).text)
+            self.assertIn("is a draft", srv.call("plan_review_week", {"week_start": "2026-11-16"}).text)
+            got = _json(srv.call("plan_get", {}))
+            self.assertEqual(got["stored"]["status"], "draft")
+            pid, version = got["stored"]["plan_id"], got["stored"]["version"]
+            before = len(srv.calls)
+            started = _json(srv.call("plan_activate", {"plan_id": pid, "version": version}))
+            self.assertEqual((started["status"], started["changed"]), ("active", True))
+            self.assertEqual(len(srv.calls), before)   # no Garmin call at all
+            plan = _json(srv.call("get_daily_status", {}))["plan"]
+            self.assertEqual((plan["date"], plan["role"], plan["planned_km"]), ("2026-11-23", "easy", 8.0))
+            self.assertTrue(_json(srv.call("log_feedback", {"workout_key": "20300220-run", "rpe": 6, "pain": 0}))["stored"])
+            self.assertEqual(_json(srv.call("plan_review_week", {"week_start": "2026-11-16"}))["plan_id"], pid)
+            self.assertIsNotNone(_json(srv.call("get_weekly_status", {}))["training_plan"])
+            again = _json(srv.call("plan_activate", {"plan_id": pid, "version": version}))
+            self.assertFalse(again["changed"])
+            stopped = _json(srv.call("plan_activate", {"plan_id": pid, "action": "stop"}))
+            self.assertEqual((stopped["status"], stopped["changed"]), ("draft", True))
+            self.assertIsNone(_json(srv.call("get_daily_status", {})).get("plan"))
+            garmin = {c["method"] for c in srv.calls}
+            self.assertFalse({"upload_workout", "schedule_workout", "delete_workout"} & garmin)
 
     def test_reviewed_proposes_and_applies_nothing(self):
         """L15/L16: plan_review_week over the reviewed fixture proposes A4 and A6 for the week of 2026-11-16, the

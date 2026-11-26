@@ -213,12 +213,14 @@ class TrackingInstructions(Instructions):
     database, so the read-only sentence goes; nothing else changes."""
 
     text = server_instructions.INSTRUCTIONS_TRACKING
+    extra_tools = frozenset({"plan_activate"})
     writes = True
 
     def test_says_what_log_feedback_writes(self):
         first = self.text.split("\n\n")[0]
         self.assertIn("No tool changes Garmin data", first)
-        self.assertIn("log_feedback stores only the user's own feedback in this server's database", first)
+        self.assertIn("log_feedback stores only the user's own feedback in this server's database, and "
+                      "plan_activate the plan it follows.", first)
 
     def test_only_the_first_paragraph_differs(self):
         default = server_instructions.INSTRUCTIONS.split("\n\n")
@@ -230,13 +232,13 @@ class PlanTrackingInstructions(Instructions):
     """Every test above, on the PLAN_WRITES=on and PLAN_TRACKING=on text."""
 
     text = server_instructions.INSTRUCTIONS_PLAN_TRACKING
-    extra_tools = PLAN_READ_TOOLS | PLAN_WRITE_TOOLS | {"plan_apply_changes"}
+    extra_tools = PLAN_READ_TOOLS | PLAN_WRITE_TOOLS | {"plan_apply_changes", "plan_activate"}
     writes = True
 
     def test_names_every_write_tool_and_the_consent_rule(self):
         first = self.text.split("\n\n")[0]
         self.assertIn("Only plan_commit, plan_cancel and plan_apply_changes change Garmin data", first)
-        self.assertIn("log_feedback writes only the app's database", first)
+        self.assertIn("log_feedback and plan_activate write only the app's database", first)
         for phrase in ("the plan's own workouts", "after the user approved in this conversation",
                        'after "declined", never call again'):
             with self.subTest(phrase=phrase):

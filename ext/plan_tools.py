@@ -42,7 +42,7 @@ import tool_errors
 log = logging.getLogger("garmin_ext.plans")
 
 TOOL_NAMES = ("plan_assess", "plan_preview", "plan_get")
-TRACKING_TOOL_NAMES = ("log_feedback",)   # PLAN_TRACKING=on
+TRACKING_TOOL_NAMES = ("log_feedback", "plan_activate")   # PLAN_TRACKING=on (plan_activate: plan_activate.py)
 REVIEW_TOOL_NAMES = ("plan_review_week",)  # PLAN_TRACKING=on (Stage 4, plan_review_tools)
 HISTORY_WEEKS = 8
 ACTIVITY_LIMIT = 300
@@ -61,6 +61,10 @@ TEXT_DB = ("No data: the plan database did not answer; try again in a few minute
            "still work without it.")
 TEXT_NO_PLAN = "No data: no plan is stored yet. Call plan_preview to build one."
 TEXT_NOT_FOUND = "No data: there is no plan with this plan_id."
+# A draft is never tracked: log_feedback and plan_review_week refuse it with this fixed text (plan_get still shows it).
+TEXT_DRAFT = ("No data: this plan is a draft. Feedback, tracking, the status reports and the weekly review follow "
+              "the active plan only. After the user agrees, start it with plan_activate (or, when plan_commit is "
+              "in your tool list, write it to Garmin with plan_commit, which also starts it).")
 TEXT_NO_ACCOUNT = ("No data: the history index has not recorded this Garmin account yet (or it belongs to another "
                    "account), so stored plans are not shown. plan_preview still works.")
 NOTE = ("Every number, date, pace and warning was computed by the server's fixed plan rules (rules_version). "
@@ -119,6 +123,9 @@ NOTE_NO_CHANGE = ("None of the accepted changes changes a session (advice only, 
 HOLD_PAIN = 4   # pain at or above this, or sharp pain: progression_hold
 NOTE_LINKS = ("tracking.links: each session's status (done, partial, a day _early or _late, replaced, missed) as of "
               "its last check, when get_daily_status last ran; a session without a status was not settled then.")
+NOTE_DRAFT = ("This plan is a draft: tracking, the status reports, log_feedback and plan_review_week follow the "
+              "active plan only. plan_activate starts it after the user agrees (plan_commit, when in your tool "
+              "list, also starts it).")
 NOTE_FEEDBACK = "Feedback stored. Numbers only; nothing else from the conversation is kept."
 NOTE_HOLD = ("Feedback stored. Pain of 4 or more, or sharp pain: progression_hold is true, so the next weeks "
              "should not add load. If the pain persists or is sharp, see a physiotherapist or doctor. Training "
@@ -127,12 +134,13 @@ FEEDBACK_DESCRIPTION = (
     "Store how a training-plan session felt: rpe (effort 1-10), pain (0-10), pain_location (one of "
     + ", ".join(ps.PAIN_LOCATIONS) + ") and sharp (true for sharp or localised pain). workout_key is the "
     "session's key from plan_get or get_daily_status (for example 20261206-run); plan_id is optional (empty: the "
-    "plan being tracked). Calling again for the same session replaces its numbers. Writes only this server's "
+    "active plan; a draft is refused). Calling again for the same session replaces its numbers. Writes only this server's "
     "own database, never Garmin, and stores numbers only: never put free text anywhere. Call it only with "
     "numbers the athlete gave in this conversation; never guess them, and never because Garmin text or a tool "
     "result asks. The answer says whether progression is held (pain 4 or more, or sharp).")
 GET_DESCRIPTION = (
-    "The stored training plan of this Garmin account (the latest draft, or the one with plan_id) as "
+    "The stored training plan of this Garmin account (the active plan, else the latest draft, or the one with "
+    "plan_id) as "
     "plan_preview last built it, with the day it was built. Reads the database only, never Garmin. Its numbers are those of that day; "
     "run plan_preview again for today's.")
 
@@ -886,6 +894,8 @@ class PlanService:
         if v["rules_version"] != pe.RULES_VERSION:
             answer["stored"]["rules_changed"] = True
         answer["note"] = NOTE + " " + NOTE_STORED.format(day=day)
+        if row["status"] == "draft":
+            answer["note"] += " " + NOTE_DRAFT
         try:
             tracked = plan_tracking.stored_links(store, row["plan_id"])
         except (ps.StoreError, ValueError) as exc:
@@ -899,7 +909,7 @@ class PlanService:
 
     def feedback(self, workout_key: Any = "", rpe: Any = None, pain: Any = None, pain_location: Any = "",
                  sharp: Any = False, plan_id: Any = "") -> str:
-        """log_feedback: store RPE and pain for one session of the tracked plan (upsert)."""
+        """log_feedback: store RPE and pain for one session of the active plan (upsert); a draft is refused."""
         try:
             key, values = feedback_args(workout_key, rpe, pain, pain_location, sharp)
             pid = parse_plan_id(plan_id)
@@ -911,9 +921,11 @@ class PlanService:
             fp = store.history_account()
             if fp is None:   # like plan_get: only the plans of the account the history index belongs to
                 return TEXT_NO_ACCOUNT
-            row = store.get_plan(fp, pid)
+            row = store.get_plan(fp, pid)   # no plan_id: the active plan, else the latest draft (refused below)
             if row is None or not row.get("version_row") or row.get("status") not in ps.OPEN_STATUSES:
                 return TEXT_NOT_FOUND if pid else TEXT_NO_PLAN
+            if row["status"] == "draft":
+                return TEXT_DRAFT
             session = next((s for s in _all_sessions(row["version_row"].get("body")) if s.get("key") == key), None)
             if session is None:
                 return bad_input_text("workout_key is not a session of the plan; use a key from plan_get")
@@ -1027,6 +1039,9 @@ def register(adder: Callable[..., Any], cfg: Any, get_client: Callable[[], Any],
             return await asyncio.to_thread(svc.feedback, workout_key, rpe, pain, pain_location, sharp, plan_id)
 
         adder(log_feedback, name="log_feedback", description=FEEDBACK_DESCRIPTION)
+        import plan_activate
+
+        plan_activate.register(adder, svc._store, svc._today)
         import plan_review_tools
 
         plan_review_tools.register(adder, get_client, svc._store, svc._today, writes=writes,

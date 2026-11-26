@@ -56,7 +56,7 @@ Checks (each prints PASS/FAIL with a reason, or SKIP; exit status 1 on any FAIL)
   write-tools (with --write-tools NAMES, a server with PLAN_WRITES=on) each
               named tool is listed in both eras with readOnlyHint=false,
               idempotentHint=true and the destructiveHint its kind has
-              (plan_commit, log_feedback additive; plan_cancel,
+              (plan_commit, log_feedback, plan_activate additive; plan_cancel,
               plan_apply_changes destructive); the instructions no longer
               say "No tool changes any data.". No write tool is ever called.
 
@@ -131,7 +131,7 @@ TOOL_ERROR_MAX = 400
 TOOL_ERROR_LEAKS = ("2026-02-30", "Traceback", "Error executing tool")
 # --write-tools: the own write tools a server may serve with its switches on (launch.OWN_WRITE_TOOLS) and the
 # destructiveHint each must carry (ADDITIVE: False, DESTRUCTIVE: True); every one is idempotentHint=true.
-WRITE_TOOL_DESTRUCTIVE = {"plan_commit": False, "log_feedback": False, "plan_cancel": True,
+WRITE_TOOL_DESTRUCTIVE = {"plan_commit": False, "log_feedback": False, "plan_activate": False, "plan_cancel": True,
                           "plan_apply_changes": True}
 READ_ONLY_SENTENCE = "No tool changes any data."
 

@@ -17,6 +17,10 @@ plan_tracking.configured_store() at the same memory store, which get_daily_statu
 read. The store holds TRACKED_PLAN, active since 2026-11-16: yesterday's long run (2026-11-22, which the world's
 14 km run completes, so its feedback is due) and today's easy run (2026-11-23, not run yet).
 
+A case with plan = "drafted" runs as "tracked" but stores TRACKED_PLAN as a draft only (nothing active): the
+status reports have no plan section, log_feedback and plan_review_week refuse the draft, and plan_activate
+(served with PLAN_TRACKING=on, writes off) is the only way to start it, which needs the user's yes.
+
 A case with plan = "reviewed" runs as "tracked" over REVIEWED_PLAN instead (three weeks from 2026-11-09, active
 since then, its inputs a real plan_engine echo so plan_preview(accept_changes) can rebuild it) with the athlete's
 feedback seeded: easy runs at RPE 6 in both past weeks and pain 5 (calf) after the long run of 2026-11-22. Stage 4's
@@ -43,9 +47,11 @@ from __future__ import annotations
 import json
 from unittest import mock
 
-FIXTURES = ("memory", "tracked", "reviewed", "off")
-# The tool plan = "tracked" adds (launch.PLAN_TRACKING_TOOLS; test_cases checks it).
-TRACKING_TOOLS = ("log_feedback",)
+FIXTURES = ("memory", "tracked", "reviewed", "drafted", "off")
+# The tools plan = "tracked" (and "reviewed", "drafted") adds (launch.PLAN_TRACKING_TOOLS; test_cases checks it).
+TRACKING_TOOLS = ("log_feedback", "plan_activate")
+# The fixtures that turn PLAN_TRACKING on.
+TRACKED_FIXTURES = ("tracked", "reviewed", "drafted")
 # The tool PLAN_TRACKING=on adds as a read tool (launch.PLAN_REVIEW_TOOLS), with plan = "tracked" or "reviewed".
 REVIEW_TOOLS = ("plan_review_week",)
 # plan = "tracked": the stored plan's weeks (plan_tracking.plan_sessions reads key, date, role, km, minutes).
@@ -95,12 +101,14 @@ def install(stack, launch, writes="off", plan="memory") -> object:
     if writes not in WRITES_FIXTURES:
         raise ValueError(f"writes must be one of {WRITES_FIXTURES}, got {writes!r}")
     if plan not in FIXTURES or plan == "off":
-        raise ValueError(f"plan must be 'memory', 'tracked' or 'reviewed', got {plan!r}")
-    tracked = plan in ("tracked", "reviewed")
+        raise ValueError(f"plan must be 'memory', 'tracked', 'reviewed' or 'drafted', got {plan!r}")
+    tracked = plan in TRACKED_FIXTURES
     store = plan_store.MemoryPlanStore(clock=_Clock()) if tracked else plan_store.MemoryPlanStore()
     store.meta[plan_store.META_ACCOUNT] = store.account_fp(PROFILE_ID)
     if plan == "tracked":
         _seed_tracked(store)
+    elif plan == "drafted":
+        _seed_tracked(store, active=False)
     elif plan == "reviewed":
         _seed_reviewed(store)
     real_allowed = launch.allowed_tools
@@ -130,8 +138,9 @@ class _Clock:
         return self.now
 
 
-def _seed_tracked(store):
-    """TRACKED_PLAN as the account's active plan, created and activated at TRACKED_SINCE."""
+def _seed_tracked(store, active=True):
+    """TRACKED_PLAN as the account's active plan, created and activated at TRACKED_SINCE (active=False: stored as
+    a draft only, created then)."""
     import datetime as dt
     import hashlib
 
@@ -139,7 +148,8 @@ def _seed_tracked(store):
     race = dt.date(2027, 2, 26)
     pid, _, _ = store.save_preview(fp, None, race, 1, {"race_date": race.isoformat()}, TRACKED_PLAN,
                                    hashlib.sha256(b"eval-tracked").hexdigest())
-    store.move_plan(pid, "active")
+    if active:
+        store.move_plan(pid, "active")
     store._clock.now = dt.datetime.fromisoformat(TRACKED_NOW)
 
 

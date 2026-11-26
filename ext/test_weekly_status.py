@@ -1858,6 +1858,25 @@ class TrainingPlanCounts(unittest.TestCase):
         for key in ("level", "flags", "missing", "plan", "rules_version"):
             self.assertEqual(out[key], base[key])
 
+    def test_a_draft_has_no_counts_only_the_active_plan(self):
+        import plan_store as ps
+        import plan_tracking
+
+        store = ps.MemoryPlanStore()
+        fp = store.account_fp("71000001")
+        body = {"weeks": [{"week": 1, "start": "2026-03-02", "end": "2026-03-08", "sessions": [
+            {"key": "20260303-run", "date": "2026-03-03", "role": "easy", "km": 8.0, "minutes": 50}]}]}
+        pid, _, _ = store.save_preview(fp, None, dt.date(2026, 4, 26), 1, {}, body, "d" * 64)
+        plan_tracking.configure(lambda: store)
+        self.addCleanup(plan_tracking.configure, None)
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertIsNone(out["training_plan"])
+        self.assertNotIn("Training plan:", out["text"])
+        store.move_plan(pid, "active")
+        out = self.build_with(plan_tracking, text_format="markdown")
+        self.assertEqual(out["training_plan"]["planned"], 1)
+        self.assertIn("Training plan:", out["text"])
+
     def test_no_plan_week_is_null(self):
         out = self.build_with(fake_tracking(counts=None), text_format="markdown")
         self.assertIsNone(out["training_plan"])

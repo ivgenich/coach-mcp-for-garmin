@@ -1,4 +1,4 @@
-"""plan_review_week (PLAN_TRACKING=on, Stage 4): the weekly review of the tracked plan.
+"""plan_review_week (PLAN_TRACKING=on, Stage 4): the weekly review of the active plan.
 
 It reads Garmin for the reviewed week (the activities from two weeks before it to today, the calendar for
 Garmin's own links, HRV of four weeks, the week's nights, Garmin's training status at the week's end, and,
@@ -54,7 +54,7 @@ DESCRIPTION = (
     "change has a change_id, a reason sentence with its number, and evidence (metric, value, threshold). "
     "Changes only hold or reduce load. Nothing changes until the user approves: then call plan_preview with "
     "plan_id and accept_changes. Reads Garmin and the plan database; stores the proposals only.\n\n"
-    "Arguments: plan_id (empty: the tracked plan); week_start, the Monday of the week to review as YYYY-MM-DD "
+    "Arguments: plan_id (empty: the active plan; a draft is refused); week_start, the Monday of the week to review as YYYY-MM-DD "
     "(empty: the last week that has ended, or this week on a Sunday).")
 DESCRIPTION_APPLY = (
     " Garmin writes are on: the answer may carry apply {token, change_ids, ops}; plan_apply_changes writes the "
@@ -292,9 +292,11 @@ class ReviewService:
         missing (cut)."""
         store = self._store()
         fp = store.account_fp(profile)
-        plan = store.get_plan(fp, pid) if pid else store.tracked_plan(fp)
+        plan = store.get_plan(fp, pid)   # no plan_id: the active plan, else the latest draft (refused below)
         if plan is None or not plan.get("version_row") or plan.get("status") not in ps.OPEN_STATUSES:
             return pt.TEXT_NOT_FOUND if pid else TEXT_NO_PLAN
+        if plan["status"] == "draft":   # only the active plan is tracked and reviewed
+            return pt.TEXT_DRAFT
         weeks = [w for w in plan["version_row"]["body"].get("weeks") or [] if isinstance(w, dict)]
         if not any(str(w.get("start")) <= week.isoformat() <= str(w.get("end")) for w in weeks):
             raise pt.BadInput("week_start is not a week of this plan")

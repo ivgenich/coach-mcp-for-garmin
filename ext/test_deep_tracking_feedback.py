@@ -57,6 +57,7 @@ class Base(unittest.TestCase):
         self.fp = self.store.account_fp("424242")
         self.store.meta[ps.META_ACCOUNT] = self.fp
         self.pid, _, _ = self.store.save_preview(self.fp, None, RACE, 1, {}, body(), hashlib.sha256(b"a").hexdigest())
+        self.store.move_plan(self.pid, "active")   # feedback goes to the active plan only
         self.today = day(1)
         self.svc = pt.PlanService(lambda: None, lambda: self.store, lambda: self.today)
         logger = logging.getLogger("garmin_ext.plans")
@@ -214,10 +215,10 @@ class Storage(Base):
 
     def test_the_tracked_plan_is_the_active_one(self):
         draft, _, _ = self.store.save_preview(self.fp, None, RACE, 1, {}, body(), hashlib.sha256(b"c").hexdigest())
-        self.store.move_plan(self.pid, "active")
         self.clock.now += dt.timedelta(hours=1)
         self.assertEqual(self.ok()["plan_id"], self.pid)                       # the active plan, not the newer draft
-        self.assertEqual(self.ok(plan_id=draft)["plan_id"], draft)
+        self.assertEqual(self.log(plan_id=draft), pt.TEXT_DRAFT)              # a draft is refused
+        self.assertEqual(self.store.feedback(draft), [])
 
     def test_database_failures(self):
         class Broken(ps.MemoryPlanStore):

@@ -82,6 +82,7 @@ def plan_store(sessions, weeks=2, start=MON, created=dt.datetime(2026, 11, 1, tz
     fp = store.account_fp(str(PROFILE))
     pid, _, _ = store.save_preview(fp, None, RACE, 1, {}, body(sessions, weeks, start),
                                    hashlib.sha256(json.dumps(sessions).encode()).hexdigest())
+    store.move_plan(pid, "active")   # the reports follow the active plan only
     return store, fp, pid
 
 

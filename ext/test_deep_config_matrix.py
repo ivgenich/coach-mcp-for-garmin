@@ -61,11 +61,12 @@ PLAN_READ = frozenset({"plan_assess", "plan_get", "plan_preview"})
 REVIEW = frozenset({"plan_review_week"})
 GARMIN_WRITES = frozenset({"plan_commit", "plan_cancel"})
 APPLY = frozenset({"plan_apply_changes"})
-FEEDBACK = frozenset({"log_feedback"})
+FEEDBACK = frozenset({"log_feedback", "plan_activate"})
 WRITE_TOOLS = GARMIN_WRITES | APPLY | FEEDBACK
 # (readOnly, destructive, idempotent, openWorld) as launch.py and SECURITY.md specify them.
 WRITE_HINTS = {"plan_commit": (False, False, True, True), "plan_cancel": (False, True, True, True),
-               "plan_apply_changes": (False, True, True, True), "log_feedback": (False, False, True, False)}
+               "plan_apply_changes": (False, True, True, True), "log_feedback": (False, False, True, False),
+               "plan_activate": (False, False, True, False)}
 
 
 def sha(text):
@@ -274,7 +275,7 @@ def expected_ok_line(cfg, key):
         ("plan writes on", cfg["plan_writes"]), ("plan tracking on", cfg["plan_tracking"])) if on)
     extra = f"; {summary}" if summary else ""
     if tools & FEEDBACK:
-        extra = f"; log_feedback writes only the app's database{extra}"
+        extra = f"; log_feedback and plan_activate write only the app's database{extra}"
     reads = len(tools - WRITE_TOOLS)
     if key:
         return f"launch: config OK ({reads} read-only tools, Garmin Personal API key{extra})"

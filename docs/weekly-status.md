@@ -27,7 +27,7 @@ nothing is due yet). The daily status keeps the same-day rule.
 With plan tracking on (`PLAN_TRACKING=on`, see [Training plans](training-plan.md)), the
 answer also has `training_plan`, right after `plan`: the stored training plan's sessions of
 the 7 days from `start`, as `planned`, `done`, `partial`, `missed`, `replaced`, `moved` and
-`open` (not settled yet), or `null` when there is no tracked plan, it has no session in
+`open` (not settled yet), or `null` when there is no active plan (a draft is never counted), it has no session in
 those days, or its database read failed. Before counting, the report refreshes the plan's
 links from its 14 days of activities and the week's calendar (the daily status's two days
 cannot settle a session as missed; a failed activity search settles nothing, and a full page

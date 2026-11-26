@@ -242,7 +242,7 @@ def start_server(mode, state, now, tz, *, timeout=CALL_TIMEOUT_S, history="off",
     "mismatch") adds find_similar_weeks and search_history over it; "off" (the default) leaves them out.
     plan: "memory" adds plan_assess, plan_preview and plan_get over an in-memory plan store (full mode only);
     "tracked" also turns PLAN_TRACKING on (log_feedback, plan_review_week, the plan in the status reports) over
-    plans.TRACKED_PLAN; "reviewed" the same over plans.REVIEWED_PLAN with feedback stored (the weekly review).
+    plans.TRACKED_PLAN; "drafted" the same with that plan a draft only (plan_activate starts it); "reviewed" the same over plans.REVIEWED_PLAN with feedback stored (the weekly review).
     writes (needs plan="memory"): "on", "declined" or "committed" serves the real plan_commit and plan_cancel
     as PLAN_WRITES=on does (plans.py: "declined" declines every confirmation form, "committed" has the next 7 days
     of the Tel Aviv plan on Garmin before the first call).

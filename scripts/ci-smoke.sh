@@ -325,7 +325,7 @@ fi
 PLAN_HISTORY_TOOLS="find_similar_weeks search_history"
 PLAN_READ_TOOLS="plan_assess plan_get plan_preview"
 PLAN_REVIEW_TOOLS="plan_review_week"
-PLAN_WRITE_TOOLS="log_feedback plan_apply_changes plan_cancel plan_commit"
+PLAN_WRITE_TOOLS="log_feedback plan_activate plan_apply_changes plan_cancel plan_commit"
 PLAN_GARMIN_WRITE_TOOLS="plan_apply_changes plan_cancel plan_commit"
 # upstream garmin_mcp prints this without a Garmin login (every full-mode leg); any other ERROR line fails.
 NO_LOGIN_LINE="ERROR: OAuth tokens not found and no interactive terminal available."
@@ -372,7 +372,7 @@ plan_leg() {
 		writes=$PLAN_WRITE_TOOLS
 		instr=INSTRUCTIONS_PLAN_TRACKING
 		# shellcheck disable=SC2086 # word lists on purpose
-		want="launch: config OK ($((FULL_N + $(nwords $tools))) read-only tools and $(nwords $PLAN_GARMIN_WRITE_TOOLS) plan write tools; log_feedback writes only the app's database; history search on, plan tools on, plan writes on, plan tracking on)"
+		want="launch: config OK ($((FULL_N + $(nwords $tools))) read-only tools and $(nwords $PLAN_GARMIN_WRITE_TOOLS) plan write tools; log_feedback and plan_activate write only the app's database; history search on, plan tools on, plan writes on, plan tracking on)"
 	else
 		# shellcheck disable=SC2086
 		want="launch: config OK ($((FULL_N + $(nwords $tools))) read-only tools; history search on, plan tools on)"

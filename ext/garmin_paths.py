@@ -162,6 +162,11 @@ ARGUMENT_CHECKS = {
                      "pain_location": (_pain_location_ok, tool_errors.RANGE_VALUE_DETAIL),
                      "sharp": (lambda v: isinstance(v, bool), tool_errors.RANGE_VALUE_DETAIL),
                      "plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL)},
+    # plan_activate (PLAN_TRACKING=on) writes only the app's database: plan_id, version (0: not given) and action.
+    "plan_activate": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
+                      "version": (lambda v: _small_int_ok(v, 0, 1_000_000), tool_errors.RANGE_VALUE_DETAIL),
+                      "action": (lambda v: isinstance(v, str) and v in ("", "start", "stop"),
+                                 tool_errors.RANGE_VALUE_DETAIL)},
     "plan_commit": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),
                     "commit_token": (_commit_token_ok, tool_errors.GENERIC_DETAIL)},
     "plan_cancel": {"plan_id": (_plan_id_ok, tool_errors.GENERIC_DETAIL),

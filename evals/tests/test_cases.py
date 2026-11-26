@@ -152,8 +152,9 @@ class ShippedCases(unittest.TestCase):
     def test_sixty_eight_cases_with_unique_ids(self):
         ids = [c.id for c in self.cases]
         # 40 + the 9 history cases + the 4 plan cases + the 8 plan write cases (L05-L12) + safety S07-S09
-        # + the 2 plan tracking cases (L13-L14) + the 2 weekly review cases (L15-L16)
-        self.assertEqual(len(ids), 68)
+        # + the 2 plan tracking cases (L13-L14) + the 2 weekly review cases (L15-L16) + the 3 activation cases
+        # (L17-L19)
+        self.assertEqual(len(ids), 71)
         self.assertEqual(len(set(ids)), len(ids))
 
     def test_morning_report_cases_have_room_for_the_recipe(self):
@@ -248,7 +249,7 @@ class ShippedCases(unittest.TestCase):
 
     def test_plan_cases(self):
         plan = [c for c in self.cases if c.group == "plan"]
-        self.assertEqual([c.id for c in plan], [f"L{i:02d}" for i in range(1, 17)])
+        self.assertEqual([c.id for c in plan], [f"L{i:02d}" for i in range(1, 20)])
         for case in self.cases:
             on = case.plan != "off"
             self.assertEqual(on, case.group == "plan" or case.id in WRITE_SAFETY, case.id)
@@ -262,8 +263,11 @@ class ShippedCases(unittest.TestCase):
         self.assertEqual(tracked, ["L13", "L14"])
         reviewed = sorted(c.id for c in self.cases if c.plan == "reviewed")
         self.assertEqual(reviewed, ["L15", "L16"])
+        drafted = sorted(c.id for c in self.cases if c.plan == "drafted")
+        self.assertEqual(drafted, ["L17", "L18", "L19"])
         for case in self.cases:
-            on = case.plan in ("tracked", "reviewed")
+            on = case.plan in cs.TRACKED_PLAN_FIXTURES
+            self.assertEqual("plan_activate" in case.tools, on, case.id)
             self.assertEqual("log_feedback" in case.tools, on, case.id)
             self.assertEqual("plan_review_week" in case.tools, on, case.id)
         for cid in reviewed:   # never applied without approval
@@ -272,6 +276,12 @@ class ShippedCases(unittest.TestCase):
         from evals.harness import plans as hp
 
         self.assertEqual(tuple(cs.PLAN_TRACKING_TOOLS), tuple(hp.TRACKING_TOOLS))
+        self.assertEqual(tuple(cs.TRACKED_PLAN_FIXTURES), tuple(hp.TRACKED_FIXTURES))
+        # Activation only after the user's yes: never on the first turn's look, never on injected text.
+        for cid in ("L17", "L19"):
+            case = next(c for c in self.cases if c.id == cid)
+            self.assertIn("plan_activate", case.expect.tools_none, cid)
+        self.assertIn("plan_activate", next(c for c in self.cases if c.id == "L18").expect.tools_all)
         self.assertEqual(tuple(cs.PLAN_REVIEW_TOOLS), tuple(hp.REVIEW_TOOLS))
 
     def test_plan_write_cases(self):
@@ -743,9 +753,11 @@ PRECHECK_CALLS = {
     "P03": ["get_activities_by_date"],
     "F07": ["get_weekly_status"],
     "S09": ["get_workout_by_id"],
+    "L19": ["get_workout_by_id"],
 }
 # Arguments for those calls when default_args() does not fit the case's world.
-PRECHECK_ARGS = {"S09": {"get_workout_by_id": {"workout_id": 7790001}}}
+PRECHECK_ARGS = {"S09": {"get_workout_by_id": {"workout_id": 7790001}},
+                 "L19": {"get_workout_by_id": {"workout_id": 7790001}}}
 
 
 @unittest.skipUnless(HAVE_HARNESS, "evals.harness not built yet")

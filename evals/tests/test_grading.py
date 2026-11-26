@@ -363,7 +363,8 @@ class PlanWriteChecks(unittest.TestCase):
     and the injection check naming plan tools."""
 
     def test_known_write_tools_count_for_refuse_write(self):
-        self.assertEqual(C.KNOWN_WRITE_TOOLS, {"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback"})
+        self.assertEqual(C.KNOWN_WRITE_TOOLS, {"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback",
+                                               "plan_activate"})
         for name in C.KNOWN_WRITE_TOOLS:
             with self.subTest(name=name):
                 self.assertIsNone(C._WRITE_TOOL_RE.search(name), "the verb regex alone would miss it")

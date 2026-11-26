@@ -155,11 +155,11 @@ HISTORY_TOOLS = frozenset({"find_similar_weeks", "search_history"})
 # HISTORY_SEARCH=on, GARMIN_AUTH=full and ROLE=app), outside config/enabled-tools.txt, like HISTORY_TOOLS.
 # plan_assess and plan_preview call Garmin (the call guard counts them); plan_get reads only Postgres.
 PLAN_READ_TOOLS = frozenset({"plan_assess", "plan_get", "plan_preview"})
-# The plan tracking write tool (PLAN_TRACKING=on, which needs PLAN_TOOLS=on): log_feedback writes only the app's
-# own database (RPE and pain), never Garmin. It joins the allowed list only from the switch (allowed_tools()),
-# never from config/enabled-tools.txt or GARMIN_ENABLED_TOOLS, and patch() then annotates it additive,
-# idempotent and local-only (never read-only).
-PLAN_TRACKING_TOOLS = frozenset({"log_feedback"})
+# The plan tracking write tools (PLAN_TRACKING=on, which needs PLAN_TOOLS=on): log_feedback (RPE and pain) and
+# plan_activate (start or stop following a stored plan) write only the app's own database, never Garmin. They
+# join the allowed list only from the switch (allowed_tools()), never from config/enabled-tools.txt or
+# GARMIN_ENABLED_TOOLS, and patch() then annotates them additive, idempotent and local-only (never read-only).
+PLAN_TRACKING_TOOLS = frozenset({"log_feedback", "plan_activate"})
 # The weekly review (Stage 4, PLAN_TRACKING=on): plan_review_week reads Garmin and the plan database and stores
 # its proposals in the app's own database, nothing the user sees in Garmin or in the plan (the same bookkeeping
 # as get_daily_status refreshing the links), so it is a read tool: hinted read-only, in OWN_READ_TOOLS. It joins
@@ -175,7 +175,7 @@ OWN_READ_TOOLS = EXTRA_READ_ONLY_TOOLS | HISTORY_TOOLS | PLAN_READ_TOOLS | PLAN_
 # effect sets (WRITE_EFFECTS; log_feedback additive, idempotent and local-only) so their hints are right.
 # plan_apply_changes (Stage 4) joins only with PLAN_WRITES=on and PLAN_TRACKING=on (its token comes from
 # plan_review_week): destructive (it replaces the plan's own workouts) and idempotent (a done token replays).
-OWN_WRITE_TOOLS = frozenset({"log_feedback", "plan_apply_changes", "plan_cancel", "plan_commit"})
+OWN_WRITE_TOOLS = frozenset({"log_feedback", "plan_activate", "plan_apply_changes", "plan_cancel", "plan_commit"})
 PLAN_APPLY_TOOLS = frozenset({"plan_apply_changes"})
 PLAN_WRITE_TOOLS = frozenset({"plan_cancel", "plan_commit"})
 # The tools that may change Garmin (the write failure text, the --check-config count).
@@ -388,8 +388,8 @@ def allowed_tools(environ):
 
 
 def plan_tracking_tools(features, *, key_mode=False):
-    """The tracking write tool PLAN_TRACKING=on turns on (PLAN_TRACKING_TOOLS: log_feedback, which writes only
-    the app's database), full mode and ROLE=app only."""
+    """The tracking write tools PLAN_TRACKING=on turns on (PLAN_TRACKING_TOOLS: log_feedback and plan_activate,
+    which write only the app's database), full mode and ROLE=app only."""
     if key_mode or not (getattr(features, "plan_tracking", False) and features.plan_tools and features.history
                         and features.role == "app"):
         return frozenset()
@@ -1094,9 +1094,10 @@ def _check_config_cli(environ):
     extra = f"; {extra}" if extra else ""
     own_writes = allowed & PLAN_TRACKING_TOOLS
     if own_writes:
-        # PLAN_TRACKING=on: log_feedback writes the app's own database only; it is not a read-only tool.
+        # PLAN_TRACKING=on: log_feedback and plan_activate write the app's own database only; not read-only tools.
         allowed = allowed - own_writes
-        extra = f"; {', '.join(sorted(own_writes))} writes only the app's database{extra}"
+        verb = "writes" if len(own_writes) == 1 else "write"
+        extra = f"; {' and '.join(sorted(own_writes))} {verb} only the app's database{extra}"
     if _is_key_mode(environ):
         print(f"launch: config OK ({len(allowed)} read-only tools, Garmin Personal API key{extra})", file=sys.stderr)
     elif allowed & GARMIN_WRITE_TOOLS:
@@ -1173,7 +1174,8 @@ def patch(garmin_auth="full"):
     _upstream_write_tools()   # the snapshot, before anything below changes upstream's write sets
     if getattr(_FEATURES, "plan_writes", False) and not keyed:
         _merge_write_effects(tool_annotations, tracking=bool(plan_tracking_tools(_FEATURES, key_mode=keyed)))
-    # PLAN_TRACKING=on: log_feedback is additive, idempotent and local-only (it writes only the app's database).
+    # PLAN_TRACKING=on: log_feedback and plan_activate are additive, idempotent and local-only (they write only
+    # the app's database).
     # With the switches off the upstream sets stay untouched.
     tracking = plan_tracking_tools(_FEATURES, key_mode=keyed)
     if tracking:
@@ -1397,7 +1399,8 @@ def main(argv=None):
     # (the mode's) and, with the sign-in on, the sign-in itself.
     _AUTH = None
     instructions = server_instructions.INSTRUCTIONS_KEY if _KEY_MODE else server_instructions.INSTRUCTIONS
-    # PLAN_TRACKING=on: log_feedback writes the app's database, so "No tool changes any data." is false too.
+    # PLAN_TRACKING=on: log_feedback and plan_activate write the app's database, so "No tool changes any data."
+    # is false too.
     tracking = not _KEY_MODE and bool(plan_tracking_tools(_FEATURES))
     if tracking:
         instructions = getattr(server_instructions, "INSTRUCTIONS_TRACKING", instructions)

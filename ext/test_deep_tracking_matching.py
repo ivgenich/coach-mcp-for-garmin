@@ -72,15 +72,18 @@ class Clock:
 
 
 class Track:
-    """One small tracked plan on a MemoryPlanStore."""
+    """One small tracked plan on a MemoryPlanStore, activated when it is created (active=False: a draft,
+    which tracking never follows)."""
 
-    def __init__(self, sessions, created=dt.datetime(2026, 11, 1, 8, 0, tzinfo=UTC), tz=UTC):
+    def __init__(self, sessions, created=dt.datetime(2026, 11, 1, 8, 0, tzinfo=UTC), tz=UTC, active=True):
         self.clock = Clock(created)
         self.store = ps.MemoryPlanStore(clock=self.clock)
         self.fp = self.store.account_fp("424242")
         self.tz = tz
         digest = hashlib.sha256(json.dumps(sessions, sort_keys=True).encode()).hexdigest()
         self.pid, _, _ = self.store.save_preview(self.fp, None, RACE, 1, {}, plan_body(sessions), digest)
+        if active:
+            self.store.move_plan(self.pid, "active")
 
     def refresh(self, acts, first, last, today, scheduled=()):
         return tr.refresh_links(self.store, self.fp, last, list(acts), list(scheduled), first=first, last=last,
@@ -498,21 +501,21 @@ class Settling(unittest.TestCase):
         t.refresh([], day(1), day(8), today=day(9))
         self.assertEqual(t.links(), expected)
 
-    def test_activation_after_a_done_link_keeps_it(self):
+    def test_a_draft_counts_nothing_and_its_activation_starts_the_count(self):
         t = Track([session("20261202-run", day(1)), session("20261205-run", day(3))], created=dt.datetime(2026, 11, 29, 8, 0,
-                                                                                         tzinfo=UTC))
+                                                                                         tzinfo=UTC), active=False)
         acts = [run(1, day(1), hour=7), run(2, day(3), hour=7)]
-        t.daily(acts, day(1))
-        self.assertEqual(t.links(), {"20261202-run": ("done", 1)})
+        self.assertIsNone(t.daily(acts, day(1)))                           # a draft is never tracked
+        self.assertEqual(t.links(), {})
         t.clock.now = dt.datetime(2026, 12, 2, 12, 0, tzinfo=UTC)          # plan_commit on Wednesday noon
         t.store.move_plan(t.pid, "active")
         t.weekly(acts, day(6))
-        # Tuesday's run predates the activation but was already counted; Thursday's counts anew.
-        self.assertEqual(t.links(), {"20261202-run": ("done", 1), "20261205-run": ("done", 2)})
+        # Tuesday's run predates the activation and counts for nothing; Thursday's counts.
+        self.assertEqual(t.links(), {"20261202-run": ("missed", None), "20261205-run": ("done", 2)})
 
     def test_activation_before_a_run_ignores_runs_before_it(self):
         t = Track([session("20261202-run", day(2)), session("20261205-run", day(3))], created=dt.datetime(2026, 11, 29, 8, 0,
-                                                                                         tzinfo=UTC))
+                                                                                         tzinfo=UTC), active=False)
         t.clock.now = dt.datetime(2026, 12, 2, 12, 0, tzinfo=UTC)
         t.store.move_plan(t.pid, "active")
         t.weekly([run(1, day(2), hour=7), run(2, day(2), hour=13)], day(6))

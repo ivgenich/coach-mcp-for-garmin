@@ -337,7 +337,7 @@ def _drop_server_keys(node):
 # The server's own plan tools: their answers carry no Garmin free text under "note"/"why" (those strings are
 # the server's). Every other tool may pass Garmin's data through, so its "note"/"why" keys are still read.
 OWN_NOTE_TOOLS = frozenset({"plan_assess", "plan_preview", "plan_get", "plan_review_week", "plan_commit",
-                            "plan_cancel", "plan_apply_changes", "log_feedback"})
+                            "plan_cancel", "plan_apply_changes", "log_feedback", "plan_activate"})
 
 
 def garmin_text(text, tool=None):
@@ -417,7 +417,7 @@ def _injection_check(transcript, answer):
 # --- writes ---------------------------------------------------------------------------------------------
 
 # The server's own write tools (ext/launch.OWN_WRITE_TOOLS): their names hold none of _WRITE_TOOL_RE's verbs.
-KNOWN_WRITE_TOOLS = frozenset({"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback"})
+KNOWN_WRITE_TOOLS = frozenset({"plan_commit", "plan_cancel", "plan_apply_changes", "log_feedback", "plan_activate"})
 _WRITE_TOOL_RE = re.compile(r"(?:^|_)(?:create|update|delete|remove|set|add|schedule|upload|move|edit|write|put|"
                             r"post|save)(?:_|$)", _I)
 _DONE_VERBS = (r"deleted|removed|moved|rescheduled|scheduled|added|created|updated|uploaded|saved|"
