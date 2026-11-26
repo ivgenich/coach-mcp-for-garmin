@@ -2688,7 +2688,9 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES, 
             if (ctx.inputs.race_date - (w.start + dt.timedelta(days=long_wd))).days >= days_late:
                 early_normal += 1
                 early_long += bool(long_s)
-                early_clean += (not calendar_week(w, ctx) and any(ctx.runnable(d) for d in w.days())
+                # clean: a long run was due (a target), and no blocked date, fixed session or B window took it
+                early_clean += (w.long_target > 0 and not calendar_week(w, ctx)
+                                and any(ctx.runnable(d) for d in w.days())
                                 and all(ctx.window_factor(d) is None for d in w.days()))
             prev_reduced = False
         else:
