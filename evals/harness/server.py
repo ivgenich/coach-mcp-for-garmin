@@ -174,7 +174,7 @@ class Server:
     def _client(self):
         """The in-memory MCP client; with an elicitation callback ("declined") it declares form elicitation and
         connects with the initialize handshake (mode="legacy"), whose session carries server-to-client requests
-        (the 2026 protocol has no such channel: plan_confirm then answers "unsupported")."""
+        (on the 2026 protocol plan_confirm asks through the input-required round instead)."""
         from mcp.client import Client
 
         if self._elicit is None:

@@ -338,8 +338,11 @@ csv() { printf '%s\n' "$@" | sort -u | paste -sd, -; }
 # log_errors FILE: error lines of FILE, except the no-login line and Caddy's access line for the expected 503
 # of /readyz (Caddy logs a 5xx answer at level error).
 log_errors() {
+	# Upstream's no-login line comes from a background thread, so on stderr it can land inside another line
+	# ("Tool filter: ...).ERROR: OAuth tokens not found ..."): cut it out wherever it sits, then look again.
 	{ grep -E 'ERROR|CRITICAL|Traceback|"level":"(error|fatal|panic)"' "$1" || true; } |
-		{ grep -vxF "$NO_LOGIN_LINE" || true; } |
+		awk -v drop="$NO_LOGIN_LINE" '{ while ((i = index($0, drop)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(drop)); print }' |
+		{ grep -E 'ERROR|CRITICAL|Traceback|"level":"(error|fatal|panic)"' || true; } |
 		{ grep -vE '"logger":"http\.log\.access[^"]*".*"uri":"/readyz".*"status":503' || true; }
 }
 # plan_log_hits FILE: lines of FILE that hold a secret value of this run or a tool argument of the probe.
