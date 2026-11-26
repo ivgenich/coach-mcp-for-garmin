@@ -77,6 +77,8 @@ COMMIT_DAYS_MAX = 21
 MARKER_HEAD = "coach-mcp"
 CREATE_STATES = ("pending", "conflict", "failed", "local")   # local: tracked in the app only (Stage 3)
 ON_GARMIN = ("uploaded", "scheduled", "unscheduling", "unscheduled", "deleting")
+# A row whose workout is (or may be) on Garmin: commit_ops never replaces one dated today or earlier.
+LIVE_ROW_STATES = ON_GARMIN + ("unknown", "uploading", "scheduling")
 MAYBE, NEVER_SENT, REJECTED, RATE, GONE = "maybe", "never_sent", "rejected", "rate_limited", "gone"
 
 NOTE_DONE = "Every write of this token is done. The same token again changes nothing."
@@ -113,6 +115,9 @@ REFUSED_REASONS = {
                          "planned hard or long day. Call plan_preview again."),
     "calendar_unreadable": "The Garmin calendar could not be read, so nothing was scheduled. Try again later.",
     "garmin_unreadable": "Garmin did not answer the checks before writing. Try again later.",
+    "plan_changed": ("The plan changed while this write waited for the confirmation (a new version was stored, "
+                     "or the plan was started or stopped). Nothing was written. Call plan_preview (or plan_cancel) "
+                     "again and get a new approval."),
     "busy": "Another write for this plan is running. Wait a minute and call again with the same token.",
     "changes_mismatch": ("This apply token covers other changes than change_ids. Call plan_apply_changes with the "
                          "apply.change_ids plan_review_week returned with the token, or for fewer changes call "
@@ -281,7 +286,10 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
     first, then the old one deleted). Delete: those replaced workouts, and the plan's own workouts after today
     whose session left the plan. A rebuilt plan never plans today (plan_engine plans from tomorrow on), so a
     workout of today is replaced only when the plan still has its session today (a patched version, rule A8) and
-    never deleted for being absent. Deletes only rows on Garmin, unlinked, from today on."""
+    never deleted for being absent. A workout dated today or earlier is never replaced or deleted on any other
+    path either: a session whose key's row sits on today but which is now planned on another day (a moved session
+    kept next to a fresh one with its key) writes nothing. Deletes only rows on Garmin, unlinked, after today (and
+    retired rows from today on: their replacement is already on Garmin)."""
     last = today + dt.timedelta(days=days - 1)
     by_key = {str(r["workout_key"]): r for r in rows}
     creates: List[Dict[str, Any]] = []
@@ -307,11 +315,16 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
             continue
         if row is not None and row.get("linked_activity_id") and row["date_local"] <= today:
             continue   # done: a session linked to an activity is never written again
+        if row is not None and row["state"] in LIVE_ROW_STATES and row["date_local"] <= today \
+                and not (row["date_local"] == today == day):
+            continue   # a workout dated today or earlier is never replaced; only a patched session of today (its
+            # key still today, rule A8) replaces today's workout. A session whose key's row is on another day
+            # (a moved session carried next to a fresh one) never takes that day's workout away.
         creates.append({"op": "create", "key": key, "date": s["date"], "role": str(s["role"]),
                         "hard_or_long": bool(s.get("hard_or_long")), "dto_hash": digest,
                         "dto": plan_dto.workout_dto(s, marker=marker(tag, plan_id, key, digest))})
         if row is not None and not same and row.get("garmin_workout_id") and row["state"] in ON_GARMIN \
-                and not row.get("linked_activity_id") and row["date_local"] >= today:
+                and not row.get("linked_activity_id") and (row["date_local"] > today or row["date_local"] == day):
             deletes.append(_delete_op(row, retired_key(by_key, key, row["dto_hash"]), "replaced"))
     for key, row in sorted(by_key.items()):
         if key in planned or row["state"] not in ON_GARMIN or not row.get("garmin_workout_id"):
@@ -319,7 +332,7 @@ def commit_ops(plan: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], *, to
         if row.get("linked_activity_id") or row["date_local"] < today:
             continue
         retired = "~" in key
-        if row["date_local"] == today and not retired:
+        if row["date_local"] <= today and not retired:
             continue   # the plan has no session today (it plans from tomorrow): today's workout stays
         # A retired row (key~hash: replaced by a new workout) still on Garmin is deleted by any later commit.
         deletes.append(_delete_op(row, key, "replaced" if retired else "removed"))
@@ -502,6 +515,9 @@ class Executor:
         now = self.store.now()
         library: Optional[List[Any]] = None
         for key, row in sorted(self.rows.items()):
+            if not ps.key_ok(key):
+                log.warning("plans: a stored workout row has an unexpected key; it is left as it is")
+                continue
             if row["state"] in ("uploading", "scheduling"):
                 row = self._save(key, state="unknown")
             if row["state"] != "unknown":
@@ -697,6 +713,12 @@ class Executor:
         if op.get("workout_id") is not None and row.get("garmin_workout_id") not in (None, op["workout_id"]):
             return
         item = {"key": key, "date": row["date_local"].isoformat(), "role": row["role"]}
+        if not ps.key_ok(key):
+            # A row whose key the store does not take (none should be left after migration 004): its state could
+            # not be stored, so it is not touched; it counts as failed and the other deletes go on.
+            log.warning("plans: a stored workout row has an unexpected key; its delete counts as failed")
+            self.out["failed"].append(item)
+            return
         if row.get("linked_activity_id"):
             self.out["kept"].append({**item, "reason": "linked to an activity"})
             return
@@ -1024,11 +1046,24 @@ class WriteService:
         """_execute under the plan's lock, taken and released by the worker thread itself: a cancelled tool call
         (notifications/cancelled, a client timeout) stops awaiting, but the thread keeps the lock until its
         writes end, so a second call for the plan answers busy instead of writing the same days again."""
-        lock = self._lock(str(plan["plan_id"]))
+        pid = str(plan["plan_id"])
+        lock = self._lock(pid)
         if not lock.acquire(blocking=False):
-            return refused(str(plan["plan_id"]), "busy")
+            return refused(pid, "busy")
         try:
-            return self._execute(action, plan, row, token, ops, today, confirmed_by)
+            # The plan was read before the user's confirmation: read it again under the lock, and write nothing
+            # when it changed meanwhile (plan_activate started or stopped it, or a preview stored a new version).
+            try:
+                store = self._store()
+                fp = store.history_account()
+                fresh = store.get_plan(fp, pid) if fp is not None else None
+            except (ps.StoreError, ValueError) as exc:
+                log.warning("plans: plan_%s could not read the plan again (%s)", action, type(exc).__name__)
+                return {"status": "refused", "plan_id": pid, "reason": "database", "note": TEXT_DB}
+            if fresh is None or fresh.get("status") != plan.get("status") \
+                    or int(fresh.get("current_version") or 0) != int(plan.get("current_version") or 0):
+                return refused(pid, "plan_changed")
+            return self._execute(action, fresh, row, token, ops, today, confirmed_by)
         finally:
             lock.release()
 
@@ -1516,6 +1551,11 @@ def cleanup(store: Any, client: Any, today: dt.date, *, dry_run: bool, orphans: 
 
     stopped = False
     for r in todo:
+        if not ps.key_ok(r.get("workout_key")):
+            # Its state could not be stored: not touched, counted as failed (fixed text, never the key).
+            log.warning("plans: cleanup skipped a workout row with an unexpected key")
+            counts["failed"] += 1
+            continue
         wid = int(r["garmin_workout_id"])
         sids = [schedule_id_of(e) or 0 for e in by_workout.get(wid) or []]
         stored = _pos_int(r.get("garmin_schedule_id"))
