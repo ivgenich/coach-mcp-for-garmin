@@ -32,7 +32,7 @@ configuration is unchanged: without `PLAN_TOOLS=on` the server has exactly the t
 | `plan_get` | The stored draft again, without Garmin (only this account's plans) | Postgres only |
 
 The arguments are plain text: `race_date` (YYYY-MM-DD), `race_distance` (`marathon`, `half`), `goal_time`
-(H:MM:SS), `b_races` (`2027-01-29:tri_half,...`; kinds `tri_full`, `tri_half`, `run`), `run_days` and
+(H:MM:SS), `b_races` (`2027-02-05:tri_half,...`; kinds `tri_full`, `tri_half`, `run`), `run_days` and
 `rest_days` (`mon,tue,...`), `long_run_day`, `quality_per_week` (0-2), `max_long_km` (10-32);
 `plan_preview` also takes `blocked_dates`, `overrides` (a JSON list, see [Overrides](#overrides)),
 `plan_id` and `course_id` (the A race's course from `get_courses`, for [race pacing](#plan-rules-v2)). A bad
@@ -206,7 +206,7 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    a normal or deload week with no long run that has a blocked run day or no run at all (travel, a week
    off), the first normal week's long run returns to the last normal week's long run before the gap, with
    no +2 km that week; the step resumes the week after. Deload and B-race long runs in between change
-   nothing: 23.8 km, a travel week, a deload at 18.5 km, then 23.8, 25.8 and 27.8 km (with no ratio cut; a
+   nothing: 22.4 km, a travel week, a deload at 17.4 km, then 22.4, 24.4 and 26.4 km (with no ratio cut; a
    ratio cut of the return week's long run, rule 12, lowers the next week's step base with it). `long_step`
    checks the same sequence on the finished plan. A long run that a reduce-only override (`rest`, `easy`,
    `cap_km`, `cap_long`, `cap_week_km`) shortened or removed is not the step reference and a week such an
@@ -561,7 +561,7 @@ Still unverified, and coded to these assumptions behind `PLAN_WRITES` (default o
   written.
 - Garmin's write rate limits under load, and the client's tool-call timeout: the budget (8 writes, 15 s
   to start them, 1 s apart, 8 s read timeout) is a guess.
-- The workout reaches the watch (Fenix) after a sync with its pace targets (it showed in Garmin Connect).
+- The workout reaches the watch after a sync with its pace targets (it showed in Garmin Connect).
 - claude.ai (web, mobile) and Claude Desktop with a connector were not tested for the confirmation form
   (spike S0.5 ran from Claude Code); nor whether they prompt before a tool whose hints say it writes.
 
@@ -677,12 +677,12 @@ uses the same paths, helper and statuses. The history worker never writes.
 
 ## Golden plans
 
-`ext/fixtures/plan/` holds five plans the tests rebuild byte for byte: G1 (Tel Aviv Marathon 2027-02-26 with
-Israman 2027-01-29 as a B race, from representative numbers; the same rules were checked on the owner's real data and signed off on
-2026-11-25, with Israman as a half),
+`ext/fixtures/plan/` holds five plans the tests rebuild byte for byte: G1 (a spring marathon on 2028-02-25
+with a half-distance triathlon on 2028-01-28 as a B race, from fictional sample numbers; signed off by hand as
+the release check plan),
 G2 (a 15 km a week runner), G3 (race in 5 weeks), G4 (no LT speed) and G5 (a heavy fixed TrainingPeaks
 week). Since rules v2, G1 and G5 carry representative recorded loads that track Garmin (G1 models
-Israman's load: its race day peaks at 1.39, and the ratio cuts the day after (week 9) and the recovery
-week (week 10) back toward 1.3; G5's heavy week cuts its easy runs to
+the B race's load: the ratio cuts its mini-taper week (week 9) and the recovery week (week 10) back toward
+1.3, and the race day itself stays at 1.31, held and said in a warning; G5's heavy week cuts its easy runs to
 the floor and stops there), G4's
 loads differ from Garmin's ratio by 0.3 (only reported), and G2 and G3 have none.

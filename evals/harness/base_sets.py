@@ -101,7 +101,7 @@ def weekly_2026_03_01():
 
 def plan_2026_11_23():
     """The training-plan world (synthetic, no ext/ fixture): Monday 2026-11-23, eight full weeks of running
-    before it (about 40 km a week, longest 20.9 km), LT speed 3.85 m/s, Garmin's marathon prediction 3:35:00,
+    before it (about 40 km a week, longest 19.6 km), LT speed 3.55 m/s, Garmin's marathon prediction 3:57:00,
     VO2max 52, and one fixed hard session on the calendar (a coach's interval run on 2026-12-16)."""
     import datetime as dt
 
@@ -112,7 +112,7 @@ def plan_2026_11_23():
         for offset, km, name in ((1, 8, "Synthetic Easy Run"), (3, 10, "Synthetic Tempo Run"),
                                  (4, 8, "Synthetic Easy Run"), (6, 14, "Synthetic Long Run")):
             day = first + dt.timedelta(days=7 * week + offset)
-            meters = 20900.0 if (week, offset) == (6, 6) else km * 1000.0
+            meters = 19600.0 if (week, offset) == (6, 6) else km * 1000.0
             runs.append({
                 "activityId": activity_id, "activityName": name,
                 "activityType": {"typeId": 1, "typeKey": "running", "parentTypeId": 17},
@@ -123,18 +123,18 @@ def plan_2026_11_23():
     runs.sort(key=lambda a: a["startTimeLocal"], reverse=True)
     return {
         "note": ("L0: the training-plan world, Monday 2026-11-23 09:00 Europe/London. Runs 2026-09-29..11-22 "
-                 "(ids 74000001-32, ownerId the profile id): 4 a week, 40 km (46.9 km in the week of 2026-11-09, with the 20.9 km "
-                 "long run); LT speed 3.85 m/s (4:20/km), marathon prediction 3:35:00, VO2max 52; one fixed "
+                 "(ids 74000001-32, ownerId the profile id): 4 a week, 40 km (45.6 km in the week of 2026-11-09, with the 19.6 km "
+                 "long run); LT speed 3.55 m/s (4:42/km), marathon prediction 3:57:00, VO2max 52; one fixed "
                  "'VO2 intervals' run on 2026-12-16. Profile id 71000001."),
         "anchor": {"now": "2026-11-23T09:00", "tz": "Europe/London"},
         "responses": {
             "get_stats": {"2026-11-23": {"userProfileId": 71000001, "calendarDate": "2026-11-23",
                                          "restingHeartRate": 47}},
             "connectapi": {ACTIVITIES_PATH: runs},
-            "get_lactate_threshold": {"*": {"speed_and_heart_rate": {"calendarDate": "2026-11-01", "speed": 0.385,
+            "get_lactate_threshold": {"*": {"speed_and_heart_rate": {"calendarDate": "2026-11-01", "speed": 0.355,
                                                                      "heartRate": 168}}},
-            "get_race_predictions": {"*": {"calendarDate": "2026-11-22", "time5K": 1230, "time10K": 2580,
-                                           "timeHalfMarathon": 5820, "timeMarathon": 12900}},
+            "get_race_predictions": {"*": {"calendarDate": "2026-11-22", "time5K": 1350, "time10K": 2820,
+                                           "timeHalfMarathon": 6780, "timeMarathon": 14220}},
             "get_max_metrics": {"2026-11-23": [{"generic": {"calendarDate": "2026-11-22",
                                                             "vo2MaxPreciseValue": 52.0, "vo2MaxValue": 52}}]},
             "query_garmin_graphql": {"*": {"data": {"workoutScheduleSummariesScalar": [

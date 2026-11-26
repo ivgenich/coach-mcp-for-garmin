@@ -122,14 +122,14 @@ class LiveCaseFixtures(unittest.TestCase):
         with self.start() as srv:
             l04 = srv.call("plan_get", {})
             self.assertIn("no plan is stored yet", l04.text)
-            l01 = _json(srv.call("plan_assess", {"race_date": "2027-02-26", "goal_time": "3:30:00"}))
-            self.assertEqual(l01["prediction"], "3:35:00")
-            self.assertEqual(l01["avg_km_4w"], 41.7)
+            l01 = _json(srv.call("plan_assess", {"race_date": "2027-03-05", "goal_time": "3:52:00"}))
+            self.assertEqual(l01["prediction"], "3:57:00")
+            self.assertEqual(l01["avg_km_4w"], 41.4)
             self.assertIn(l01["feasibility"]["verdict"], ("feasible", "ambitious", "unrealistic"))
-            l02 = _json(srv.call("plan_preview", {"race_date": "2027-02-26", "goal_time": "3:30:00",
-                                                  "b_races": "2027-01-29:tri_half",
+            l02 = _json(srv.call("plan_preview", {"race_date": "2027-03-05", "goal_time": "3:52:00",
+                                                  "b_races": "2027-02-05:tri_half",
                                                   "run_days": "tue,wed,thu,sat,sun", "long_run_day": "sun"}))
-            self.assertEqual(l02["b_races"][0]["date"], "2027-01-29")
+            self.assertEqual(l02["b_races"][0]["date"], "2027-02-05")
             self.assertTrue(l02["invariants"]["ok"], l02["invariants"]["failed"])
             self.assertTrue(l02["stored"]["changed"])
             hard = {s["date"] for w in l02["weeks"] for s in w["sessions"] if s["hard_or_long"]}

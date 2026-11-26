@@ -12,7 +12,7 @@ import plan_engine as pe
 import plan_review as pr
 
 PID = "a" * 32
-W = dt.date(2026, 11, 30)            # the reviewed week
+W = dt.date(2027, 11, 29)            # the reviewed week
 PREV = W - dt.timedelta(days=7)
 NEXT = W + dt.timedelta(days=7)
 TODAY = NEXT                         # the Monday after the reviewed week
@@ -74,9 +74,9 @@ class Review(unittest.TestCase):
         self.assertEqual(out["rules_version"], pr.REVIEW_RULES_VERSION)
 
     def test_a1_completion_boundary(self):
-        self.run_km("20261206-run", 5.0)          # 35 of 50 km: exactly 70%
+        self.run_km("20271205-run", 5.0)          # 35 of 50 km: exactly 70%
         self.assertEqual(self.kinds(), [])
-        self.run_km("20261206-run", 4.9)          # 69.8%
+        self.run_km("20271205-run", 4.9)          # 69.8%
         out = self.review()
         (c,) = out["changes"]
         self.assertEqual((c["rule"], c["kind"]), ("A1", "repeat_volume"))
@@ -86,7 +86,7 @@ class Review(unittest.TestCase):
         self.assertTrue(c["change_id"].startswith("c") and len(c["change_id"]) == 17)
 
     def test_open_sessions_are_not_due(self):
-        self.links["20261206-run"] = None          # not settled yet: neither due nor done
+        self.links["20271205-run"] = None          # not settled yet: neither due nor done
         out = self.review()
         self.assertEqual(out["metrics"]["due_km"], 30.0)
         self.assertEqual(out["changes"], [])
@@ -101,13 +101,13 @@ class Review(unittest.TestCase):
 
     def test_acwr_alone_never_triggers(self):
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.9)), [])
-        for key in ("20261201-run", "20261204-run"):
+        for key in ("20271130-run", "20271203-run"):
             self.feedback[key] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.3)), [])        # not above 1.3
         c = self.review(health=pr.Health(acwr=1.31))["changes"][0]           # with easy RPE 6
         self.assertEqual((c["rule"], c["evidence"]["metric"]), ("A2", "acwr"))
         self.assertEqual(c["evidence"]["also"][0]["metric"], "easy_rpe_mean")
-        self.feedback["20261204-run"] = pr.Feedback(5, 0, False)                   # mean 5.5
+        self.feedback["20271203-run"] = pr.Feedback(5, 0, False)                   # mean 5.5
         self.assertEqual(self.kinds(health=pr.Health(acwr=1.31)), [])
 
     def test_acwr_is_cited_beside_hrv(self):
@@ -116,30 +116,30 @@ class Review(unittest.TestCase):
         self.assertEqual(c["evidence"]["also"], [{"metric": "acwr", "value": 1.4, "threshold": 1.3}])
 
     def test_a3_missed_long_run(self):
-        self.links["20261206-run"] = "missed"
+        self.links["20271205-run"] = "missed"
         kinds = self.kinds()
         self.assertIn(("A3", "long_run_km"), kinds)
         c = next(c for c in self.review()["changes"] if c["rule"] == "A3")
         self.assertEqual((c["from"]["km"], c["to"]["km"]), (22.0, 20.0))
         self.assertEqual(c["evidence"]["threshold"], 22.0)
-        self.links["20261206-run"] = "replaced"
+        self.links["20271205-run"] = "replaced"
         self.assertNotIn(("A3", "long_run_km"), self.kinds())
 
     def test_a4_easy_rpe_two_weeks(self):
-        for key in ("20261124-run", "20261127-run", "20261201-run", "20261204-run"):
+        for key in ("20271123-run", "20271126-run", "20271130-run", "20271203-run"):
             self.feedback[key] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(), [("A4", "cut_week"), ("A4", "easy_band")])
         band = next(c for c in self.review()["changes"] if c["kind"] == "easy_band")
         self.assertEqual(band["to"], {"slowdown": 0.03})
         cut = next(c for c in self.review()["changes"] if c["kind"] == "cut_week")
         self.assertEqual(cut["to"]["km"], 49.5)
-        self.feedback["20261127-run"] = pr.Feedback(5, 0, False)    # last week 5.5
+        self.feedback["20271126-run"] = pr.Feedback(5, 0, False)    # last week 5.5
         self.assertEqual(self.kinds(), [])
 
     def test_a5_quality_above_target(self):
         planned = 10000 / (50 * 60)                            # 3.333 m/s
-        aid = self.linked["20261202-run"]
-        self.feedback["20261202-run"] = pr.Feedback(5, 0, False)
+        aid = self.linked["20271201-run"]
+        self.feedback["20271201-run"] = pr.Feedback(5, 0, False)
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.02 + 1e-6))
         c = self.review()["changes"][0]
         self.assertEqual((c["rule"], c["kind"], c["edits"]), ("A5", "threshold_retest", []))
@@ -147,17 +147,17 @@ class Review(unittest.TestCase):
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.019))
         self.assertEqual(self.kinds(), [])
         self.runs[aid] = pr.Run(pr.Km(10.0), pe.MetersPerSecond(planned * 1.05))
-        self.feedback["20261202-run"] = pr.Feedback(6, 0, False)
+        self.feedback["20271201-run"] = pr.Feedback(6, 0, False)
         self.assertEqual(self.kinds(), [])
 
     def test_a6_pain_or_sharp(self):
-        self.feedback["20261201-run"] = pr.Feedback(4, 3, False)
+        self.feedback["20271130-run"] = pr.Feedback(4, 3, False)
         self.assertEqual(self.kinds(), [])
-        self.feedback["20261201-run"] = pr.Feedback(4, 4, False)
+        self.feedback["20271130-run"] = pr.Feedback(4, 4, False)
         out = self.review()["changes"]
         self.assertEqual(sorted(c["kind"] for c in out), ["drop_quality", "hold_progression"])
         self.assertTrue(all("physiotherapist or doctor" in c["advice"] for c in out))
-        self.feedback["20261201-run"] = pr.Feedback(4, 1, True)
+        self.feedback["20271130-run"] = pr.Feedback(4, 1, True)
         out = self.review()["changes"]
         self.assertEqual((out[0]["evidence"]["metric"], out[0]["evidence"]["threshold"]), ("sharp", True))
 
@@ -168,7 +168,7 @@ class Review(unittest.TestCase):
             if s["role"] == "threshold":
                 s["role"] = "strides"
             s["km"] = round(s["km"] * 0.7, 1)
-        self.feedback["20261204-run"] = pr.Feedback(4, 8, True)
+        self.feedback["20271203-run"] = pr.Feedback(4, 8, True)
         out = pr.review_week(PID, b, W, self.today, self.links, self.linked, self.runs, self.feedback, self.health)
         (c,) = out["changes"]
         self.assertEqual((c["rule"], c["kind"], c["edits"]), ("A6", "pain_advice", []))
@@ -186,7 +186,7 @@ class Review(unittest.TestCase):
         c = next(c for c in self.review()["changes"] if c["rule"] == "A7")
         self.assertEqual(c["to"]["km"], 44.0)                   # 1.10 x 40
         self.assertEqual(c["evidence"], {"metric": "last_done_week_km", "value": 40.0, "threshold": 1.1})
-        self.links["20261201-run"] = "done"                          # not a missed week
+        self.links["20271130-run"] = "done"                          # not a missed week
         self.assertNotIn("A7", {c["rule"] for c in self.review()["changes"]})
 
     def test_a8_red_day_with_quality_today(self):
@@ -198,8 +198,8 @@ class Review(unittest.TestCase):
         self.assertEqual(self.kinds(health=pr.Health(today_level="red")), [])
 
     def test_no_change_raises_and_no_change_for_an_ended_next_week(self):
-        self.links["20261206-run"] = "missed"
-        self.feedback["20261201-run"] = pr.Feedback(4, 6, True)
+        self.links["20271205-run"] = "missed"
+        self.feedback["20271130-run"] = pr.Feedback(4, 6, True)
         for c in self.review(health=pr.Health(flags=("hrv_down",)))["changes"]:
             if "km" in (c["to"] or {}):
                 self.assertLess(c["to"]["km"], c["from"]["km"])
@@ -209,24 +209,24 @@ class Review(unittest.TestCase):
         self.assertEqual([(c["kind"], c["edits"]) for c in out], [("pain_advice", [])])
 
     def test_change_ids_are_stable(self):
-        self.run_km("20261206-run", 1.0)
+        self.run_km("20271205-run", 1.0)
         a, b = self.review()["changes"][0], self.review()["changes"][0]
         self.assertEqual(a["change_id"], b["change_id"])
         self.assertNotEqual(a["change_id"], pr.change_id(PID, PREV, "A1", "repeat_volume"))
 
 
-INPUTS = pe.PlanInputs(race_date=dt.date(2027, 2, 26), goal_time_s=3 * 3600 + 30 * 60,
-                       b_races=(pe.BRace(dt.date(2027, 1, 29), "tri_half"),))
-REVIEW_DAY = dt.date(2026, 12, 6)
+INPUTS = pe.PlanInputs(race_date=dt.date(2028, 2, 25), goal_time_s=3 * 3600 + 52 * 60,
+                       b_races=(pe.BRace(dt.date(2028, 1, 28), "tri_half"),))
+REVIEW_DAY = dt.date(2027, 12, 5)
 
 
 class Accept(unittest.TestCase):
-    """Accepted changes patch the stored version (built on Sunday 2026-12-06): only the targeted sessions change."""
+    """Accepted changes patch the stored version (built on Sunday 2027-12-05): only the targeted sessions change."""
 
     @classmethod
     def setUpClass(cls):
         # without predictions (MP from the goal, easy on LT multiples): with the marathon prediction's easy band
-        # a cap's long-run cut tips the week of 2027-01-04 under 80% easy and these edits are refused
+        # a cap's long-run cut tips the week of 2028-01-03 under 80% easy and these edits are refused
         snap = dataclasses.replace(pe.sample_snapshot(REVIEW_DAY), prediction_s=())
         cls.stored = pe.plan_answer(pe.build_plan(INPUTS, snap, what_if_runs=False))
 
@@ -262,9 +262,9 @@ class Accept(unittest.TestCase):
         self.assertEqual(pr.inputs_from_echo(full.echo()), full)
 
     def test_a_cap_on_monday_wednesday_and_saturday_keeps_the_rest_of_the_week(self):
-        start = "2026-12-07"
+        start = "2027-12-06"
         stored_week = self.week(self.stored, start)
-        for today in (dt.date(2026, 12, 7), dt.date(2026, 12, 9), dt.date(2026, 12, 12)):
+        for today in (dt.date(2027, 12, 6), dt.date(2027, 12, 8), dt.date(2027, 12, 11)):
             with self.subTest(today=today):
                 limit = stored_week["planned_km"] - 6
                 new, accepted, refused, applied = pr.apply_changes(
@@ -284,7 +284,7 @@ class Accept(unittest.TestCase):
                         self.assertIn(s, week["sessions"])
 
     def test_done_km_count_in_the_current_week(self):
-        start, today = "2026-12-07", dt.date(2026, 12, 9)
+        start, today = "2027-12-06", dt.date(2027, 12, 8)
         stored_week = self.week(self.stored, start)
         past = [s for s in stored_week["sessions"] if s["date"] < today.isoformat()]
         self.assertTrue(past)
@@ -296,12 +296,12 @@ class Accept(unittest.TestCase):
         self.assertGreaterEqual(self.week(nothing_run, start)["planned_km"], self.week(as_planned, start)["planned_km"])
 
     def test_held_deload_and_dropped_quality_cut_the_next_week(self):
-        """wk0: the stored plan's week of 2026-12-14 is cut to 78% and its quality made easy, applied on its
+        """wk0: the stored plan's week of 2027-12-13 is cut to 78% and its quality made easy, applied on its
         Monday or its Wednesday."""
-        nxt = "2026-12-14"
+        nxt = "2027-12-13"
         week = self.week(self.stored, nxt)
         quality = [s for s in week["sessions"] if s["role"] in pe.QUALITY_ROLES]
-        for today in (dt.date(2026, 12, 14), dt.date(2026, 12, 16)):
+        for today in (dt.date(2027, 12, 13), dt.date(2027, 12, 15)):
             with self.subTest(today=today):
                 changes = [self.change("c" + "1" * 16, {"op": "cap_week", "week_start": nxt,
                                                         "km": round(week["planned_km"] * 0.78, 1)}, kind="early_deload"),
@@ -328,7 +328,7 @@ class Accept(unittest.TestCase):
         self.assert_only(new, {q["date"]}, today - dt.timedelta(days=1))
 
     def test_the_easy_band_slows_only_later_easy_and_long_runs(self):
-        today = dt.date(2026, 12, 9)
+        today = dt.date(2027, 12, 8)
         new, _acc, _ref, applied = pr.apply_changes(
             self.stored, [self.change("c" + "4" * 16, {"op": "easy_band", "slowdown": 0.03}, kind="easy_band")], today)
         self.assertEqual(applied, ["c" + "4" * 16])
@@ -346,7 +346,7 @@ class Accept(unittest.TestCase):
 
     def test_a_slower_easy_run_stays_under_the_easy_cap(self):
         # The daily report calls a run of 75 minutes or more long: a slower band must not make an easy run long.
-        today = dt.date(2026, 12, 9)
+        today = dt.date(2027, 12, 8)
         stored = copy.deepcopy(self.stored)
         later = [s for w in stored["weeks"] for s in w["sessions"]
                  if s["role"] == "easy" and s["date"] > today.isoformat()]
@@ -362,17 +362,17 @@ class Accept(unittest.TestCase):
         self.assertEqual(pr.no_raise(stored, new, today), [])
 
     def test_a_shorter_long_run_keeps_the_step_and_too_short_is_refused(self):
-        today = dt.date(2026, 12, 7)
-        week = self.week(self.stored, "2026-12-07")
+        today = dt.date(2027, 12, 6)
+        week = self.week(self.stored, "2027-12-06")
         long = next(s for s in week["sessions"] if s["role"] == "long")
         new, _acc, refused, applied = pr.apply_changes(
-            self.stored, [self.change("c" + "5" * 16, {"op": "cap_long", "week_start": "2026-12-07",
+            self.stored, [self.change("c" + "5" * 16, {"op": "cap_long", "week_start": "2027-12-06",
                                                         "km": long["km"] - 3})], today)
         self.assertEqual((refused, applied), ([], ["c" + "5" * 16]))
         self.assertLessEqual(self.sessions(new)[long["key"]]["km"], long["km"] - 3 + 0.05)
         self.assertEqual(set(pr.patch_problems(new, today)) - set(pr.patch_problems(self.stored, today)), set())
         _new, _acc, refused, applied = pr.apply_changes(
-            self.stored, [self.change("c" + "6" * 16, {"op": "cap_long", "week_start": "2026-12-07", "km": 2.0})],
+            self.stored, [self.change("c" + "6" * 16, {"op": "cap_long", "week_start": "2027-12-06", "km": 2.0})],
             today)
         self.assertEqual((refused[0]["rule"], applied), ("easy_min_km", []))
 
@@ -394,8 +394,8 @@ class Accept(unittest.TestCase):
 
     def test_past_week_refused_cap_above_held_and_advice_accepted_without_a_patch(self):
         today = REVIEW_DAY
-        past = self.change("c" + "6" * 16, {"op": "cap_week", "week_start": "2026-11-23", "km": 10})
-        high = self.change("c" + "7" * 16, {"op": "cap_week", "week_start": "2026-12-07", "km": 500})
+        past = self.change("c" + "6" * 16, {"op": "cap_week", "week_start": "2027-11-22", "km": 10})
+        high = self.change("c" + "7" * 16, {"op": "cap_week", "week_start": "2027-12-06", "km": 500})
         advice = self.change("c" + "8" * 16, kind="pain_advice")
         new, accepted, refused, applied = pr.apply_changes(self.stored, [past, high, advice], today)
         self.assertEqual(accepted, ["c" + "7" * 16, "c" + "8" * 16])
@@ -405,9 +405,9 @@ class Accept(unittest.TestCase):
         self.assertEqual(new["weeks"], self.stored["weeks"])
 
     def test_bad_and_unknown_edits_are_refused(self):
-        bad = [self.change("c" + "1" * 16, {"op": "raise_week", "week_start": "2026-12-07"}),
-               self.change("c" + "2" * 16, {"op": "cap_week", "week_start": "2026-12-07"}),
-               self.change("c" + "3" * 16, {"op": "easy_day", "date": "2026-12-01"})]
+        bad = [self.change("c" + "1" * 16, {"op": "raise_week", "week_start": "2027-12-06"}),
+               self.change("c" + "2" * 16, {"op": "cap_week", "week_start": "2027-12-06"}),
+               self.change("c" + "3" * 16, {"op": "easy_day", "date": "2027-11-30"})]
         _new, accepted, refused, applied = pr.apply_changes(self.stored, bad, REVIEW_DAY)
         self.assertEqual([r["rule"] for r in refused], ["unknown_edit", "bad_edit", "past_day"])
         self.assertEqual((accepted, applied), ([], []))
@@ -447,10 +447,10 @@ class RemadeNotes(unittest.TestCase):
     new km; another role drops the long-run note."""
 
     def test_notes(self):
-        paces = pe.Paces(pe.MetersPerSecond(3.85), None, pe.RULES)
-        sore = {"key": "20270202-run", "date": "2027-02-02", "note": pe.NOTE_SORE}
+        paces = pe.Paces(pe.MetersPerSecond(3.55), None, pe.RULES)
+        sore = {"key": "20280201-run", "date": "2028-02-01", "note": pe.NOTE_SORE}
         self.assertEqual(pr._remake(sore, "easy", 4000.0, paces)["note"], pe.NOTE_SORE)
-        first = {"key": "20270205-run", "date": "2027-02-05", "note": pe.first_long_note(15200.0)}
+        first = {"key": "20280204-run", "date": "2028-02-04", "note": pe.first_long_note(15200.0)}
         out = pr._remake(first, "long", 12000.0, paces)
         self.assertEqual(out["note"], pe.first_long_note(12000.0))
         self.assertIn("Run up to 12.0 km", out["note"])

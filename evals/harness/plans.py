@@ -86,8 +86,8 @@ TRACKED_NOW = "2026-11-23T09:00:00+00:00"     # the plan world's anchor (Europe/
 WRITES_FIXTURES = ("off", "on", "declined", "committed")
 WRITE_TOOLS = ("plan_commit", "plan_cancel")
 PROFILE_ID = "71000001"   # get_stats userProfileId in the plan worlds (evals/harness/base_sets.py)
-# What "committed" commits before the model's first turn: the plan cases' Tel Aviv plan, the next 7 days.
-SEED_PREVIEW = {"race_date": "2027-02-26", "goal_time": "3:30:00", "b_races": "2027-01-29:tri_half",
+# What "committed" commits before the model's first turn: the plan cases' marathon plan, the next 7 days.
+SEED_PREVIEW = {"race_date": "2027-03-05", "goal_time": "3:52:00", "b_races": "2027-02-05:tri_half",
                 "run_days": "tue,wed,thu,sat,sun", "long_run_day": "sun", "commit_days": 7}
 
 
@@ -145,7 +145,7 @@ def _seed_tracked(store, active=True):
     import hashlib
 
     fp = store.account_fp(PROFILE_ID)
-    race = dt.date(2027, 2, 26)
+    race = dt.date(2027, 3, 5)
     pid, _, _ = store.save_preview(fp, None, race, 1, {"race_date": race.isoformat()}, TRACKED_PLAN,
                                    hashlib.sha256(b"eval-tracked").hexdigest())
     if active:
@@ -161,10 +161,10 @@ def _seed_reviewed(store):
     import plan_engine as pe
 
     fp = store.account_fp(PROFILE_ID)
-    race = dt.date(2027, 2, 26)
+    race = dt.date(2027, 3, 5)
     store._clock.now = dt.datetime.fromisoformat(REVIEWED_SINCE)
-    inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 30 * 60,
-                           b_races=(pe.BRace(dt.date(2027, 1, 29), "tri_half"),)).echo()
+    inputs = pe.PlanInputs(race_date=race, goal_time_s=3 * 3600 + 52 * 60,
+                           b_races=(pe.BRace(dt.date(2027, 2, 5), "tri_half"),)).echo()
     pid, _, _ = store.save_preview(fp, None, race, pe.RULES_VERSION, inputs, REVIEWED_PLAN,
                                    hashlib.sha256(b"eval-reviewed").hexdigest())
     store.move_plan(pid, "active")

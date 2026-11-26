@@ -28,7 +28,7 @@ def _day(text: str) -> dt.date:
 
 class OverrideBase(Oracle):
     def setUp(self) -> None:
-        self.snap = snapshot(TODAY, PROFILES["owner40"])
+        self.snap = snapshot(TODAY, PROFILES["club40"])
         # six run days, Monday off: a build week then has a free run day (Saturday, before the long run)
         self.inputs = pe.PlanInputs(race_date=RACE, goal_time_s=12600, run_days=(1, 2, 3, 4, 5, 6), rest_days=(0,))
         self.base = pe.plan_answer(build(self.inputs, self.snap))
@@ -250,11 +250,11 @@ class OverridesRefused(OverrideBase):
         self.refused(pe.Override("move", key=e, date=free), "blocked_dates")
         # a fixed run on the calendar that day
         self.inputs = dataclasses.replace(self.inputs, blocked_dates=())
-        self.snap = snapshot(TODAY, PROFILES["owner40"], fixed=(pe.FixedSession(free, "run", False, False, 40.0),))
+        self.snap = snapshot(TODAY, PROFILES["club40"], fixed=(pe.FixedSession(free, "run", False, False, 40.0),))
         self.base = pe.plan_answer(build(self.inputs, self.snap))
         self.refused(pe.Override("move", key=e, date=free), "one_run_per_day")
         # week 0: today and before are past
-        self.snap = snapshot(TODAY, PROFILES["owner40"])
+        self.snap = snapshot(TODAY, PROFILES["club40"])
         self.base = pe.plan_answer(build(self.inputs, self.snap))
         w0 = self.base["weeks"][0]
         k0 = w0["sessions"][0]["key"]
@@ -401,7 +401,7 @@ class OverridesRefused(OverrideBase):
 class AcwrModel(Oracle):
     def plan(self, loads: Optional[Dict[str, Any]], garmin: Optional[Tuple[pe.GarminLoad, ...]] = None,
              fixed: Tuple[pe.FixedSession, ...] = (), b_races: Tuple[pe.BRace, ...] = (),
-             prof: str = "owner40") -> Tuple[pe.PlanInputs, pe.Snapshot, Dict[str, Any]]:
+             prof: str = "club40") -> Tuple[pe.PlanInputs, pe.Snapshot, Dict[str, Any]]:
         snap = snapshot(TODAY, PROFILES[prof], loads=loads, fixed=fixed)
         if garmin is not None:
             snap = dataclasses.replace(snap, garmin_load=garmin)
@@ -410,7 +410,7 @@ class AcwrModel(Oracle):
 
     def model_ratios(self) -> List[Tuple[dt.date, float, float, float]]:
         """(day, model ratio, garmin chronic) on the three check days, from the tracked sample loads."""
-        snap = snapshot(TODAY, PROFILES["owner40"], loads={"garmin_gap": 0.0})
+        snap = snapshot(TODAY, PROFILES["club40"], loads={"garmin_gap": 0.0})
         actual: Dict[dt.date, float] = {}
         for act in snap.activity_load:
             actual[act.date] = actual.get(act.date, 0.0) + act.load
@@ -465,7 +465,7 @@ class AcwrModel(Oracle):
         _i, _s, plan = self.plan(None)
         self.assertFalse(plan["acwr"]["enforced"])
         self.assertIn("training_load", plan["missing"])
-        snap = snapshot(TODAY, PROFILES["owner40"], loads={})
+        snap = snapshot(TODAY, PROFILES["club40"], loads={})
         rides = tuple(a for a in snap.activity_load if a.sport != "run")
         snap = dataclasses.replace(snap, activity_load=rides)
         inputs = pe.PlanInputs(race_date=RACE)
@@ -538,7 +538,7 @@ class AcwrModel(Oracle):
         first = pe.week1_start(TODAY)
         rides = tuple(pe.FixedSession(first + dt.timedelta(days=d), "bike", d % 3 == 0, d % 3 == 1, 200.0)
                       for d in range(0, 70, 2))
-        for name in ("beginner15", "owner40", "runner60", "runner90", "very_slow", "no_lt"):
+        for name in ("beginner15", "club40", "runner60", "runner90", "very_slow", "no_lt"):
             for gap in (0.0, 0.1, 0.3):
                 with self.subTest(profile=name, gap=gap):
                     _i, _s, plan = self.plan({"garmin_gap": gap, "bike_min": 300}, fixed=rides, prof=name)
@@ -585,8 +585,8 @@ class Feasibility(unittest.TestCase):
         self.assertFalse(self.check(h, "goal_vs_threshold")["ok"])
 
     def test_corrected_goal(self):
-        f = self.feas(goal=12600, pred=13000, lt=3.85)
-        by_lt = 42195 / (0.93 * 3.85)
+        f = self.feas(goal=12600, pred=13000, lt=3.7)
+        by_lt = 42195 / (0.93 * 3.7)
         self.assertEqual(f["corrected_goal_s"], int(math.ceil(max(13000, by_lt) / 60) * 60))
         self.assertEqual(f["corrected_goal"], pe.hms(f["corrected_goal_s"]))
         self.assertEqual(self.feas(pred=12001)["corrected_goal_s"], 12060)
@@ -611,7 +611,7 @@ class Feasibility(unittest.TestCase):
         self.assertEqual((f["verdict"], f["checks"]), ("feasible", []))
 
     def test_the_plan_never_grows_to_meet_a_goal(self):
-        snap = snapshot(TODAY, PROFILES["owner40"])
+        snap = snapshot(TODAY, PROFILES["club40"])
         slow = pe.plan_answer(build(pe.PlanInputs(race_date=RACE, goal_time_s=5 * 3600), snap))
         fast = pe.plan_answer(build(pe.PlanInputs(race_date=RACE, goal_time_s=2 * 3600 + 30 * 60), snap))
         self.assertEqual([w["target_km"] for w in slow["weeks"]], [w["target_km"] for w in fast["weeks"]])
@@ -621,7 +621,7 @@ class Feasibility(unittest.TestCase):
 
 class WhatIfAndAssess(Oracle):
     def test_what_if_variants_and_their_invariants(self):
-        for name in ("beginner15", "owner40", "runner90", "no_lt", "very_slow"):
+        for name in ("beginner15", "club40", "runner90", "no_lt", "very_slow"):
             snap = snapshot(TODAY, PROFILES[name], loads={})
             for goal, expect in ((12600, ["goal_minus_5min", "goal_plus_5min", "long_share_0.35", "long_share_0.45"]),
                                  (None, ["long_share_0.35", "long_share_0.45"]),
@@ -639,7 +639,7 @@ class WhatIfAndAssess(Oracle):
                                          shares["long_share_0.45"]["peak_long_km"] or 0)
 
     def test_assess(self):
-        snap = snapshot(TODAY, PROFILES["owner40"])
+        snap = snapshot(TODAY, PROFILES["club40"])
         out = pe.assess(pe.PlanInputs(race_date=RACE, goal_time_s=12600), snap)
         self.assertEqual(out["weeks_to_race"], 16)
         self.assertEqual(out["avg_km_4w"], 40.0)

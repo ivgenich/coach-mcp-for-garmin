@@ -18,14 +18,14 @@ HAVE_UPSTREAM = importlib.util.find_spec("garmin_mcp") is not None and mcp2_comp
 UPSTREAM_SKIP = "needs upstream garmin_mcp on mcp 2.x"
 
 
-def sample_plan(lt=3.85):
+def sample_plan(lt=3.55):
     snap = pe.sample_snapshot()
     if lt is None:
         import dataclasses
 
         snap = dataclasses.replace(snap, lt_speed_mps=None)
-    inputs = pe.PlanInputs(race_date=dt.date(2027, 2, 26), goal_time_s=12600,
-                           b_races=(pe.BRace(dt.date(2027, 1, 29), "tri_half"),))
+    inputs = pe.PlanInputs(race_date=dt.date(2028, 2, 25), goal_time_s=13920,
+                           b_races=(pe.BRace(dt.date(2028, 1, 28), "tri_half"),))
     return pe.plan_answer(pe.build_plan(inputs, snap, what_if_runs=False))
 
 
@@ -134,7 +134,7 @@ class WithoutUpstream(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_checks_say_skipped(self):
-        checks = plan_dto.check_plan(sample_plan(), 3.85)
+        checks = plan_dto.check_plan(sample_plan(), 3.55)
         self.assertEqual([c["id"] for c in checks], ["dto_valid", "cross_engine"])
         self.assertTrue(all(c["ok"] and c["detail"] == plan_dto.SKIPPED for c in checks))
         self.assertIsNone(plan_dto.validate({}))
@@ -151,7 +151,7 @@ class WithUpstream(unittest.TestCase):
 
     def test_the_daily_classifier_agrees_with_the_plan(self):
         plan = sample_plan()
-        athlete = {"lt_speed_mps": 3.85, "lt_hr": None, "ftp_w": None}
+        athlete = {"lt_speed_mps": 3.55, "lt_hr": None, "ftp_w": None}
         seen = set()
         for s, dto in plan_dto.session_dtos(plan):
             c = plan_dto.classify(dto, athlete)
@@ -161,7 +161,7 @@ class WithUpstream(unittest.TestCase):
                 self.assertFalse(c["hard"] or c["long"], s["key"])
             seen.add(s["role"])
         self.assertTrue({"easy", "strides", "threshold", "long"} <= seen)
-        self.assertTrue(all(c["ok"] for c in plan_dto.check_plan(plan, 3.85)))
+        self.assertTrue(all(c["ok"] for c in plan_dto.check_plan(plan, 3.55)))
 
     def test_a_broken_dto_is_reported(self):
         dto = plan_dto.workout_dto(first(sample_plan(), "easy"))
@@ -175,13 +175,13 @@ class WithUpstream(unittest.TestCase):
             for s in w["sessions"]:
                 if s["role"] == "threshold":
                     s["hard_or_long"] = False
-        check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.85)}
+        check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.55)}
         self.assertFalse(check["cross_engine"]["ok"])
 
     def test_dto_valid_catches_a_distance_step_of_0_m(self):
         plan = sample_plan()
         first(plan, "easy")["steps"][0]["distance_m"] = 0
-        check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.85)}
+        check = {c["id"]: c for c in plan_dto.check_plan(plan, 3.55)}
         self.assertFalse(check["dto_valid"]["ok"])
         self.assertIn("distance step", check["dto_valid"]["detail"])
 

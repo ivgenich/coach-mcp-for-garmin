@@ -85,7 +85,7 @@ patched to True), and the executor's 1 s spacing between writes is 0. The execut
 (`client.client.post/delete` on the workout-service paths) of the RecordingClient, so the call log and the write
 faults below see every Garmin write. `on`: the harness client declares no elicitation, so a commit is confirmed by
 its token (`confirmed_by` "token"); `declined`: the client declares form elicitation and declines every form
-(`srv.elicitations` keeps the messages); `committed` commits the next 7 days of the Tel Aviv plan through the real
+(`srv.elicitations` keeps the messages); `committed` commits the next 7 days of the marathon plan through the real
 tools before the first turn (those calls are not in `srv.calls`). `srv.plan_store` is the memory store (a test can
 move its clock past the 2-minute quarantine of an `unknown` write).
 

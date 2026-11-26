@@ -23,7 +23,7 @@ import unittest
 import plan_activate as pa
 import test_deep_plan_days as T
 
-INPUTS = {"race_date": "2027-02-26", "goal_time": "3:30:00"}
+INPUTS = {"race_date": "2028-02-25", "goal_time": "3:52:00"}
 
 
 def run(coro):
@@ -77,9 +77,9 @@ class Days(unittest.TestCase):
 @unittest.skipUnless(T.HAVE_UPSTREAM, T.NEEDS)
 class OldKeys(Days):
     def build(self, name):
-        sim = self.sim(name, inputs=dict(INPUTS), history_until=dt.date(2027, 1, 17))
-        sim.morning(dt.date(2027, 1, 18))
-        sim.run_session(dt.date(2027, 1, 18)) if any(s["date"] == "2027-01-18" for s in sim.sessions()) else None
+        sim = self.sim(name, inputs=dict(INPUTS), history_until=dt.date(2028, 1, 16))
+        sim.morning(dt.date(2028, 1, 17))
+        sim.run_session(dt.date(2028, 1, 17)) if any(s["date"] == "2028-01-17" for s in sim.sessions()) else None
         return sim
 
     def test_old_keys_after_migration_work_like_date_keys(self):
@@ -96,11 +96,11 @@ class OldKeys(Days):
         self.assertEqual({r["workout_key"]: (r["date_local"], r["garmin_workout_id"])
                           for r in sim.store.links(sim.pid)}, rows_before)
         # Tracking, feedback, the next previews and commits, a cancel and the cleanup: no violation.
-        for day in T.days(dt.date(2027, 1, 19), dt.date(2027, 1, 21)):
+        for day in T.days(dt.date(2028, 1, 18), dt.date(2028, 1, 20)):
             sim.morning(day)
             if sim.run_session(day):
                 sim.feedback(day, rpe=4)
-        sim.at(dt.date(2027, 1, 21), 21)
+        sim.at(dt.date(2028, 1, 20), 21)
         sim.cancel()
         sim.cleanup()
         sim.report()
@@ -108,7 +108,7 @@ class OldKeys(Days):
     def test_without_migration_cancel_and_cleanup_do_not_crash(self):
         sim = self.build("old keys left")
         old_keys(sim.store, sim.pid)
-        sim.at(dt.date(2027, 1, 19), 9)
+        sim.at(dt.date(2028, 1, 18), 9)
         out = json.loads(run(sim.writes.cancel(plan_id=sim.pid)))
         token = out["cancel"]["token"]
         with self.assertLogs("garmin_ext.plans", "WARNING") as logs:
@@ -125,28 +125,28 @@ class OldKeys(Days):
 @unittest.skipUnless(T.HAVE_UPSTREAM, T.NEEDS)
 class SwapThenRebuild(Days):
     def test_todays_workout_survives_a_rebuild_after_a_swap(self):
-        sim = self.sim("swap then rebuild", inputs=dict(INPUTS), history_until=dt.date(2027, 1, 17))
-        sim.at(dt.date(2027, 1, 18), 7)
+        sim = self.sim("swap then rebuild", inputs=dict(INPUTS), history_until=dt.date(2028, 1, 16))
+        sim.at(dt.date(2028, 1, 17), 7)
         sim.preview()
-        week = [s for s in sim.sessions() if "2027-01-19" <= s["date"] <= "2027-01-24"]
+        week = [s for s in sim.sessions() if "2028-01-18" <= s["date"] <= "2028-01-23"]
         a, b = week[0], week[-1]
-        self.assertEqual(a["date"], "2027-01-19")
+        self.assertEqual(a["date"], "2028-01-18")
         sim.inputs["overrides"] = json.dumps([{"kind": "swap", "date": a["date"], "date_b": b["date"]}])
         out = sim.preview()
         self.assertTrue(out["overrides"]["applied"], out["overrides"])
-        sim.at(dt.date(2027, 1, 18), 7, 10)
+        sim.at(dt.date(2028, 1, 17), 7, 10)
         sim.commit(out)
         # The next morning the override is gone: the rebuilt plan keeps today's stored (moved) session.
-        sim.at(dt.date(2027, 1, 19), 7)
+        sim.at(dt.date(2028, 1, 18), 7)
         sim.inputs.pop("overrides")
-        today_before = [e["workoutId"] for e in sim.garmin.ours_entries() if e["scheduleDate"] == "2027-01-19"]
+        today_before = [e["workoutId"] for e in sim.garmin.ours_entries() if e["scheduleDate"] == "2028-01-18"]
         self.assertEqual(len(today_before), 1)
         text = run(sim.plans.preview(plan_id=sim.pid, commit_days=7, **sim.inputs))
         out = json.loads(text)
         keys = collections.Counter(s["key"] for s in sim.sessions())
         dups = [k for k, n in keys.items() if n > 1]
         ops = (out.get("commit") or {}).get("ops") or []
-        self.assertEqual([o for o in ops if o["date"] <= "2027-01-19"], [], "nothing on today or earlier")
+        self.assertEqual([o for o in ops if o["date"] <= "2028-01-18"], [], "nothing on today or earlier")
         if dups:
             self.assertFalse(out["invariants"]["ok"])
             failed = {i["id"]: i["detail"] for i in out["invariants"]["failed"]}
@@ -154,9 +154,9 @@ class SwapThenRebuild(Days):
             self.assertIn(f"key {dups[0]}", failed["one_run_per_day"])
             self.assertIsNone(out["commit"].get("token"), "no commit token with a key twice in the version")
         elif out["commit"].get("token"):
-            sim.at(dt.date(2027, 1, 19), 7, 10)
+            sim.at(dt.date(2028, 1, 18), 7, 10)
             run(sim.writes.commit(plan_id=sim.pid, commit_token=out["commit"]["token"]))
-        today_after = [e["workoutId"] for e in sim.garmin.ours_entries() if e["scheduleDate"] == "2027-01-19"]
+        today_after = [e["workoutId"] for e in sim.garmin.ours_entries() if e["scheduleDate"] == "2028-01-18"]
         self.assertEqual(today_after, today_before, "today's workout stays")
 
     def test_commit_ops_never_touch_a_row_of_today_whose_key_moved(self):
@@ -178,8 +178,8 @@ class SwapThenRebuild(Days):
 @unittest.skipUnless(T.HAVE_UPSTREAM, T.NEEDS)
 class ConfirmRace(Days):
     def test_a_plan_stopped_during_the_confirmation_writes_nothing(self):
-        sim = self.sim("stop during confirm", inputs=dict(INPUTS), history_until=dt.date(2027, 1, 17))
-        sim.at(dt.date(2027, 1, 18), 7)
+        sim = self.sim("stop during confirm", inputs=dict(INPUTS), history_until=dt.date(2028, 1, 16))
+        sim.at(dt.date(2028, 1, 17), 7)
         out = sim.preview()
         svc = pa.ActivateService(lambda: sim.store, sim.today)
         self.assertEqual(json.loads(svc.activate(sim.pid, out["stored"]["version"], "start"))["status"], "active")
@@ -198,14 +198,14 @@ class ConfirmRace(Days):
         self.assertEqual(sim.store.links(sim.pid), [])
 
     def test_a_new_version_stored_during_the_confirmation_writes_nothing(self):
-        sim = self.sim("version during confirm", inputs=dict(INPUTS), history_until=dt.date(2027, 1, 17))
-        sim.at(dt.date(2027, 1, 18), 7)
+        sim = self.sim("version during confirm", inputs=dict(INPUTS), history_until=dt.date(2028, 1, 16))
+        sim.at(dt.date(2028, 1, 17), 7)
         out = sim.preview()
         orig = sim._confirm
         stored = {}
 
         async def confirm(ctx, **summary):
-            text = await sim.plans.preview(plan_id=sim.pid, commit_days=7, blocked_dates="2027-01-20,2027-01-23",
+            text = await sim.plans.preview(plan_id=sim.pid, commit_days=7, blocked_dates="2028-01-19,2028-01-22",
                                            **INPUTS)
             stored.update(json.loads(text)["stored"])
             return await orig(ctx, **summary)
@@ -219,14 +219,14 @@ class ConfirmRace(Days):
         self.assertEqual(sim.garmin.ours_entries(), [])
 
     def test_a_new_version_stored_during_a_cancel_confirmation_deletes_nothing(self):
-        sim = self.sim("version during cancel", inputs=dict(INPUTS), history_until=dt.date(2027, 1, 17))
-        sim.morning(dt.date(2027, 1, 18))
-        sim.at(dt.date(2027, 1, 18), 9)
+        sim = self.sim("version during cancel", inputs=dict(INPUTS), history_until=dt.date(2028, 1, 16))
+        sim.morning(dt.date(2028, 1, 17))
+        sim.at(dt.date(2028, 1, 17), 9)
         token = json.loads(run(sim.writes.cancel(plan_id=sim.pid)))["cancel"]["token"]
         orig = sim._confirm
 
         async def confirm(ctx, **summary):
-            await sim.plans.preview(plan_id=sim.pid, commit_days=7, blocked_dates="2027-01-22", **INPUTS)
+            await sim.plans.preview(plan_id=sim.pid, commit_days=7, blocked_dates="2028-01-21", **INPUTS)
             return await orig(ctx, **summary)
 
         sim.writes._confirm = confirm

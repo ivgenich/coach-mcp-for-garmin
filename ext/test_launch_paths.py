@@ -163,7 +163,7 @@ class PathRules(RefusedPath, unittest.TestCase):
                     self.assertEqual(refused("get_vo2max_trend", {**good, field: value}),
                                      (field, tool_errors.DATE_DETAIL))
         # plan_preview's course_id goes into the course read's path: digits only (rules v2 race pacing)
-        preview = {"race_date": "2027-02-26"}
+        preview = {"race_date": "2027-03-05"}
         for value in ("", "0", "4242", 4242, 0, "1" * 15):
             with self.subTest(course_id=value):
                 self.assertIsNone(refused("plan_preview", {**preview, "course_id": value}))

@@ -20,7 +20,7 @@ import plan_store as ps
 DB_URL = os.environ.get("COACH_TEST_DATABASE_URL", "").strip()
 HAVE_PSYCOPG = importlib.util.find_spec("psycopg") is not None
 PG_SKIP = "needs psycopg and COACH_TEST_DATABASE_URL (Postgres with pgvector)"
-RACE = dt.date(2027, 2, 26)
+RACE = dt.date(2027, 3, 5)
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -146,7 +146,7 @@ class StoreContract:
     def test_values_are_checked_before_any_sql(self):
         for args in (("short", None, RACE, 1, {}, {}, h("a")),
                      (self.fp, "not-hex", RACE, 1, {}, {}, h("a")),
-                     (self.fp, None, "2027-02-26", 1, {}, {}, h("a")),
+                     (self.fp, None, "2027-03-05", 1, {}, {}, h("a")),
                      (self.fp, None, RACE, 0, {}, {}, h("a")),
                      (self.fp, None, RACE, True, {}, {}, h("a")),
                      (self.fp, None, RACE, 1, [], {}, h("a")),
@@ -319,11 +319,11 @@ class WriteContract(StoreContract):
                 {"key": "w01-e1", "date": "2026-12-02", "role": "easy"},
                 {"key": "w01-e2", "date": "2026-12-03", "role": "easy"},
                 {"key": "w01-long", "date": "2026-12-06", "role": "long"}]},
-            {"week": 9, "start": "2027-01-25", "sessions": [
-                {"key": "w09-b", "date": "2027-01-29", "role": "b_race"},
-                {"key": "w09-e1", "date": "2027-01-30", "role": "easy"}]},
-            {"week": 13, "start": "2027-02-22", "sessions": [
-                {"key": "w13-race", "date": "2027-02-26", "role": "race"}]}],
+            {"week": 10, "start": "2027-02-01", "sessions": [
+                {"key": "w10-b", "date": "2027-02-05", "role": "b_race"},
+                {"key": "w10-e1", "date": "2027-02-06", "role": "easy"}]},
+            {"week": 14, "start": "2027-03-01", "sessions": [
+                {"key": "w14-race", "date": "2027-03-05", "role": "race"}]}],
             "overrides": {"applied": [{"kind": "easy", "key": "w01-long"}], "refused": []}}
 
     def test_old_session_keys_become_date_keys(self):
@@ -371,8 +371,8 @@ class WriteContract(StoreContract):
         plan = self.store.get_plan(self.fp, pid)
         keys = [(s["key"], s["date"]) for w in plan["version_row"]["body"]["weeks"] for s in w["sessions"]]
         self.assertEqual(keys, [("20261201-run", "2026-12-01"), ("20261203-run", "2026-12-03"),
-                                ("20261206-run", "2026-12-06"), ("20270129-b", "2027-01-29"),
-                                ("20270130-run", "2027-01-30"), ("20270226-race", "2027-02-26")])
+                                ("20261206-run", "2026-12-06"), ("20270205-b", "2027-02-05"),
+                                ("20270206-run", "2027-02-06"), ("20270305-race", "2027-03-05")])
         self.assertEqual(plan["version_row"]["body"]["overrides"]["applied"][0]["key"], "20261206-run")
         self.assertEqual(plan["version_row"]["inputs"]["overrides"][0]["key"], "20261206-run")
         rows = {r["workout_key"]: (r["date_local"], r["garmin_workout_id"]) for r in self.store.write_rows(pid)}

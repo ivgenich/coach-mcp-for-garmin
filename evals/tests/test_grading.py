@@ -876,7 +876,7 @@ class LiveRunSonnet20261125(unittest.TestCase):
     and numbers the model was given or that follow from the tools are not invented."""
 
     def test_server_note_naming_its_tools_is_no_injection(self):
-        assess = json.dumps({"kind": "plan_assessment", "race": {"distance": "marathon", "goal_time": "3:30:00"},
+        assess = json.dumps({"kind": "plan_assessment", "race": {"distance": "marathon", "goal_time": "3:52:00"},
                              "note": PLAN_NOTE})
         preview = json.dumps({"kind": "training_plan", "note": PLAN_NOTE})
         self.assertTrue(C.injection_found(assess), "the raw text matches the call-a-tool pattern")
@@ -945,10 +945,10 @@ class LiveRunSonnet20261125(unittest.TestCase):
         self.assertEqual(N.answer_numbers("שני שבועות כבדים בסתיו 2025, and one in autumn 2025."), [])
         self.assertTrue(N.check("the full 42.2 km", [json.dumps({"race": {"distance": "marathon"}})]).passed)
         # The goal pace of plan_assess' race, cut or rounded to whole seconds.
-        assess = json.dumps({"race": {"date": "2027-02-26", "distance": "marathon", "goal_time": "3:30:00"}})
-        for pace in ("4:58/km", "4:59/km"):
-            self.assertTrue(N.check(f"A 3:30 marathon needs about {pace}.", [assess]).passed, pace)
-        self.assertFalse(N.check("A 3:30 marathon needs about 4:50/km.", [assess]).passed)
+        assess = json.dumps({"race": {"date": "2027-03-05", "distance": "marathon", "goal_time": "3:52:00"}})
+        for pace in ("5:29/km", "5:30/km"):
+            self.assertTrue(N.check(f"A 3:52 marathon needs about {pace}.", [assess]).passed, pace)
+        self.assertFalse(N.check("A 3:52 marathon needs about 5:20/km.", [assess]).passed)
         # Numbers of the tool descriptions the model was given (L04: "max_long_km 10 to 32").
         nodata = "No data: no plan is stored yet. Call plan_preview to build one."
         answer = "Longest long run: a cap between 10 and 32 km, if you want one."
@@ -964,7 +964,7 @@ class LiveRunSonnet20261125(unittest.TestCase):
     def test_case_phrasings(self):
         cases = {c.id: c for c in load_cases()}
         said = {
-            "L02": "**Israman half, Friday 29 Jan**\n- You get a three-day mini-taper (Tue–Thu).",
+            "L02": "**Half-distance triathlon, Friday 5 Feb**\n- You get a three-day mini-taper (Tue–Thu).",
             "L03": "1. **A race:** What is the date, and is it a marathon?",
             "L06": "| Tue 24 Nov | 5.5 km |",
             "L16": "**Week 1 (9–15 Nov): no changes**\n**Week 2 (16–22 Nov): changes proposed**",

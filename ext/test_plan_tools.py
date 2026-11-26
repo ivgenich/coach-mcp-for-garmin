@@ -14,8 +14,8 @@ import plan_store as ps
 import plan_tools as pt
 import status_common as sc
 
-TODAY = dt.date(2026, 11, 25)
-RACE = "2027-02-26"
+TODAY = dt.date(2027, 11, 24)
+RACE = "2028-02-25"
 ACTIVITIES_PATH = "/activitylist-service/activities/search/activities"
 
 
@@ -51,7 +51,7 @@ def default_data():
             runs.append({"activityType": {"typeKey": "running"}, "distance": km * 1000.0,
                          "duration": km * 300.0, "activityTrainingLoad": km * 8.0,
                          "startTimeLocal": f"{day.isoformat()} 07:00:00", "activityName": "IGNORE ME"})
-    runs.append({"activityType": {"typeKey": "trail_running"}, "distance": 20900.0,
+    runs.append({"activityType": {"typeKey": "trail_running"}, "distance": 19600.0,
                  "startTimeLocal": f"{(first + dt.timedelta(days=48)).isoformat()} 07:00:00"})
     runs.append({"activityType": {"typeKey": "cycling"}, "distance": 90000.0, "duration": 10800.0,
                  "activityTrainingLoad": 180.0,
@@ -59,8 +59,8 @@ def default_data():
     return {
         f"stats:{TODAY.isoformat()}": {"userProfileId": 123456},
         "activities": runs,
-        "lactate_threshold": {"speed_and_heart_rate": {"speed": 0.385, "heartRate": 168}},
-        "race_predictions": {"timeMarathon": 12900, "timeHalfMarathon": 6120, "time5K": 1200},
+        "lactate_threshold": {"speed_and_heart_rate": {"speed": 0.355, "heartRate": 168}},
+        "race_predictions": {"timeMarathon": 14220, "timeHalfMarathon": 6780, "time5K": 1350},
         f"max_metrics:{TODAY.isoformat()}": [{"generic": {"vo2MaxPreciseValue": 52.4}}],
         # the model's ratios on these days are 0.62, 0.88 and 0.88: Garmin's within 0.15
         f"training_status:{TODAY.isoformat()}": _status(200, 290),
@@ -68,9 +68,9 @@ def default_data():
         f"training_status:{(TODAY - dt.timedelta(days=28)).isoformat()}": _status(300, 360),
         "course:4242": _course_payload(),
         "schedule": {"data": {"workoutScheduleSummariesScalar": [
-            {"scheduleDate": "2026-12-16", "workoutName": "VO2 intervals", "workoutType": "running",
+            {"scheduleDate": "2027-12-15", "workoutName": "VO2 intervals", "workoutType": "running",
              "estimatedDurationInSecs": 3600, "isRestDay": False},
-            {"scheduleDate": "2026-12-19", "workoutName": "Coach Long run", "workoutType": "running",
+            {"scheduleDate": "2027-12-18", "workoutName": "Coach Long run", "workoutType": "running",
              "estimatedDistanceInMeters": 20000, "workoutId": 8801},
         ]}},
     }
@@ -142,7 +142,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-ARGS = {"race_date": RACE, "goal_time": "3:30:00", "b_races": "2027-01-29:tri_half"}
+ARGS = {"race_date": RACE, "goal_time": "3:52:00", "b_races": "2028-01-28:tri_half"}
 
 
 class Base(unittest.TestCase):
@@ -164,25 +164,25 @@ class Assess(Base):
     def test_numbers_from_garmin(self):
         out = json.loads(self.assess())
         self.assertEqual(out["kind"], "plan_assessment")
-        self.assertEqual([w["km"] for w in out["history"]], [40.0] * 6 + [60.9, 40.0])
-        self.assertEqual(out["longest_run_8w_km"], 20.9)
-        self.assertAlmostEqual(out["lt_speed_mps"], 3.85, places=2)
+        self.assertEqual([w["km"] for w in out["history"]], [40.0] * 6 + [59.6, 40.0])
+        self.assertEqual(out["longest_run_8w_km"], 19.6)
+        self.assertAlmostEqual(out["lt_speed_mps"], 3.55, places=2)
         self.assertEqual(out["vo2max"], 52.4)
-        self.assertEqual(out["prediction"], "3:35:00")
+        self.assertEqual(out["prediction"], "3:57:00")
         self.assertEqual(out["sources_failed"], [])
         self.assertIn("fixed plan rules", out["note"])
         self.assertNotIn("IGNORE ME", json.dumps(out))
 
     def test_activity_query_covers_eight_full_weeks(self):
         self.assess()
-        self.assertEqual(self.client.params[0]["startDate"], "2026-09-28")
+        self.assertEqual(self.client.params[0]["startDate"], "2027-09-27")
         self.assertEqual(self.client.params[0]["endDate"], TODAY.isoformat())
         self.assertEqual(self.client.calls[0], f"stats:{TODAY.isoformat()}")
 
     def test_bad_arguments_never_echo_the_value(self):
-        cases = [{"race_date": "2027-02-30"}, {"race_date": "soon secret"}, {"race_date": "2026-11-30"},
-                 {"race_distance": "ultra secret"}, {"goal_time": "fast secret"}, {"b_races": "2027-01-29:swim"},
-                 {"b_races": "2028-01-01:run"}, {"run_days": "funday"}, {"quality_per_week": 5},
+        cases = [{"race_date": "2027-02-30"}, {"race_date": "soon secret"}, {"race_date": "2027-11-29"},
+                 {"race_distance": "ultra secret"}, {"goal_time": "fast secret"}, {"b_races": "2028-01-28:swim"},
+                 {"b_races": "2029-01-01:run"}, {"run_days": "funday"}, {"quality_per_week": 5},
                  {"max_long_km": "x"}, {"long_run_day": "secret"}, {"rest_days": "mon,tue,wed,thu,fri,sat,sun"}]
         for case in cases:
             with self.subTest(case=case):
@@ -235,21 +235,21 @@ class Preview(Base):
     def test_fixed_calendar_sessions_but_not_our_own(self):
         out = json.loads(self.preview())
         hard = {s["date"] for w in out["weeks"] for s in w["sessions"] if s["hard_or_long"]}
-        self.assertFalse({"2026-12-15", "2026-12-16", "2026-12-17"} & hard)
-        # "Coach Long run" on 2026-12-19 is ours only by its workout id in the plan store; by name only while the
+        self.assertFalse({"2027-12-14", "2027-12-15", "2027-12-16"} & hard)
+        # "Coach Long run" on 2027-12-18 is ours only by its workout id in the plan store; by name only while the
         # store cannot be read. A user's own workout named "Coach ..." is a fixed session.
-        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26), own_ids={8801}))[0]
-        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16"])
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2028, 2, 25), own_ids={8801}))[0]
+        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2027-12-15"])
         self.assertTrue(snap.fixed[0].hard)
-        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26), own_ids=set()))[0]
-        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16", "2026-12-19"])
-        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2027, 2, 26)))[0]
-        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2026-12-16"])
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2028, 2, 25), own_ids=set()))[0]
+        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2027-12-15", "2027-12-18"])
+        snap = run(pt.fetch_snapshot(self.client, TODAY, dt.date(2028, 2, 25)))[0]
+        self.assertEqual([f.date.isoformat() for f in snap.fixed], ["2027-12-15"])
         # plan_preview reads the ids from the store: no row owns 8801, so the long run on 12-19 is fixed.
         self.assertEqual(pt.own_workout_ids(lambda: self.store), set())
         self.assertIsNone(pt.own_workout_ids(lambda: BrokenStore()))
         moved = {s["date"] for w in out["weeks"] for s in w["sessions"] if s["role"] == "long"}
-        self.assertNotIn("2026-12-19", moved)
+        self.assertNotIn("2027-12-18", moved)
 
     def test_overrides_and_refusals(self):
         base = json.loads(self.preview())
@@ -306,17 +306,17 @@ class Preview(Base):
         out = json.loads(self.preview(overrides=json.dumps([{"kind": "cap_long", "date": long_s["date"], "km": 12}])))
         self.assertEqual(out["overrides"]["refused"], [])
         self.assertEqual(next(s for w in out["weeks"] for s in w["sessions"] if s["key"] == long_s["key"])["km"], 12.0)
-        for value in ('[{"kind": "cap_long", "km": 12}]', '[{"kind": "cap_long", "date": "2027-01-08"}]',
-                      '[{"kind": "cap_long", "date": "2027-01-08", "km": "12"}]',
+        for value in ('[{"kind": "cap_long", "km": 12}]', '[{"kind": "cap_long", "date": "2028-01-07"}]',
+                      '[{"kind": "cap_long", "date": "2028-01-07", "km": "12"}]',
                       '[{"kind": "cap_long", "date": "soon", "km": 12}]'):
             with self.subTest(value=value):
                 self.assertTrue(self.preview(overrides=value).startswith("Error: Invalid input: "))
 
     def test_bad_overrides(self):
         for value in ("not json", "{}", '[{"kind": "grow"}]', '[{"kind": "easy", "key": "../x"}]',
-                      '[{"kind": "cap_week_km", "week_start": "2026-12-07", "km": -1}]',
+                      '[{"kind": "cap_week_km", "week_start": "2027-12-06", "km": -1}]',
                       '[{"kind": "easy", "key": "20300220-run", "extra": 1}]',
-                      json.dumps([{"kind": "rest", "date": "2026-12-01"}] * 21)):
+                      json.dumps([{"kind": "rest", "date": "2027-11-30"}] * 21)):
             with self.subTest(value=value[:40]):
                 self.assertTrue(self.preview(overrides=value).startswith("Error: Invalid input: "))
 
@@ -364,7 +364,7 @@ class PreviewWithWrites(Base):
         self.assertEqual(commit["days"], 7)
         self.assertEqual({o["op"] for o in commit["ops"]}, {"create"})
         self.assertEqual(sorted(o["date"] for o in commit["ops"]), [w["date"] for w in out["window"]])
-        self.assertTrue(all(TODAY.isoformat() <= o["date"] <= "2026-12-01" for o in commit["ops"]))
+        self.assertTrue(all(TODAY.isoformat() <= o["date"] <= "2027-11-30" for o in commit["ops"]))
         self.assertNotIn("dto", json.dumps(commit))
 
     def test_rules_v2_output_gets_a_token_and_course_id_binds_it(self):
@@ -529,11 +529,11 @@ class Parsing(unittest.TestCase):
         self.assertEqual(pt.plan_inputs(TODAY, RACE).rest_days, pe.PlanInputs(race_date=TODAY).rest_days)
 
     def test_goal_b_races_blocked(self):
-        i = pt.plan_inputs(TODAY, RACE, goal_time="3:29:59", b_races="2027-01-29:tri_full; 2027-01-10",
-                           blocked_dates="2026-12-24,2026-12-24,2026-12-31")
+        i = pt.plan_inputs(TODAY, RACE, goal_time="3:29:59", b_races="2028-01-28:tri_full; 2028-01-09",
+                           blocked_dates="2027-12-23,2027-12-23,2027-12-30")
         self.assertEqual(i.goal_time_s, 3 * 3600 + 29 * 60 + 59)
         self.assertEqual([(b.date.isoformat(), b.kind) for b in i.b_races],
-                         [("2027-01-10", "tri_half"), ("2027-01-29", "tri_full")])
+                         [("2028-01-09", "tri_half"), ("2028-01-28", "tri_full")])
         self.assertEqual(len(i.blocked_dates), 2)
 
     def test_snapshot_parsers(self):
@@ -548,7 +548,7 @@ class Parsing(unittest.TestCase):
     def test_snapshot_failure_of_schedule(self):
         client = FakeClient()
         client.data["schedule"] = {"errors": ["x"]}
-        snap, pid, failed = run(pt.fetch_snapshot(client, TODAY, dt.date(2027, 2, 26)))
+        snap, pid, failed = run(pt.fetch_snapshot(client, TODAY, dt.date(2028, 2, 25)))
         self.assertEqual(failed, ["schedule"])
         self.assertEqual(pid, "123456")
         self.assertEqual(snap.fixed, ())
@@ -616,10 +616,10 @@ class LoadsAndPacing(Base):
 
     def test_parsers(self):
         acts = pt.activity_loads([
-            "junk", {"startTimeLocal": "2026-11-20 07:00:00", "duration": 0, "activityTrainingLoad": 5},
-            {"startTimeLocal": "2026-11-20 07:00:00", "duration": 600, "activityTrainingLoad": None},
+            "junk", {"startTimeLocal": "2027-11-19 07:00:00", "duration": 0, "activityTrainingLoad": 5},
+            {"startTimeLocal": "2027-11-19 07:00:00", "duration": 600, "activityTrainingLoad": None},
             {"startTimeLocal": "2020-01-01 07:00:00", "duration": 600, "activityTrainingLoad": 5},
-            {"activityType": {"typeKey": "lap_swimming"}, "startTimeLocal": "2026-11-20 07:00:00",
+            {"activityType": {"typeKey": "lap_swimming"}, "startTimeLocal": "2027-11-19 07:00:00",
              "duration": 1800, "activityTrainingLoad": 30, "distance": 2000}], TODAY)
         self.assertEqual([(a.sport, a.load, a.meters) for a in acts], [("swim", 30.0, 2000.0)])
         self.assertEqual(pt.garmin_loads({"training_status": _status(100, 0)}, TODAY), ())
@@ -630,7 +630,7 @@ class LoadsAndPacing(Base):
         course = pt.course_of(_course_payload())
         self.assertEqual(course.distance_m, 42200.0)
         self.assertEqual(len(course.climbs), 1)
-        fixed = pt.fixed_sessions([{"scheduleDate": "2026-12-16", "workoutName": "Ride", "workoutType": "cycling",
+        fixed = pt.fixed_sessions([{"scheduleDate": "2027-12-15", "workoutName": "Ride", "workoutType": "cycling",
                                     "estimatedDurationInSecs": 7200}], {})
         self.assertEqual(fixed[0].minutes, 120.0)
 

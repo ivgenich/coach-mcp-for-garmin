@@ -1,4 +1,4 @@
-"""plan_engine: the defects an independent review proved (2026-11-26), each kept as a regression test.
+"""plan_engine: the defects an independent review proved (2026-11-25), each kept as a regression test.
 
 Standard library only. One class per defect:
 
@@ -60,7 +60,7 @@ def _leaves(steps):
 # --- 1. the long-run day on a rest day -------------------------------------------------------------------------
 
 WEEKDAY_RUNNER = _snap(TODAY, (38, 42, 36, 44, 40, 41, 39, 43), 22.0, lt=3.7)
-WEEKDAY_INPUTS = pe.PlanInputs(race_date=D(2027, 3, 12), run_days=(0, 1, 2, 3, 4), rest_days=(5, 6),
+WEEKDAY_INPUTS = pe.PlanInputs(race_date=D(2028, 3, 10), run_days=(0, 1, 2, 3, 4), rest_days=(5, 6),
                                long_run_day=6)
 
 
@@ -137,7 +137,7 @@ class LongRunDayOnARestDay(unittest.TestCase):
 
     def test_ties_go_to_the_later_run_day(self):
         # run Tuesday, Thursday and Saturday, long run on Friday: Thursday and Saturday are as near
-        inputs = pe.PlanInputs(race_date=D(2027, 3, 12), run_days=(1, 3, 5), rest_days=(0, 2, 4, 6),
+        inputs = pe.PlanInputs(race_date=D(2028, 3, 10), run_days=(1, 3, 5), rest_days=(0, 2, 4, 6),
                                long_run_day=4)
         plan = pe.build_plan(inputs, WEEKDAY_RUNNER, what_if_runs=False)
         self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
@@ -152,7 +152,7 @@ class LongRunDayOnARestDay(unittest.TestCase):
 
 HALF_RUNNER = _snap(TODAY, (40, 42, 38, 44, 41, 43, 40, 44), 18.0, lt=3.95,
                     predictions=(("half", 3600 + 31 * 60), ("10k", 41 * 60 + 30)))
-HALF_INPUTS = pe.PlanInputs(race_date=D(2027, 3, 21), race_distance="half", goal_time_s=3600 + 30 * 60)
+HALF_INPUTS = pe.PlanInputs(race_date=D(2028, 3, 19), race_distance="half", goal_time_s=3600 + 30 * 60)
 
 
 class HalfMarathonRacePace(unittest.TestCase):
@@ -188,7 +188,7 @@ class HalfMarathonRacePace(unittest.TestCase):
 
 def _anchor_case(lt, t5):
     snap = _snap(TODAY, (40, 42, 38, 44, 41, 43, 40, 44), 20.0, lt=lt, predictions=(("5k", t5),))
-    return snap, pe.build_plan(pe.PlanInputs(race_date=D(2027, 3, 12)), snap, what_if_runs=False)
+    return snap, pe.build_plan(pe.PlanInputs(race_date=D(2028, 3, 10)), snap, what_if_runs=False)
 
 
 class AnchoredBandsKeepRule5(unittest.TestCase):
@@ -229,8 +229,8 @@ class AnchoredBandsKeepRule5(unittest.TestCase):
         self.assertEqual([w["id"] for w in warnings], ["threshold_anchor_conflict"])
 
     def test_no_conflict_no_warning(self):
-        lt = pe.MetersPerSecond(1000.0 / 248.0)   # the owner: LT 4:08, 5K 20:20, 10K 42:30
-        snap = _snap(TODAY, (40,) * 8, 20.0, lt=lt, predictions=(("5k", 1220), ("10k", 2550)))
+        lt = pe.MetersPerSecond(1000.0 / 280.0)   # LT 4:40, 5K 23:00, 10K 48:00
+        snap = _snap(TODAY, (40,) * 8, 20.0, lt=lt, predictions=(("5k", 1380), ("10k", 2880)))
         warnings = []
         pe.anchored_bands(lt, snap, pe.RULES, warnings)
         self.assertEqual(warnings, [])
@@ -251,12 +251,12 @@ class ReduceOnlyOverridesOnLongRuns(unittest.TestCase):
         self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
 
     def test_g4_long_run_can_be_rested_eased_or_capped(self):
-        day = D(2026, 12, 13)   # G4 week 2's long run, 27.9 km
+        day = D(2027, 12, 12)   # G4 week 2's long run, 27.9 km
         base = _sessions(_g("G4"))
         key = next(k for k, s in base.items() if s["date"] == day.isoformat())
         for o in (pe.Override("easy", date=day), pe.Override("cap_long", date=day, km=20.0),
                   pe.Override("cap_km", date=day, km=20.0), pe.Override("rest", date=day),
-                  pe.Override("cap_week_km", week_start=D(2026, 12, 7), km=0.0)):
+                  pe.Override("cap_week_km", week_start=D(2027, 12, 6), km=0.0)):
             with self.subTest(edit=o.echo()):
                 plan = _g("G4", o)
                 self.assert_applied(plan)
@@ -264,16 +264,16 @@ class ReduceOnlyOverridesOnLongRuns(unittest.TestCase):
                 self.assertTrue(key not in now or now[key]["km"] <= base[key]["km"])
                 # the later weeks are as planned: the long run reduced by an override is not the step reference
                 for k, s in base.items():
-                    if s["date"] > "2026-12-13":
+                    if s["date"] > "2027-12-12":
                         self.assertEqual(now[k], s, k)
                 if o.kind in ("rest", "cap_week_km", "easy", "cap_long", "cap_km"):
                     relaxed = [w for w in plan["warnings"] if w["id"] == "override_relaxed"]
                     self.assertTrue(relaxed, plan["warnings"])
-                    self.assertEqual(relaxed[0]["dates"], ["2026-12-07", "2026-12-13"])
+                    self.assertEqual(relaxed[0]["dates"], ["2027-12-06", "2027-12-12"])
                     self.assertIn("long_step", relaxed[0]["detail"])
 
     def test_g1_rest_and_cap_long_on_a_long_run_day_apply_with_a_warning(self):
-        for o in (pe.Override("rest", date=D(2027, 1, 24)), pe.Override("cap_long", date=D(2027, 2, 14), km=16.0)):
+        for o in (pe.Override("rest", date=D(2028, 1, 23)), pe.Override("cap_long", date=D(2028, 2, 13), km=16.0)):
             with self.subTest(edit=o.echo()):
                 plan = _g("G1", o)
                 self.assert_applied(plan)
@@ -285,21 +285,21 @@ class ReduceOnlyOverridesOnLongRuns(unittest.TestCase):
     def test_still_refused_when_the_b_race_limit_follows_the_plan_as_it_is(self):
         # rule 7: the first long run after a half-distance triathlon is at most 0.75 x the last one before it,
         # so shortening the one before is refused until that one is capped first
-        plan = _g("G1", pe.Override("cap_long", date=D(2027, 1, 24), km=15.0))
+        plan = _g("G1", pe.Override("cap_long", date=D(2028, 1, 23), km=15.0))
         self.assertEqual([r["rule"] for r in plan["overrides"]["refused"]], ["b_windows"])
-        plan = _g("G1", pe.Override("cap_long", date=D(2027, 2, 7), km=11.2),
-                  pe.Override("cap_long", date=D(2027, 1, 24), km=15.0))
+        plan = _g("G1", pe.Override("cap_long", date=D(2028, 2, 6), km=11.2),
+                  pe.Override("cap_long", date=D(2028, 1, 23), km=15.0))
         self.assert_applied(plan, 2)
 
     def test_still_refused_when_it_raises_load(self):
-        plan = _g("G4", pe.Override("cap_long", date=D(2026, 12, 13), km=29.0))
+        plan = _g("G4", pe.Override("cap_long", date=D(2027, 12, 12), km=29.0))
         self.assertEqual([r["rule"] for r in plan["overrides"]["refused"]], ["raises_load"])
 
     def test_the_week_after_steps_from_the_long_run_as_built(self):
-        plan = _g("G4", pe.Override("cap_long", date=D(2026, 12, 13), km=12.0))
+        plan = _g("G4", pe.Override("cap_long", date=D(2027, 12, 12), km=12.0))
         self.assert_applied(plan)
         longs = [(w["start"], w["long_km"]) for w in _weeks(plan)][:3]
-        self.assertEqual(longs, [("2026-11-30", 25.9), ("2026-12-07", 12.0), ("2026-12-14", 29.9)])
+        self.assertEqual(longs, [("2027-11-29", 25.9), ("2027-12-06", 12.0), ("2027-12-13", 29.9)])
         # the invariant recounts it: the reduced long run counts as built for the step and the cap
         failed = [i for i in pe.check_invariants(plan) if not i["ok"]]
         self.assertEqual(failed, [])
@@ -319,7 +319,7 @@ class ReduceOnlyOverridesOnLongRuns(unittest.TestCase):
 
 class MarathonPaceSessionsWithoutATarget(unittest.TestCase):
     def setUp(self):
-        self.plan = pe.build_plan(pe.PlanInputs(race_date=D(2027, 3, 12)), WEEKDAY_RUNNER, what_if_runs=False)
+        self.plan = pe.build_plan(pe.PlanInputs(race_date=D(2028, 3, 10)), WEEKDAY_RUNNER, what_if_runs=False)
         self.weeks, self.ctx = self.plan["_check"]["weeks"], self.plan["_check"]["ctx"]
 
     def test_their_work_counts_in_seconds(self):

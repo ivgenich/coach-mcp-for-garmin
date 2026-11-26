@@ -13,7 +13,7 @@ from evals.harness import state as state_mod
 HAVE_MCP = all(importlib.util.find_spec(m) is not None for m in ("mcp", "garmin_mcp"))
 HAVE_GC = importlib.util.find_spec("garminconnect") is not None
 NOW, TZ = "2026-11-23T09:00", "Europe/London"
-PREVIEW = {"race_date": "2027-02-26", "goal_time": "3:30:00", "run_days": "tue,wed,thu,sat,sun",
+PREVIEW = {"race_date": "2027-03-05", "goal_time": "3:52:00", "run_days": "tue,wed,thu,sat,sun",
            "long_run_day": "sun"}
 
 

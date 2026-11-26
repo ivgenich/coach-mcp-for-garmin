@@ -1,5 +1,5 @@
 {
- "note": "L0: the training-plan world, Monday 2026-11-23 09:00 Europe/London. Runs 2026-09-29..11-22 (ids 74000001-32, ownerId the profile id): 4 a week, 40 km (46.9 km in the week of 2026-11-09, with the 20.9 km long run); LT speed 3.85 m/s (4:20/km), marathon prediction 3:35:00, VO2max 52; one fixed 'VO2 intervals' run on 2026-12-16. Profile id 71000001.",
+ "note": "L0: the training-plan world, Monday 2026-11-23 09:00 Europe/London. Runs 2026-09-29..11-22 (ids 74000001-32, ownerId the profile id): 4 a week, 40 km (45.6 km in the week of 2026-11-09, with the 19.6 km long run); LT speed 3.55 m/s (4:42/km), marathon prediction 3:57:00, VO2max 52; one fixed 'VO2 intervals' run on 2026-12-16. Profile id 71000001.",
  "anchor": {
   "now": "2026-11-23T09:00",
   "tz": "Europe/London"
@@ -80,8 +80,8 @@
      },
      "startTimeLocal": "2026-11-15 07:00:00",
      "startTimeGMT": "2026-11-15 07:00:00",
-     "distance": 20900.0,
-     "duration": 6966.7,
+     "distance": 19600.0,
+     "duration": 6533.3,
      "ownerId": 71000001
     },
     {
@@ -468,7 +468,7 @@
    "*": {
     "speed_and_heart_rate": {
      "calendarDate": "2026-11-01",
-     "speed": 0.385,
+     "speed": 0.355,
      "heartRate": 168
     }
    }
@@ -476,10 +476,10 @@
   "get_race_predictions": {
    "*": {
     "calendarDate": "2026-11-22",
-    "time5K": 1230,
-    "time10K": 2580,
-    "timeHalfMarathon": 5820,
-    "timeMarathon": 12900
+    "time5K": 1350,
+    "time10K": 2820,
+    "timeHalfMarathon": 6780,
+    "timeMarathon": 14220
    }
   },
   "get_max_metrics": {

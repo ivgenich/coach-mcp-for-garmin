@@ -419,7 +419,7 @@ def derived_numbers(value) -> list:
             goal = _hms(node.get("goal_time"))
             if race_m:  # the race's own length: "the full 42.2 km"
                 out.append(race_m)
-            if race_m and goal:  # plan_assess' race {distance: marathon, goal_time: 3:30:00}: the goal pace
+            if race_m and goal:  # plan_assess' race {distance: marathon, goal_time: 3:52:00}: the goal pace
                 out.extend((goal / (race_m / 1000), goal / (race_m / 1609.344)))
             for k, v in node.items():  # "sleep_start" / "sleep_end": the span ("6 h 41 min in bed")
                 if str(k).endswith("start") and _num(v) is not None:

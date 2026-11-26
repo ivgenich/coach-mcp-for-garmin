@@ -235,11 +235,11 @@ class SimGarmin:
         return copy.deepcopy(items[start:start + limit])
 
     def get_lactate_threshold(self):
-        return {"speed_and_heart_rate": {"calendarDate": "2026-10-20T07:40:00.0", "speed": 0.385, "heartRate": 168},
+        return {"speed_and_heart_rate": {"calendarDate": "2027-10-19T07:40:00.0", "speed": 0.355, "heartRate": 168},
                 "power": {}}
 
     def get_race_predictions(self):
-        return {"timeMarathon": 12900, "timeHalfMarathon": 6120, "time5K": 1200}
+        return {"timeMarathon": 14220, "timeHalfMarathon": 6780, "time5K": 1350}
 
     def get_max_metrics(self, day):
         return [{"generic": {"calendarDate": str(day), "vo2MaxPreciseValue": 52.4}}]
@@ -298,8 +298,8 @@ class SimGarmin:
 
 # --- the simulation ----------------------------------------------------------------------------------------------
 
-BASE_INPUTS = {"race_date": "2027-02-26", "race_distance": "marathon", "goal_time": "3:30:00",
-               "b_races": "2027-01-29:tri_half"}
+BASE_INPUTS = {"race_date": "2028-02-25", "race_distance": "marathon", "goal_time": "3:52:00",
+               "b_races": "2028-01-28:tri_half"}
 
 
 class Sim:
@@ -310,7 +310,7 @@ class Sim:
         self.case = case
         self.name = name
         self.zone = ZoneInfo(tz)
-        self.now = dt.datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
+        self.now = dt.datetime(2027, 11, 30, 12, 0, tzinfo=UTC)
         self.mono = [0.0]
         self.garmin = SimGarmin(self)
         self.store = ps.MemoryPlanStore(clock=lambda: self.now)
@@ -334,7 +334,7 @@ class Sim:
         self.seen: Dict[str, List[Dict[str, Any]]] = {}   # date -> its sessions in the last version before it
         self.ran: Dict[str, int] = {}            # session date -> the activity the athlete ran for it
         self.seed_calendar()
-        self.history(history_until or dt.date(2026, 12, 29))
+        self.history(history_until or dt.date(2027, 12, 28))
         self.foreign = self.garmin.foreign_state()
 
     # clock ------------------------------------------------------------------------------------------------------
@@ -384,21 +384,21 @@ class Sim:
         """TrainingPeaks swim, bike and run sessions and the user's own "Coach easy" (a long easy run that is not
         ours), from December to April."""
         g = self.garmin
-        day = dt.date(2026, 11, 30)
-        while day <= dt.date(2027, 5, 2):
+        day = dt.date(2027, 11, 29)
+        while day <= dt.date(2028, 4, 30):
             if day.weekday() == 0:
                 g.seed(day, "Recovery swim", "lap_swimming", 45, 2.0)
             if day.weekday() == 2:
                 g.seed(day, "Endurance ride Z2", "cycling", 60, 30.0)
             day += dt.timedelta(days=1)
-        for day, name, sport, minutes in ((dt.date(2027, 1, 12), "VO2max bike intervals 5x4", "cycling", 70),
-                                          (dt.date(2027, 1, 21), "Tempo run 3x10", "running", 60),
-                                          (dt.date(2027, 2, 9), "Threshold swim 10x100", "lap_swimming", 50),
-                                          (dt.date(2027, 3, 18), "Brick bike+run", "cycling", 80),
-                                          (dt.date(2027, 3, 30), "Tempo run 2x15", "running", 65)):
+        for day, name, sport, minutes in ((dt.date(2028, 1, 11), "VO2max bike intervals 5x4", "cycling", 70),
+                                          (dt.date(2028, 1, 20), "Tempo run 3x10", "running", 60),
+                                          (dt.date(2028, 2, 8), "Threshold swim 10x100", "lap_swimming", 50),
+                                          (dt.date(2028, 3, 16), "Brick bike+run", "cycling", 80),
+                                          (dt.date(2028, 3, 28), "Tempo run 2x15", "running", 65)):
             g.seed(day, name, sport, minutes)
-        for day in (dt.date(2027, 1, 7), dt.date(2027, 1, 14), dt.date(2027, 2, 4), dt.date(2027, 3, 17),
-                    dt.date(2027, 3, 31)):
+        for day in (dt.date(2028, 1, 6), dt.date(2028, 1, 13), dt.date(2028, 2, 3), dt.date(2028, 3, 15),
+                    dt.date(2028, 3, 29)):
             g.seed(day, "Coach easy", "running", 85, 16.0, tp=False)
 
     def history(self, until: dt.date) -> None:
@@ -893,21 +893,21 @@ class PlanDays(unittest.TestCase):
 
     def inputs_on(self, sim: Sim, day: dt.date) -> None:
         """The B race leaves the inputs once it is not after today (plan_preview refuses it then)."""
-        if sim.inputs.get("b_races") and day >= dt.date(2027, 1, 29):
+        if sim.inputs.get("b_races") and day >= dt.date(2028, 1, 28):
             sim.inputs.pop("b_races")
 
     def test_0_control_one_build(self):
         """Control: one build, 14 days committed, the athlete runs them, no later preview. Every invariant holds
         (the paths every other plan test covers), so a failure elsewhere is the later day's doing."""
-        sim = self.sim("control", inputs={"race_date": "2027-02-26", "goal_time": "3:30:00"},
-                       history_until=dt.date(2027, 2, 7))
-        sim.morning(dt.date(2027, 2, 7), days=14)
-        for day in days(dt.date(2027, 2, 8), dt.date(2027, 2, 20)):
+        sim = self.sim("control", inputs={"race_date": "2028-02-25", "goal_time": "3:52:00"},
+                       history_until=dt.date(2028, 2, 6))
+        sim.morning(dt.date(2028, 2, 6), days=14)
+        for day in days(dt.date(2028, 2, 7), dt.date(2028, 2, 19)):
             sim.at(day, 7)
             sim.track(f"morning report {day}")
             if sim.run_session(day):
                 sim.feedback(day, rpe=4)
-        sim.at(dt.date(2027, 2, 21), 9)
+        sim.at(dt.date(2028, 2, 20), 9)
         sim.cancel()
         sim.report()
 
@@ -915,7 +915,7 @@ class PlanDays(unittest.TestCase):
         """Build on a Wednesday, commit 7 days; every following morning preview with the same inputs and commit
         7 days; the athlete runs each session. Five weeks across the year end, a month end and the B race."""
         sim = self.sim("weekly rhythm")
-        for day in days(dt.date(2026, 12, 30), dt.date(2027, 2, 3)):
+        for day in days(dt.date(2027, 12, 29), dt.date(2028, 2, 2)):
             self.inputs_on(sim, day)
             sim.morning(day)
             sim.run_session(day)
@@ -923,9 +923,9 @@ class PlanDays(unittest.TestCase):
 
     def test_2_commit_14_then_7(self):
         """Commit 14 days, then the next mornings preview and commit with the default 7."""
-        sim = self.sim("commit 14 then 7", history_until=dt.date(2027, 1, 12))
-        sim.morning(dt.date(2027, 1, 13), days=14)
-        for day in days(dt.date(2027, 1, 14), dt.date(2027, 1, 20)):
+        sim = self.sim("commit 14 then 7", history_until=dt.date(2028, 1, 11))
+        sim.morning(dt.date(2028, 1, 12), days=14)
+        for day in days(dt.date(2028, 1, 13), dt.date(2028, 1, 19)):
             sim.morning(day, days=7)
         sim.report()
 
@@ -933,17 +933,17 @@ class PlanDays(unittest.TestCase):
         """Runs every planned day: some partial, one missed, one moved to the next day, one Garmin linked itself;
         tracking links them and feedback is logged; each morning the plan is previewed and committed again."""
         sim = self.sim("runs and tracking")
-        partial = {dt.date(2027, 1, 6), dt.date(2027, 1, 12)}
-        missed = {dt.date(2027, 1, 9)}
-        moved = {dt.date(2027, 1, 14): dt.date(2027, 1, 15)}
-        for day in days(dt.date(2027, 1, 3), dt.date(2027, 1, 19)):
+        partial = {dt.date(2028, 1, 5), dt.date(2028, 1, 11)}
+        missed = {dt.date(2028, 1, 8)}
+        moved = {dt.date(2028, 1, 13): dt.date(2028, 1, 14)}
+        for day in days(dt.date(2028, 1, 2), dt.date(2028, 1, 18)):
             sim.morning(day)
             for was, on in moved.items():
                 if on == day:
                     sim.run_session(was, on=day, hour=8, expect="done_late")
             if day in missed or day in moved:
                 continue
-            if sim.run_session(day, share=0.6 if day in partial else 1.0, garmin_link=day == dt.date(2027, 1, 10),
+            if sim.run_session(day, share=0.6 if day in partial else 1.0, garmin_link=day == dt.date(2028, 1, 9),
                                expect="partial" if day in partial else "done"):
                 sim.feedback(day, rpe=4)
         sim.report()
@@ -952,43 +952,43 @@ class PlanDays(unittest.TestCase):
         """An override after days are committed, a weekly-review change applied, travel dates blocked mid-plan."""
         # no B race: the week after the reviewed one then has quality sessions for the pain change to drop (with
         # the B race it is the lighter B week, and the review is advice only, with no apply token)
-        sim = self.sim("override, review, travel", inputs={"race_date": "2027-02-26", "goal_time": "3:30:00"},
-                       history_until=dt.date(2027, 1, 17))
-        first = sim.morning(dt.date(2027, 1, 18))
-        sim.run_session(dt.date(2027, 1, 18))
+        sim = self.sim("override, review, travel", inputs={"race_date": "2028-02-25", "goal_time": "3:52:00"},
+                       history_until=dt.date(2028, 1, 16))
+        first = sim.morning(dt.date(2028, 1, 17))
+        sim.run_session(dt.date(2028, 1, 17))
         # the next morning: rest on an easy day of the committed window and the quality session made easy
-        window = [s for s in sim.sessions() if "2027-01-20" <= s["date"] <= "2027-01-24"]
+        window = [s for s in sim.sessions() if "2028-01-19" <= s["date"] <= "2028-01-23"]
         easy = next((s["date"] for s in window if s["role"] == "easy"), None)
         quality = next((s["date"] for s in window if s["role"] in ("threshold", "intervals", "mp")), None)
         overrides = [o for o in ({"kind": "rest", "date": easy} if easy else None,
                                  {"kind": "easy", "date": quality} if quality else None) if o]
         self.assertTrue(first and overrides, "the week has an easy and a quality session to edit")
         sim.inputs["overrides"] = json.dumps(overrides)
-        sim.morning(dt.date(2027, 1, 19), days=14)   # next week on Garmin too, for the review's apply
+        sim.morning(dt.date(2028, 1, 18), days=14)   # next week on Garmin too, for the review's apply
         # no preview for the rest of the week (the review reads the week from the stored version), pain once
         pain_day = None
-        for day in days(dt.date(2027, 1, 19), dt.date(2027, 1, 24)):
-            if day > dt.date(2027, 1, 19):
+        for day in days(dt.date(2028, 1, 18), dt.date(2028, 1, 23)):
+            if day > dt.date(2028, 1, 18):
                 sim.at(day, 7)
                 sim.track(f"morning report {day}")
             if sim.run_session(day):
-                pain_day = pain_day or (day if day > dt.date(2027, 1, 19) else None)
+                pain_day = pain_day or (day if day > dt.date(2028, 1, 18) else None)
                 sim.feedback(day, rpe=6, pain=5 if day == pain_day else 0,
                              location="calf" if day == pain_day else "none")
-        sim.at(dt.date(2027, 1, 25), 8)
+        sim.at(dt.date(2028, 1, 24), 8)
         sim.inputs.pop("overrides", None)
-        sim.review_and_apply(dt.date(2027, 1, 18))
-        for day in days(dt.date(2027, 1, 26), dt.date(2027, 1, 27)):
+        sim.review_and_apply(dt.date(2028, 1, 17))
+        for day in days(dt.date(2028, 1, 25), dt.date(2028, 1, 26)):
             self.inputs_on(sim, day)
             sim.at(day, 7)
             sim.track(f"morning report {day}")
             sim.run_session(day)
-        sim.inputs["blocked_dates"] = "2027-01-31,2027-02-01,2027-02-02"
-        for day in days(dt.date(2027, 1, 28), dt.date(2027, 2, 5)):
+        sim.inputs["blocked_dates"] = "2028-01-30,2028-01-31,2028-02-01"
+        for day in days(dt.date(2028, 1, 27), dt.date(2028, 2, 4)):
             self.inputs_on(sim, day)
             sim.morning(day)
             sim.run_session(day)
-        blocked = {"2027-01-31", "2027-02-01", "2027-02-02"}
+        blocked = {"2028-01-30", "2028-01-31", "2028-02-01"}
         on_blocked = [e for e in sim.garmin.ours_entries() if e["scheduleDate"] in blocked]
         if on_blocked:
             sim.fail("blocked dates", f"our workouts on blocked dates: {[e['scheduleDate'] for e in on_blocked]}")
@@ -996,19 +996,19 @@ class PlanDays(unittest.TestCase):
 
     def test_5_cancel_and_cleanup(self):
         """Cancel mid-plan; then a new plan and --plan-cleanup --orphans with a marker orphan on the calendar."""
-        sim = self.sim("cancel and cleanup", inputs={"race_date": "2027-02-26", "goal_time": "3:30:00"},
-                       history_until=dt.date(2027, 2, 2))
-        sim.morning(dt.date(2027, 2, 3), days=10)
-        for day in days(dt.date(2027, 2, 3), dt.date(2027, 2, 5)):
-            if day > dt.date(2027, 2, 3):
+        sim = self.sim("cancel and cleanup", inputs={"race_date": "2028-02-25", "goal_time": "3:52:00"},
+                       history_until=dt.date(2028, 2, 1))
+        sim.morning(dt.date(2028, 2, 2), days=10)
+        for day in days(dt.date(2028, 2, 2), dt.date(2028, 2, 4)):
+            if day > dt.date(2028, 2, 2):
                 sim.morning(day, days=10)
             sim.run_session(day)
-        sim.at(dt.date(2027, 2, 6), 9)
+        sim.at(dt.date(2028, 2, 5), 9)
         sim.cancel()
         sim.pid = None
-        sim.morning(dt.date(2027, 2, 7), days=14)
-        sim.garmin.plant_orphan(sim.store.install_tag(), dt.date(2027, 2, 10))
-        sim.at(dt.date(2027, 2, 8), 9)
+        sim.morning(dt.date(2028, 2, 6), days=14)
+        sim.garmin.plant_orphan(sim.store.install_tag(), dt.date(2028, 2, 9))
+        sim.at(dt.date(2028, 2, 7), 9)
         sim.cleanup(orphans=True)
         sim.report()
 
@@ -1030,31 +1030,31 @@ class PlanDays(unittest.TestCase):
         sim.report()
 
     def test_6a_late_evening_new_york_dst(self):
-        """REPORT_TZ America/New_York (UTC-5, then -4 from 2027-03-14): preview at 23:40 local (the next day in
+        """REPORT_TZ America/New_York (UTC-5, then -4 from 2028-03-12): preview at 23:40 local (the next day in
         UTC), commit after local midnight, runs at 23:15 local (the next UTC day), across the DST change."""
-        self._boundaries("New York evenings, DST", "America/New_York", "2027-04-25", dt.date(2027, 3, 10),
-                         dt.date(2027, 3, 20), (23, 40), (0, 5), (23, 15))
+        self._boundaries("New York evenings, DST", "America/New_York", "2028-04-23", dt.date(2028, 3, 8),
+                         dt.date(2028, 3, 18), (23, 40), (0, 5), (23, 15))
 
     def test_6b_after_midnight_jerusalem_dst(self):
-        """REPORT_TZ Asia/Jerusalem (UTC+2, then +3 from 2027-03-26): preview at 23:50 local, commit at 00:15
+        """REPORT_TZ Asia/Jerusalem (UTC+2, then +3 from 2028-03-24): preview at 23:50 local, commit at 00:15
         (still the previous day in UTC), runs at 00:40 local (the previous UTC day), across the DST change."""
-        self._boundaries("Jerusalem midnights, DST", "Asia/Jerusalem", "2027-05-07", dt.date(2027, 3, 22),
-                         dt.date(2027, 4, 1), (23, 50), (0, 15), (0, 40))
+        self._boundaries("Jerusalem midnights, DST", "Asia/Jerusalem", "2028-05-05", dt.date(2028, 3, 20),
+                         dt.date(2028, 3, 30), (23, 50), (0, 15), (0, 40))
 
 
     def test_7_review_after_a_later_preview(self):
         """The weekly review of last week after the plan was previewed again on its Sunday (same inputs): the
         week's sessions must still be reviewable."""
-        sim = self.sim("review after a later preview", inputs={"race_date": "2027-02-26", "goal_time": "3:30:00"},
-                       history_until=dt.date(2027, 2, 1))
-        sim.morning(dt.date(2027, 2, 1))
-        for day in days(dt.date(2027, 2, 2), dt.date(2027, 2, 6)):
+        sim = self.sim("review after a later preview", inputs={"race_date": "2028-02-25", "goal_time": "3:52:00"},
+                       history_until=dt.date(2028, 1, 31))
+        sim.morning(dt.date(2028, 1, 31))
+        for day in days(dt.date(2028, 2, 1), dt.date(2028, 2, 5)):
             sim.run_session(day)
-        sim.morning(dt.date(2027, 2, 7))
-        sim.run_session(dt.date(2027, 2, 7))
-        sim.at(dt.date(2027, 2, 8), 8)
-        sim.step = "plan_review_week 2027-02-01"
-        text = run(sim.reviews.review(plan_id=sim.pid, week_start="2027-02-01"))
+        sim.morning(dt.date(2028, 2, 6))
+        sim.run_session(dt.date(2028, 2, 6))
+        sim.at(dt.date(2028, 2, 7), 8)
+        sim.step = "plan_review_week 2028-01-31"
+        text = run(sim.reviews.review(plan_id=sim.pid, week_start="2028-01-31"))
         try:
             out = json.loads(text)
             if not out["metrics"].get("planned_km"):

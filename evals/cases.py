@@ -34,7 +34,7 @@ Optional fields beyond the shared contract (all default to "not used"):
 - Case.writes (needs plan = "memory"): the Garmin plan writes (PLAN_WRITES=on) add plan_commit and plan_cancel
   (PLAN_WRITE_TOOLS) and the PLAN_WRITES=on instructions, Stage 2's real tools (evals/harness/plans.py): "on"
   (the client has no confirmation form: the token confirms), "declined" (the user declines the confirmation
-  form), "committed" (the next 7 days of the Tel Aviv plan are on Garmin before the first turn); "off" (the
+  form), "committed" (the next 7 days of the marathon plan are on Garmin before the first turn); "off" (the
   default) leaves them out.
 - Expect.garmin_writes_none: the fake Garmin's call log holds no write (evals/garmin_writes.write_calls).
 - Expect.max_calls {tool: n}: `tool` was called at most n times (0 forbids it, as tools_none does).
