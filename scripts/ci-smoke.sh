@@ -335,15 +335,17 @@ ARG_PLAN=$(openssl rand -hex 16)
 ARG_TOKEN="ct1.$(openssl rand -hex 16)"
 nwords() { echo $#; }
 csv() { printf '%s\n' "$@" | sort -u | paste -sd, -; }
-# log_errors FILE: error lines of FILE, except the no-login line and Caddy's access line for the expected 503
-# of /readyz (Caddy logs a 5xx answer at level error).
+# log_errors FILE: error lines of FILE, except the no-login line, Caddy's access line for the expected 503
+# of /readyz, and Caddy's 502 for a /healthz probe sent before the app listens (Docker's health check can
+# fire first; Caddy logs a 5xx answer at level error). The healthy and probe checks cover the app being up.
 log_errors() {
 	# Upstream's no-login line comes from a background thread, so on stderr it can land inside another line
 	# ("Tool filter: ...).ERROR: OAuth tokens not found ..."): cut it out wherever it sits, then look again.
 	{ grep -E 'ERROR|CRITICAL|Traceback|"level":"(error|fatal|panic)"' "$1" || true; } |
 		awk -v drop="$NO_LOGIN_LINE" '{ while ((i = index($0, drop)) > 0) $0 = substr($0, 1, i - 1) substr($0, i + length(drop)); print }' |
 		{ grep -E 'ERROR|CRITICAL|Traceback|"level":"(error|fatal|panic)"' || true; } |
-		{ grep -vE '"logger":"http\.log\.access[^"]*".*"uri":"/readyz".*"status":503' || true; }
+		{ grep -vE '"logger":"http\.log\.access[^"]*".*"uri":"/readyz".*"status":503' || true; } |
+		{ grep -vE '"logger":"http\.log\.access[^"]*".*"uri":"/healthz".*"status":502' || true; }
 }
 # plan_log_hits FILE: lines of FILE that hold a secret value of this run or a tool argument of the probe.
 plan_log_hits() {
@@ -471,7 +473,7 @@ plan_leg() {
 	docker logs "$app" >"$WORK/$label.log" 2>&1
 	n=$(wc -l <"$WORK/$label.log" | tr -d ' ')
 	errs=$(log_errors "$WORK/$label.log" | wc -l | tr -d ' ')
-	check "$label/log-errors" "$(yes_if test "$errs" = 0)" "$errs ERROR lines in $n log lines (want 0; upstream's no-login line and Caddy's /readyz 503 aside)"
+	check "$label/log-errors" "$(yes_if test "$errs" = 0)" "$errs ERROR lines in $n log lines (want 0; upstream's no-login line, Caddy's /readyz 503 and early /healthz 502 aside)"
 	[ "$errs" = 0 ] || log_errors "$WORK/$label.log" | head -n 10 | sed 's/^/      /'
 	hits=$(plan_log_hits "$WORK/$label.log")
 	check "$label/log-secrets" "$(yes_if test "$hits" = 0)" \
