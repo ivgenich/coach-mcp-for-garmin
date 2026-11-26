@@ -319,6 +319,32 @@ class PaceProperties(unittest.TestCase):
         self.assertGreater((threshold[0] + threshold[1]) / 2, 0.90 * snap.lt_speed_mps)   # still hard daily
 
     @settings(**PACE_PROPS)
+    @given(pace_case(), st.sampled_from((0.0, 0.03, 0.10)))
+    def test_easy_and_long_stay_well_slower_than_mp(self, case, slowdown):
+        inputs, snap = case
+        plan = pe.build_plan(dataclasses.replace(inputs, easy_band_slowdown=slowdown), snap, what_if_runs=False)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        ctx = plan["_check"]["ctx"]
+        lt = snap.lt_speed_mps
+        for name, gap in (("easy", 30), ("long", 20)):
+            band = ctx.paces.band(name)
+            assume(band is not None)
+            self.assertLess(band[0], band[1])
+            self.assertLess((band[0] + band[1]) / 2, 0.90 * lt)   # get_daily_status keeps easy runs easy
+            if ctx.paces.mp:
+                self.assertGreaterEqual(1000.0 / band[1], 1000.0 / ctx.paces.mp + gap - 0.5, name)
+            v_m = pe.prediction_speed(snap, "marathon", pe.RULES)
+            if v_m is not None:   # anchored: at most the top fraction of the marathon speed (never above it)
+                top = float(pe.RULES["pace_anchors"][f"{name}_of_marathon"][1])
+                self.assertLessEqual(band[1], min(v_m, 0.93 * lt) * top + 0.002, name)
+        # the answer's bands (the slowdown applied) are never faster than the plan's
+        answer = plan["weeks"]
+        for w in answer:
+            for s in w["sessions"]:
+                if s["role"] == "easy" and s["steps"] and "speed_mps" in s["steps"][0]:
+                    self.assertLessEqual(s["steps"][0]["speed_mps"][1], ctx.paces.band("easy")[1] + 0.001)
+
+    @settings(**PACE_PROPS)
     @given(plan_case())
     def test_a_half_never_plans_more_than_a_marathon(self, case):
         inputs, snap = case

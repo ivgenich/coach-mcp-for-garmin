@@ -59,7 +59,10 @@ and so what a MAJOR, MINOR or PATCH release may change:
   converted from the other by Riegel's formula) anchor the intervals, from the 5K pace to its 3K
   equivalent and never faster, and check the threshold band: one whose fast end is faster than the
   10K pace moves down to it (at most to a slow end of 0.91 x LT), its slow end then no slower than
-  the half-marathon pace. Without a 5K or 10K prediction the LT multiples stay. Marathon pace and
+  the half-marathon pace. Without a 5K or 10K prediction the LT multiples stay. The marathon
+  prediction (or the half's) anchors the easy and long bands at 0.82-0.90 and 0.82-0.92 x the
+  marathon's corrected-goal speed, and with a marathon pace their fast ends stay at least 30 and
+  20 s/km slower than it (checked by `bands_match_roles`). Marathon pace and
   the feasibility check share one source: without a goal, MP is the pace of `corrected_goal_s`
   (Garmin's prediction, or slower), never sped up to 0.85 x LT (warning `mp_below_band`); with a
   goal, the goal pace is never raised past the fastest goal feasibility accepts, and a goal beyond

@@ -221,7 +221,10 @@ class Accept(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.stored = pe.plan_answer(pe.build_plan(INPUTS, pe.sample_snapshot(REVIEW_DAY), what_if_runs=False))
+        # without predictions (MP from the goal, easy on LT multiples): with the marathon prediction's easy band
+        # a cap's long-run cut tips the week of 2027-01-04 under 80% easy and these edits are refused
+        snap = dataclasses.replace(pe.sample_snapshot(REVIEW_DAY), prediction_s=())
+        cls.stored = pe.plan_answer(pe.build_plan(INPUTS, snap, what_if_runs=False))
 
     def change(self, cid, *edits, kind="repeat_volume"):
         return {"change_id": cid, "kind": kind, "edits": list(edits)}

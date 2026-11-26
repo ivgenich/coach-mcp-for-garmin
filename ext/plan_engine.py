@@ -111,7 +111,11 @@ RULES: Dict[str, Any] = {
     # converted from the other by Riegel's t2 = t1 x (d2/d1)^1.06): intervals from the 5K pace to the 3K
     # equivalent; a threshold band whose fast end is faster than the 10K pace moves down to it (at most
     # until its slow end is 0.91 x LT), its slow end then no slower than the half-marathon pace.
-    "pace_anchors": {"riegel_exponent": 1.06, "intervals_m": [5000.0, 3000.0], "threshold_min_of_lt": 0.91},
+    # Easy and long from the marathon prediction (or the half's, by Riegel) at its corrected goal's speed; with
+    # a marathon pace, their fast ends at least this many s/km slower than it (also on LT multiples).
+    "pace_anchors": {"riegel_exponent": 1.06, "intervals_m": [5000.0, 3000.0], "threshold_min_of_lt": 0.91,
+                     "easy_of_marathon": [0.82, 0.90], "long_of_marathon": [0.82, 0.92],
+                     "easy_min_s_slower_than_mp": 30, "long_min_s_slower_than_mp": 20},
     "speed_limits_mps": [1.5, 7.0],
     "strides": {"reps": 6, "m": 100, "jog_s": 60},
     "warmup_m": 2000,
@@ -408,7 +412,13 @@ class Paces:
         else:
             f_lo, f_hi = self.rules["bands_of_lt"][name]
             low, high = self.lt * f_lo, self.lt * f_hi
-            if name in ("easy", "long") and self.easy_slowdown:
+        if name in ("easy", "long"):
+            if self.mp is not None:   # the fast end at least easy/long_min_s_slower_than_mp s/km slower than MP
+                gap = float(self.rules["pace_anchors"][f"{name}_min_s_slower_than_mp"])
+                cap = 1000.0 / (1000.0 / self.mp + gap)
+                if high > cap:
+                    low, high = min(low, cap * low / high), cap
+            if self.easy_slowdown:
                 low, high = low * (1 - self.easy_slowdown), high * (1 - self.easy_slowdown)
         return float(low), float(high)
 
@@ -716,8 +726,9 @@ class Context:
 
 
 def long_time_cap(paces: Paces, rules: Mapping[str, Any]) -> Optional[Meters]:
-    """3 h at the slow edge of the long-run band; from the LT speed even when the band itself is outside the
-    speed limits (a slow runner keeps the cap). None without an LT speed."""
+    """3 h at 0.70 x LT (the LT long band's slow edge, also when the predictions anchor the band); from the LT
+    speed even when the band itself is outside the speed limits (a slow runner keeps the cap). None without an
+    LT speed."""
     if paces.lt is None:
         return None
     return Meters(float(rules["long_max_s"]) * paces.lt * float(rules["bands_of_lt"]["long"][0]))
@@ -1245,7 +1256,7 @@ def prediction_speed(snap: Snapshot, name: str, rules: Mapping[str, Any]) -> Opt
     v = own(name)
     if v is not None:
         return v
-    sources = {"5k": ("10k",), "10k": ("5k",), "half": ("10k", "5k")}.get(name, ())
+    sources = {"5k": ("10k",), "10k": ("5k",), "half": ("10k", "5k"), "marathon": ("half",)}.get(name, ())
     for src in sources:
         sv = own(src)
         if sv is not None:
@@ -1260,17 +1271,28 @@ def riegel_speed(speed: float, from_m: float, to_m: float, exponent: float) -> f
 
 def anchored_bands(lt: Optional[MetersPerSecond], snap: Snapshot,
                    rules: Mapping[str, Any]) -> Dict[str, Tuple[float, float]]:
-    """The intervals and threshold bands from Garmin's 5K/10K predictions (rules "pace_anchors"), only for
-    the bands they change; empty without an LT speed or without a 5K or 10K prediction (LT multiples then).
-    Intervals: the 5K pace to its 3K equivalent. Threshold: the LT band, moved down when its fast end is
+    """The bands Garmin's predictions anchor (rules "pace_anchors"), only those they change; empty without an
+    LT speed (LT multiples then). Easy and long: fractions of the marathon's corrected-goal speed (from the
+    marathon prediction, or the half's by Riegel). With a 5K or 10K prediction, intervals: the 5K pace to its 3K equivalent. Threshold: the LT band, moved down when its fast end is
     faster than the 10K pace (at most until its slow end is threshold_min_of_lt x LT), its slow end then
     no slower than the half-marathon pace."""
     pa = rules["pace_anchors"]
     exp = float(pa["riegel_exponent"])
-    v5k = prediction_speed(snap, "5k", rules)
-    if lt is None or v5k is None:
-        return {}
     out: Dict[str, Tuple[float, float]] = {}
+    if lt is None:
+        return out
+    v_m = prediction_speed(snap, "marathon", rules)
+    if v_m is not None:
+        # the marathon's corrected goal, as feasibility's: the prediction, or the 0.93 x LT time when slower
+        m = float(DISTANCES["marathon"])
+        corrected_of_lt = float(rules["feasibility"]["marathon"]["corrected_of_lt"])
+        v = m / (math.ceil(max(m / v_m, m / (corrected_of_lt * lt)) / 60.0) * 60.0)
+        for name in ("easy", "long"):
+            f_lo, f_hi = (float(x) for x in pa[f"{name}_of_marathon"])
+            out[name] = (v * f_lo, v * f_hi)
+    v5k = prediction_speed(snap, "5k", rules)
+    if v5k is None:
+        return out
     slow_m, fast_m = (float(x) for x in pa["intervals_m"])
     t_lo, t_hi = (float(x) for x in rules["bands_of_lt"]["threshold"])
     low, high = lt * t_lo, lt * t_hi
@@ -2234,6 +2256,12 @@ def check_invariants(plan: Mapping[str, Any], rules: Mapping[str, Any] = RULES) 
                     # outside the speed limits the step has no pace target: only with it listed as missing
                     bands.append(f"{s.key}: {st.band} band {round(band[0], 3)}-{round(band[1], 3)} m/s outside "
                                  f"the speed limits, not reported")
+                if st.band in ("easy", "long") and band is not None and paces.mp:
+                    # rule 5: easy and long fast ends well slower than marathon pace
+                    gap = float(rules["pace_anchors"][f"{st.band}_min_s_slower_than_mp"])
+                    if 1000.0 / band[1] < 1000.0 / paces.mp + gap - 0.5:
+                        bands.append(f"{s.key}: {st.band} fast end {pace_text(band[1])}/km within {int(gap)} s/km "
+                                     f"of marathon pace {pace_text(paces.mp)}/km")
                 if st.band and s.role in ("easy", "long") and st.band not in ("easy", "long"):
                     bands.append(f"{s.key}: {st.band} step in an {s.role} run")
                 if s.role in QUALITY_ROLES and st.kind == "interval" and st.band != s.role:

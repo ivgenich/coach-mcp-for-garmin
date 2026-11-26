@@ -128,7 +128,7 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    A half marathon has its own, lower ceiling (`rules.by_distance`): max(1.2 x the biggest full week,
    km0 + 18 km).
 3. Long run in a normal week: at most min(max(0.50 x the week's km, the longest run of the last 8 weeks),
-   3 h at the slow edge of its pace band, the longest long run placed so far + 2 km, `max_long_km`, 32 km;
+   3 h at 0.70 x LT, the longest long run placed so far + 2 km, `max_long_km`, 32 km;
    24 km for a half marathon).
    Reduced weeks scale it. Within 21 days of the A race no long run is longer than 0.80 x the peak long run
    (the longest long run of a normal week 21 days or more out; before there is one, the longest run so far:
@@ -142,6 +142,12 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    listed as missing. A band outside 1.5-7.0 m/s leaves its steps without a pace target too, listed as
    `pace_targets.<band>` in `missing` with the warning `band_out_of_limits` (`bands_match_roles` fails a
    band dropped without them).
+   - Garmin's marathon prediction (or the half's, converted by Riegel's formula) anchors the easy and long
+     bands, because a Garmin LT that reads fast puts 0.70-0.80 x LT close to marathon pace: easy 0.82-0.90
+     and long 0.82-0.92 x the speed of the marathon's corrected goal (the prediction, or the 0.93 x LT time
+     when that is slower, as feasibility's). Without those predictions the LT multiples stay. Whenever there
+     is a marathon pace (the MP sessions'), the easy band's fast end is at least 30 s/km slower than it and
+     the long band's at least 20 s/km (the slow end scales alike); `bands_match_roles` checks both.
    - Garmin's 5K and 10K race predictions anchor the harder bands when there is one (a missing one is
      converted from the other by Riegel's formula, t2 = t1 x (d2/d1)^1.06), because a Garmin LT close to
      the 5K pace makes LT multiples faster than the athlete races: intervals run from the 5K pace to its

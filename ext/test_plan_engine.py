@@ -563,8 +563,9 @@ class Acwr(unittest.TestCase):
         # Israman's load: 330 minutes x the all-sport load per minute, on the race day
         self.assertEqual(acwr["b_races"], [{"date": "2027-01-29", "kind": "tri_half", "minutes": 330,
                                             "load": int(round(330 * acwr["load_per_min"]["all"]))}])
-        # the race day itself (lower than before rule 7's long-run limits: the two long runs before it are shorter)
-        self.assertEqual(acwr["planned_max"], {"ratio": 1.39, "date": "2027-01-29"})
+        # the race day itself (lower than before rule 7's long-run limits: the two long runs before it are shorter;
+        # 1.38 since the easy runs' minutes follow the marathon prediction's easy band)
+        self.assertEqual(acwr["planned_max"], {"ratio": 1.38, "date": "2027-01-29"})
         # the mini-taper and recovery week is cut to its floor; the day after the race stays above 1.3 (held);
         # the recovery week after it is cut too
         self.assertEqual([c["week"] for c in acwr["cuts"]], [9, 10])

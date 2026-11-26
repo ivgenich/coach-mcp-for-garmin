@@ -126,7 +126,7 @@ class AnchoredBands(unittest.TestCase):
 
     def test_without_5k_or_10k_predictions_the_lt_multiples_stay(self):
         snap = owner_snapshot(predictions=(("marathon", PRED_MARATHON), ("half", PRED_HALF)))
-        self.assertEqual(pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES), {})
+        self.assertEqual(set(pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)), {"easy", "long"})
         b = bands(pe.build_plan(pe.PlanInputs(race_date=RACE), snap, what_if_runs=False))
         self.assertEqual(b["intervals"], (round(LT * 1.05, 3), round(LT * 1.10, 3)))
         self.assertEqual(b["threshold"], (round(LT * 0.97, 3), round(LT * 1.03, 3)))
@@ -143,6 +143,63 @@ class AnchoredBands(unittest.TestCase):
         self.assertAlmostEqual(lo, 0.91 * LT, places=6)
         a = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)
         self.assertGreaterEqual(a["intervals"][0], hi)               # intervals never under the threshold band
+
+
+class EasyBands(unittest.TestCase):
+    """Easy and long runs from the marathon prediction, never near marathon pace (owner: easy 5:10 vs MP 5:03)."""
+
+    def test_owner_easy_and_long_follow_the_marathon_prediction(self):
+        plan = pe.build_plan(pe.PlanInputs(race_date=RACE), owner_snapshot(), what_if_runs=False)
+        b = bands(plan)
+        v = 42195.0 / (3 * 3600 + 33 * 60)                          # the corrected goal 3:33:00
+        self.assertEqual(b["easy"], (round(v * 0.82, 3), round(v * 0.90, 3)))
+        self.assertEqual(pe.band_text(b["easy"]), "5:37-6:09")       # not 5:10-5:54 (0.70-0.80 x LT)
+        self.assertEqual(pe.band_text(b["long"]), "5:29-6:09")
+        mp_s = 1000.0 / plan["_check"]["ctx"].paces.mp
+        self.assertGreaterEqual(1000.0 / b["easy"][1], mp_s + 30 - 0.5)
+        self.assertGreaterEqual(1000.0 / b["long"][1], mp_s + 20 - 0.5)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+
+    def test_a_half_prediction_alone_converts_to_the_marathon(self):
+        snap = owner_snapshot(predictions=(("half", PRED_HALF),))
+        a = pe.anchored_bands(pe.MetersPerSecond(LT), snap, pe.RULES)
+        v_m = 21097.5 / PRED_HALF * 0.5 ** 0.06
+        t = max(42195.0 / v_m, 42195.0 / (0.93 * LT))
+        v = 42195.0 / (-(-t // 60) * 60)
+        self.assertAlmostEqual(a["easy"][1], v * 0.90, places=6)
+
+    def test_a_fast_runners_easy_fast_end_stays_30_s_slower_than_mp(self):
+        # a 2:40 marathoner: 0.90 x MP speed would be MP + 25 s/km, so the fast end is held at MP + 30 s
+        snap = dataclasses.replace(owner_snapshot(predictions=(("marathon", 9600),)),
+                                   lt_speed_mps=pe.MetersPerSecond(4.9))
+        plan = pe.build_plan(pe.PlanInputs(race_date=RACE), snap, what_if_runs=False)
+        b = bands(plan)
+        mp_s = 1000.0 / plan["_check"]["ctx"].paces.mp
+        self.assertAlmostEqual(mp_s, 9600 / 42.195, places=6)
+        self.assertAlmostEqual(1000.0 / b["easy"][1], mp_s + 30, delta=0.5)
+        self.assertAlmostEqual(1000.0 / b["long"][1], mp_s + 20, delta=0.5)
+        self.assertLess(b["easy"][0], b["easy"][1])
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+
+    def test_without_predictions_the_easy_band_stays_on_lt(self):
+        snap = owner_snapshot(predictions=())
+        free = bands(pe.build_plan(pe.PlanInputs(race_date=RACE), snap, what_if_runs=False))
+        self.assertEqual(free["easy"], (round(LT * 0.70, 3), round(LT * 0.80, 3)))
+        # a 3:05 goal (MP 0.94 x LT) is 47 s/km faster than 0.80 x LT: unchanged too (golden G5's MP at 0.85 x
+        # LT is only 20 s/km faster, so its easy fast end is held at MP + 30 s)
+        goal = bands(pe.build_plan(pe.PlanInputs(race_date=RACE, goal_time_s=3 * 3600 + 5 * 60), snap,
+                                   what_if_runs=False))
+        self.assertEqual(goal["easy"], free["easy"])
+
+    def test_bands_match_roles_catches_an_easy_band_near_mp(self):
+        plan = pe.build_plan(pe.PlanInputs(race_date=RACE), owner_snapshot(), what_if_runs=False)
+        paces = plan["_check"]["ctx"].paces
+        paces.anchored["easy"] = (paces.mp * 0.95, paces.mp * 0.99)   # an easy band at MP + 3 s
+        paces.rules = dict(paces.rules, pace_anchors=dict(paces.rules["pace_anchors"],
+                                                          easy_min_s_slower_than_mp=0))   # Paces' own cap off
+        check = {i["id"]: i for i in pe.check_invariants(plan)}["bands_match_roles"]
+        self.assertFalse(check["ok"])
+        self.assertIn("of marathon pace", check["detail"])
 
 
 class SpeedLimits(unittest.TestCase):
