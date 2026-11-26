@@ -82,18 +82,23 @@ class Base(unittest.TestCase):
 
 class Bounds(Base):
     def test_rpe_bounds(self):
+        # None is "not given" (1.1.1): a session's first feedback needs rpe, a later call keeps the stored one
+        self.assertIn("the first feedback for a session needs rpe", self.refused(rpe=None))
         for rpe in (1, 10):
             self.assertEqual(self.ok(rpe=rpe)["rpe"], rpe)
-        for rpe in (0, 11, -1, 100, 5.0, 5.5, "5", None, True, False):
+        for rpe in (0, 11, -1, 100, 5.0, 5.5, "5", True, False):
             with self.subTest(rpe=rpe):
                 self.assertIn("rpe must be a whole number from 1 to 10", self.refused(rpe=rpe))
+        self.assertEqual(self.ok(rpe=None)["rpe"], 10)
 
     def test_pain_bounds(self):
         self.assertEqual(self.ok(pain=0, pain_location="none")["pain"], 0)
         self.assertEqual(self.ok(pain=10, pain_location="knee")["pain"], 10)
-        for pain in (-1, 11, 3.0, "2", None, True):
+        for pain in (-1, 11, 3.0, "2", True):
             with self.subTest(pain=pain):
                 self.assertIn("pain must be a whole number from 0 to 10", self.refused(pain=pain, pain_location="knee"))
+        kept = self.ok(rpe=6, pain=None, pain_location=None, sharp=None)   # not given: the stored pain stays
+        self.assertEqual((kept["rpe"], kept["pain"], kept["pain_location"]), (6, 10, "knee"))
 
     def test_every_pain_location(self):
         for location in ps.PAIN_LOCATIONS:
@@ -120,9 +125,11 @@ class Bounds(Base):
     def test_sharp_types(self):
         self.assertTrue(self.ok(pain=1, pain_location="shin", sharp=True)["sharp"])
         self.assertFalse(self.ok(pain=1, pain_location="shin", sharp=False)["sharp"])
-        for sharp in (1, 0, "true", "false", None, "yes"):
+        for sharp in (1, 0, "true", "false", "yes"):
             with self.subTest(sharp=sharp):
                 self.assertIn("sharp must be true or false", self.refused(pain=1, pain_location="shin", sharp=sharp))
+        self.assertTrue(self.ok(pain=None, pain_location=None, sharp=True)["sharp"])
+        self.assertTrue(self.ok(pain=None, pain_location=None, sharp=None, rpe=3)["sharp"])   # not given: kept
         self.assertIn("sharp false", self.refused(pain=0, pain_location="none", sharp=True))
 
     def test_progression_hold_bounds(self):
@@ -298,7 +305,11 @@ class NoFreeText(Base):
         tool = added["log_feedback"]
         out = json.loads(asyncio.run(tool(workout_key="20261202-run", rpe=3)))
         self.assertEqual((out["rpe"], out["pain"], out["pain_location"], out["sharp"]), (3, 0, "none", False))
-        self.assertTrue(asyncio.run(tool(workout_key="20261202-run")).startswith("Error: Invalid input: rpe"))
+        self.assertTrue(asyncio.run(tool(workout_key="20261202-run")).startswith("Error: Invalid input: give rpe"))
+        out = json.loads(asyncio.run(tool(workout_key="20261202-run", pain=5, pain_location="knee")))
+        self.assertEqual((out["rpe"], out["pain"]), (3, 5))
+        out = json.loads(asyncio.run(tool(workout_key="20261202-run", rpe=8)))   # a correction keeps the pain
+        self.assertEqual((out["rpe"], out["pain"], out["pain_location"]), (8, 5, "knee"))
 
 
 class PlanGet(Base):

@@ -202,6 +202,9 @@ class Flow(unittest.TestCase):
         acc = json.loads(run(self.plans.preview(plan_id=self.pid, accept_changes=",".join(ids + ["c" + "0" * 16]))))
         self.assertTrue(acc["invariants"]["ok"], acc["invariants"]["failed"])
         self.assertEqual(acc["stored"]["version"], 2)
+        # accepting reviewed changes is the user's agreement: the active plan follows the new version at once
+        self.assertNotIn("proposed", acc["stored"])
+        self.assertEqual(self.store.tracked_plan(self.store.history_account())["current_version"], 2)
         self.assertEqual(sorted(acc["changes"]["accepted"]), sorted(ids))
         self.assertEqual(acc["changes"]["refused"][-1]["rule"], "unknown_change")
         statuses = {r["change_id"]: r["status"] for r in self.store.changes_of(self.pid)}
@@ -239,11 +242,14 @@ class Flow(unittest.TestCase):
         self.may_write = True
         self.clock.advance(minutes=31)
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], ids)))["reason"], "expired")
-        # superseded: another version stored after the review (accepting the same changes would store the
-        # version the token carries: that one resumes instead)
+        # superseded: another version made current after the review (accepting the same changes would store the
+        # version the token carries: that one resumes instead). A preview of the active plan is only a proposal
+        # (1.1.1): the plan follows it once the user agrees (plan_activate start with its version).
         apply = self.review(week_start="2027-11-29")["apply"]
         ids = ",".join(apply["change_ids"])
-        run(self.plans.preview(**{**tpt.ARGS, "goal_time": "3:20:00"}, plan_id=self.pid))
+        proposal = json.loads(run(self.plans.preview(**{**tpt.ARGS, "goal_time": "3:20:00"}, plan_id=self.pid)))
+        self.assertTrue(proposal["stored"]["proposed"])
+        self.assertTrue(self.store.adopt_version(self.pid, proposal["stored"]["version"]))
         self.assertEqual(json.loads(run(self.writes.apply(self.pid, apply["token"], ids)))["reason"], "superseded")
         self.assertTrue(run(self.writes.apply(self.pid, "ct1." + "A" * 32, ids)).startswith("Error: Invalid"))
         self.assertTrue(run(self.writes.apply(self.pid, apply["token"], "")).startswith("Error: Invalid"))

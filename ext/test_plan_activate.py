@@ -96,6 +96,20 @@ class Refusals(Base):
         self.assertEqual(self.status(), "draft")
         self.assertEqual(json.loads(self.start(version=2))["version"], 2)
 
+    def test_the_active_plan_adopts_a_newer_proposed_version(self):
+        # 1.1.1: a plan_preview of the active plan is stored as a proposal; start with its version adopts it
+        json.loads(self.start())
+        self.store.save_preview(self.fp, self.pid, RACE, 1, {"race_date": RACE.isoformat()}, {"weeks": []},
+                                "d" * 64, adopt=False)   # version 2, proposed
+        self.assertEqual(self.store.tracked_plan(self.fp)["current_version"], 1)
+        out = json.loads(self.start(version=2))
+        self.assertEqual((out["version"], out["status"], out["changed"], out["note"]),
+                         (2, "active", True, pa.NOTE_ADOPTED))
+        self.assertEqual(self.store.tracked_plan(self.fp)["current_version"], 2)
+        self.assertEqual(json.loads(self.start(version=2))["changed"], False)
+        self.assertEqual(self.start(version=1), pa.TEXT_OLD_VERSION)
+        self.assertEqual(self.start(version=7), pt.TEXT_NOT_FOUND)
+
     def test_not_a_draft(self):
         for status in ("cancelled", "finished"):
             with self.subTest(status=status):

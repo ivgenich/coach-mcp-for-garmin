@@ -660,6 +660,11 @@ class PaceProperties(unittest.TestCase):
         # 2%: the race pace of the quality sessions differs, so the 80%-easy check may place a week a little
         # differently
         assume(all(w["planned_km"] >= w["target_km"] - 0.5 for w in full["weeks"] if w["kind"] == "normal"))
+        # peak_km is the largest planned week: a long run held at the B race cap leaves its km unplaced (rule:
+        # not made up), and a marathon's longer long run loses more of the week to it than a half's, whose
+        # shorter one left room for an easy run first (a half 17.5 + 4.0 km, a marathon 17.5 km)
+        assume(not any(x.get("id") == "b_race_capped" and "held at" in x.get("detail", "")
+                       for x in full["warnings"] if isinstance(x, dict)))
         weeks = [[(w["kind"], w["target_km"], w["planned_km"]) for w in p["weeks"]] for p in (half, full)]
         self.assertLessEqual(hs["peak_km"] or 0, (fs["peak_km"] or 0) * 1.02 + 0.1, weeks)
         self.assertLessEqual(hs["peak_long_km"] or 0, (fs["peak_long_km"] or 0) * 1.02 + 0.1, weeks)

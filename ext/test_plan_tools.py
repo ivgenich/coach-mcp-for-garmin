@@ -203,6 +203,29 @@ class Assess(Base):
         self.assertEqual(out["sources_failed"], ["lactate_threshold"])
         self.assertIsNone(out["lt_pace"])
 
+    def test_blocked_dates_reach_the_engine_like_the_preview(self):
+        # 1.1.1: the dates the athlete cannot run (asked by the intake) go into the projection, and the peak is
+        # the largest planned week, the same numbers plan_preview gives for the same arguments
+        trip = "2027-12-13,2027-12-14,2027-12-15,2027-12-16,2027-12-17,2027-12-18,2027-12-19"
+        free = json.loads(self.assess())
+        out = json.loads(self.assess(blocked_dates=trip))
+        prev = json.loads(self.preview(blocked_dates=trip))
+        self.assertEqual(out["projected_peak_km"], prev["summary"]["peak_km"])
+        self.assertEqual(out["projected_long_km"], prev["summary"]["peak_long_km"])
+        self.assertEqual(prev["summary"]["peak_km"], max(w["planned_km"] for w in prev["weeks"]
+                                                         if w["kind"] != "week0"))
+        self.assertNotEqual((out["projected_peak_km"], out["projected_long_km"]),
+                            (free["projected_peak_km"], free["projected_long_km"]))
+        for bad in ("2027-02-30", "soon secret"):
+            text = self.assess(blocked_dates=bad)
+            self.assertTrue(text.startswith("Error: Invalid input: "), text)
+            self.assertNotIn("secret", text)
+        added = {}
+        pt.register(lambda fn, name=None, description=None, **kw: added.__setitem__(name, (fn, description)), None,
+                    lambda: FakeClient(), store=ps.MemoryPlanStore(), today=lambda: TODAY)
+        self.assertIn("blocked_dates", added["plan_assess"][0].__code__.co_varnames)
+        self.assertIn("blocked_dates", added["plan_assess"][1])
+
 
 class Preview(Base):
     def test_preview_is_stored_once_per_content(self):

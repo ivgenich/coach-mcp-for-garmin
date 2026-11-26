@@ -470,16 +470,21 @@ class Sim:
             return None
         self.pid = stored["plan_id"]
         out["_today"], out["_days"] = self.today(), days
+        # A preview of an active plan is only a proposal: the current version (and the watch) changes when
+        # the commit adopts it
+        self.watch()
+        self.check_spacing()
+        self.check_all()
+        return out
+
+    def watch(self) -> None:
+        """The athlete runs what the watch has: a day keeps its sessions of the last current version that
+        still had it in the future (a new version never plans today)."""
         today = self.today().isoformat()
-        # The athlete runs what the watch has: a day keeps its sessions of the last version that still had it
-        # in the future (a new version never plans today).
         self.seen = {d: v for d, v in self.seen.items() if d <= today}
         for s in self.sessions():
             if s["date"] > today:
                 self.seen.setdefault(s["date"], []).append(s)
-        self.check_spacing()
-        self.check_all()
-        return out
 
     def commit(self, out: Optional[Dict[str, Any]], label: str = "commit") -> Optional[Dict[str, Any]]:
         if out is None:
@@ -502,8 +507,13 @@ class Sim:
                    and not out["_today"].isoformat() <= o["date"] <= window[1].isoformat()]
         if outside:
             self.fail("commit ops", f"creates outside the window {out['_today']}..{window[1]}: {outside}")
-        return self._run_token("commit", lambda: self.writes.commit(plan_id=self.pid, commit_token=c["token"]),
-                               window)
+        res = self._run_token("commit", lambda: self.writes.commit(plan_id=self.pid, commit_token=c["token"]),
+                              window)
+        if (res or {}).get("status") == "done":
+            # the commit adopted a proposed version: it is the current one now, and on the watch
+            self.watch()
+            self.check_spacing()
+        return res
 
     def _run_token(self, action: str, call, window: Optional[Tuple[dt.date, dt.date]]) -> Optional[Dict[str, Any]]:
         before = self.garmin.ours_entries()
@@ -638,12 +648,8 @@ class Sim:
         self.step = f"plan_apply_changes {apply['change_ids']}"
         ids = ",".join(apply["change_ids"])
         self._run_token("apply", lambda: self.writes.apply(self.pid, apply["token"], ids), window)
-        # the watch now has the applied version's sessions after today (as after a preview)
-        today = self.today().isoformat()
-        self.seen = {d: v for d, v in self.seen.items() if d <= today}
-        for s in self.sessions():
-            if s["date"] > today:
-                self.seen.setdefault(s["date"], []).append(s)
+        # the watch now has the applied version's sessions after today (as after a commit)
+        self.watch()
         return out
 
     def cancel(self) -> None:
