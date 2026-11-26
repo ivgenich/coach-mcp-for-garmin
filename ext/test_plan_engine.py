@@ -1213,6 +1213,83 @@ def _b_held(plan, day):
     return False
 
 
+def easy_run_due(plan, start):
+    """Rule 4's easy-run rule for the week starting `start` (ISO), recomputed from the finished plan: a week with
+    a quality session or a long run must hold an easy (or strides) run when it has no calendar item, a free run
+    day outside a B window, and room in its target beside the quality and long km (as built, before the ratio
+    cuts) for an easy run of the easy minimum. False: the week is exempt (or has no quality and no long run)."""
+    ctx = plan["_check"]["ctx"]
+    w = next(x for x in plan["_check"]["weeks"] if x.start.isoformat() == start)
+    fixed = sum(float(w.acwr_ops[s.key][1]) if s.key in w.acwr_ops else float(s.distance)
+                for s in w.sessions if s.role in pe.QUALITY_ROLES + ("long",))
+    used = {s.date for s in w.sessions}
+    free = any(ctx.runnable(d) and d not in used and ctx.window_factor(d) is None for d in w.days())
+    room = float(w.target) - w.b_cut - fixed >= float(ctx.rules["easy_min_km"]) * 1000.0
+    return fixed > 0 and free and room and not pe.calendar_week(w, ctx)
+
+
+def ci_owner_like_case():
+    """The owner-like property's case CI found (2026-11-26): a marathon 2027-02-19, runs Mon-Fri with the long
+    run on Monday, travel 11-15 Dec, a flat 30 km history with one 26.25 km week, the load model tracking."""
+    week_m = tuple(pe.Meters(k) for k in (30000.0,) * 6 + (26250.0, 30000.0))
+    acts, garmin = pe.sample_loads(TODAY, week_m, garmin_gap=0.0, run_lpm=2.0, bike_min=0, swim_min=45)
+    snap = pe.Snapshot(today=TODAY, week_m=week_m, week_runs=(4,) * 8, longest_run_8w_m=pe.Meters(25400.0),
+                       lt_speed_mps=pe.MetersPerSecond(4.0), prediction_s=(("marathon", 12600),),
+                       activity_load=acts, garmin_load=garmin)
+    inputs = pe.PlanInputs(race_date=D(2027, 2, 19), run_days=(0, 1, 2, 3, 4), rest_days=(5, 6), long_run_day=0,
+                           blocked_dates=tuple(D(2026, 12, 11) + dt.timedelta(days=i) for i in range(5)))
+    return inputs, snap
+
+
+class BlockedLongDay(unittest.TestCase):
+    def test_blocking_the_days_long_run_does_not_raise_the_other_days(self):
+        # The blocked-date property's case (hypothesis 6.170.15, run after the mutation suite): the week after a
+        # full-distance triathlon has its short long run (easy, 8.9 km) on Tuesday, the other days split what is
+        # left (8.5 km each). Blocking that Tuesday took the long run's spot, so the week was an even split of
+        # all its km and the other days rose to 8.6. Rule 11: the blocked day's share drops, the others stay.
+        week_m = tuple(pe.Meters(k) for k in (8000.0,) * 6 + (22030.0, 90000.0))
+        snap = pe.Snapshot(today=D(2026, 11, 27), week_m=week_m, week_runs=(4,) * 8,
+                           longest_run_8w_m=pe.Meters(7200.0), prediction_s=(("marathon", 13200), ("half", 6300)))
+        inputs = pe.PlanInputs(race_date=D(2027, 1, 4), b_races=(pe.BRace(D(2026, 12, 21), "tri_full"),),
+                               run_days=(0, 1, 2, 3, 4), rest_days=(5, 6), long_run_day=0, quality_per_week=1,
+                               max_long_km=24.0)
+        def week_of(p):
+            return {s["date"]: s["km"] for w in pe.plan_answer(p)["weeks"] if w["start"] == "2026-12-28"
+                    for s in w["sessions"]}
+
+        base = week_of(pe.build_plan(inputs, snap, what_if_runs=False))
+        self.assertEqual(base, {"2026-12-29": 8.9, "2026-12-30": 8.5, "2026-12-31": 8.5, "2027-01-01": 8.5})
+        edited = pe.build_plan(dataclasses.replace(inputs, blocked_dates=(D(2026, 12, 29),)), snap,
+                               what_if_runs=False)
+        self.assertTrue(edited["invariants"]["ok"], edited["invariants"]["failed"])
+        self.assertEqual(week_of(edited), {"2026-12-30": 8.5, "2026-12-31": 8.5, "2027-01-01": 8.5})
+
+
+class EasyRunRule(unittest.TestCase):
+    def test_a_peak_week_without_room_for_an_easy_run_is_exempt(self):
+        # CI's owner-like case: in the week of 1 Feb the long run (20.3 km) and the two quality sessions leave
+        # 3.7 km of the 40.5 km target, under the 4 km easy minimum, so no easy run fits and easy_share rightly
+        # passes. The plan without the cap has one there because its week is bigger (its long runs step from
+        # uncut ones), not because this plan dropped it: the property must apply the same exemption.
+        inputs, snap = ci_owner_like_case()
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertTrue(plan["acwr"]["enforced"])
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        week = next(w for w in plan["weeks"] if w["start"] == "2027-02-01")
+        roles = [s["role"] for s in week["sessions"]]
+        self.assertIn("long", roles)
+        self.assertFalse({"easy", "strides"} & set(roles))
+        self.assertFalse(easy_run_due(plan, "2027-02-01"))
+        self.assertLess(week["target_km"] - sum(s["km"] for s in week["sessions"]), pe.RULES["easy_min_km"])
+        self.assertEqual(week["planned_km"], sum(s["km"] for s in week["sessions"]))
+        # the rule bites when there is room: give the week 10 km more target and the invariant fails without one
+        w = next(x for x in plan["_check"]["weeks"] if x.start == D(2027, 2, 1))
+        w.target = pe.Meters(w.target + 10000.0)
+        self.assertTrue(easy_run_due(plan, "2027-02-01"))
+        failed = {i["id"]: i["detail"] for i in pe.check_invariants(plan) if not i["ok"]}
+        self.assertIn(f"week {w.number}: no easy run", failed.get("easy_share", ""))
+
+
 class OwnerCase(unittest.TestCase):
     def setUp(self):
         self.plan = owner_plan()

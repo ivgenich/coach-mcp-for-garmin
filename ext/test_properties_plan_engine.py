@@ -20,6 +20,7 @@ import os
 import unittest
 
 import plan_engine as pe
+from test_plan_engine import easy_run_due
 
 try:
     from hypothesis import HealthCheck, assume, given, settings
@@ -495,7 +496,10 @@ class OwnerLikeProperties(unittest.TestCase):
             total = sum(_times(s)[1] for s in counted)
             if total > 0:
                 self.assertLessEqual(hard / total, 0.2 + 1e-3, week["start"])
-            if any(s["role"] in ("easy", "strides") for s in loose["sessions"]):
+            # an easy run where the plan without the cap had one, unless rule 4 exempts this week (no run day
+            # left or no room in its target beside the quality and long km; easy_run_due): a week the cap made
+            # smaller may lose the room
+            if any(s["role"] in ("easy", "strides") for s in loose["sessions"]) and easy_run_due(plan, week["start"]):
                 self.assertTrue(any(s["role"] in ("easy", "strides") for s in week["sessions"]), week["start"])
 
 
