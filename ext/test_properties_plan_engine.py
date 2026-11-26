@@ -215,12 +215,25 @@ class AcwrProperties(unittest.TestCase):
         self.assertFalse(free["acwr"]["enforced"])
         a, b = pe.plan_answer(held), pe.plan_answer(free)
         for wa, wb in zip(a["weeks"], b["weeks"]):
-            self.assertEqual(wa["target_km"], wb["target_km"], wa["start"])
-            self.assertLessEqual(wa["planned_km"], wb["planned_km"] + 0.05, wa["start"])
+            # (a long run cut shifts km to easy runs in the weeks after it: their 100 m rounding can lower the km a
+            # week counts as placed, and so the targets after it, never raise them)
+            self.assertLessEqual(wa["target_km"], wb["target_km"] + 0.05 + 1e-6, wa["start"])
+            # (a week after a shorter long run fills its target with easy runs: never past the target the plan
+            # without the cap gives it, 100 m rounding per run at most past what that plan placed)
+            self.assertLessEqual(wa["planned_km"], max(wb["planned_km"] + 0.1 * len(wa["sessions"]), wb["target_km"])
+                                 + 1e-6, wa["start"])
             self.assertLessEqual(wa["long_km"] or 0, wb["long_km"] or 0, wa["start"])
-            free_km = {s["key"]: s["km"] for s in wb["sessions"]}
-            for s in wa["sessions"]:
-                self.assertLessEqual(s["km"], free_km.get(s["key"], 0.0) + 0.05, s["key"])
+            if wa["planned_km"] > wb["planned_km"] + 0.1 * len(wa["sessions"]) + 1e-6:
+                # the plan without the cap fell short of this week's target (its long run and quality left less
+                # than the easy minimum for an easy run) where this one, with a shorter long run, reached it: the
+                # weeks after grow from what each placed (no make-up), so from here the two plans differ by rule 1,
+                # which growth_cap checks, not by the cap
+                break
+        # a cut only ever shortens or drops a session (a later week only shifts km between its runs as its
+        # shorter long run leaves more of its target to the others)
+        for w in held["_check"]["weeks"]:
+            for _role, was, now, _day in w.acwr_ops.values():
+                self.assertLess(now, was)
 
     @settings(**PROPS)
     @given(tracked_case())
@@ -241,6 +254,129 @@ class AcwrProperties(unittest.TestCase):
         b = pe.plan_answer(pe.build_plan(dataclasses.replace(inputs), dataclasses.replace(snap), what_if_runs=False))
         self.assertEqual(a["content_hash"], b["content_hash"])
         self.assertEqual(a["acwr"], b["acwr"])
+
+
+# --- owner-like plans: a travel gap, a B race, easy overrides (the owner's test of 2026-11-26) -------------------
+
+@st.composite
+def owner_like_case(draw):
+    """Owner-like inputs: 4 run days with the long run on one, a marathon in 10-16 weeks with a B race, a travel
+    gap (blocked dates, often a week, and sometimes a gap in the recorded history too), a load model that
+    tracks Garmin, and 0-3 easy overrides drawn from the plan's own sessions (the property draws them)."""
+    today = TODAY + dt.timedelta(days=draw(st.integers(0, 6)))
+    weeks = draw(st.integers(10, 16))
+    first = pe.week1_start(today)
+    race = first + dt.timedelta(days=7 * (weeks - 1) + draw(st.integers(4, 6)))
+    run_days = tuple(sorted(draw(st.sets(st.integers(0, 6), min_size=4, max_size=5))))
+    rest = tuple(sorted(set(range(7)) - set(run_days)))
+    long_day = draw(st.sampled_from(run_days))
+    km0 = draw(st.floats(30.0, 60.0))
+    history = [km0 * draw(st.floats(0.85, 1.15)) for _ in range(8)]
+    if draw(st.booleans()):   # a week without runs in the history (travel before today)
+        history[draw(st.integers(0, 3))] = 0.0
+    km_weeks = tuple(pe.Meters(k * 1000.0) for k in history)
+    gap_start = first + dt.timedelta(days=draw(st.integers(0, 7 * (weeks - 3))))
+    blocked = tuple(gap_start + dt.timedelta(days=i) for i in range(draw(st.integers(3, 10))))
+    b_day = first + dt.timedelta(days=draw(st.integers(14, 7 * (weeks - 2))))
+    b_races = (pe.BRace(b_day, draw(st.sampled_from(("tri_half", "run", "tri_full")))),) if draw(st.booleans()) else ()
+    acts, garmin = pe.sample_loads(today, km_weeks, garmin_gap=0.0, run_lpm=draw(st.floats(1.2, 2.0)),
+                                   bike_min=draw(st.sampled_from((0, 90))), swim_min=draw(st.sampled_from((0, 45))))
+    snap = pe.Snapshot(today=today, week_m=km_weeks, week_runs=(4,) * 8,
+                       longest_run_8w_m=pe.Meters(draw(st.floats(15000, 28000))),
+                       lt_speed_mps=pe.MetersPerSecond(draw(st.floats(3.5, 4.5))),
+                       prediction_s=(("marathon", 3 * 3600 + 30 * 60),), activity_load=acts, garmin_load=garmin)
+    inputs = pe.PlanInputs(race_date=race, b_races=b_races, run_days=run_days, rest_days=rest, long_run_day=long_day,
+                           blocked_dates=blocked)
+    return inputs, snap
+
+
+def _times(s):
+    """(quality seconds, total seconds) of a session from its answer steps, by the middle of each pace band."""
+    def walk(steps, times):
+        hard = total = 0.0
+        for st_ in steps:
+            if st_["type"] == "repeat":
+                h, t = walk(st_["steps"], times * st_["times"])
+            else:
+                if "time_s" in st_:
+                    t = float(st_["time_s"])
+                else:
+                    sp = st_.get("speed_mps")
+                    t = float(st_["distance_m"]) / ((sp[0] + sp[1]) / 2) if sp else float(st_["distance_m"])
+                h = t if st_["type"] == "interval" and s["role"] in pe.QUALITY_ROLES else 0.0
+            hard += h * times
+            total += t * times
+        return hard, total
+    return walk(s["steps"], 1)
+
+
+@unittest.skipUnless(HAVE_HYPOTHESIS, NEEDS_HYPOTHESIS)
+class OwnerLikeProperties(unittest.TestCase):
+    """Every invariant the plan reports ok holds when recomputed from the final plan: the planned ratio at or
+    under 1.3 on every day a planned run can lower (else reported held, with nothing left to cut), 80% of each
+    week's time easy, an easy run kept in every week that had one before the cuts; and easing a session changes
+    nothing else."""
+
+    @settings(**PROPS)
+    @given(owner_like_case(), st.data())
+    def test_reported_ok_invariants_hold_when_recomputed(self, case, data):
+        inputs, snap = case
+        plan0 = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertTrue(plan0["acwr"]["enforced"])
+        keys = [s["key"] for w in plan0["weeks"] for s in w["sessions"]
+                if s["role"] in pe.QUALITY_ROLES + ("long",) and s["date"] > snap.today.isoformat()]
+        eased = tuple(sorted(set(data.draw(st.lists(st.sampled_from(keys), max_size=3)) if keys else [])))
+        plan = pe.build_plan(dataclasses.replace(inputs, overrides=tuple(pe.Override("easy", key=k) for k in eased)),
+                             snap, what_if_runs=False)
+        applied = {o["key"] for o in plan["overrides"]["applied"]}
+        inv = {i["id"]: i for i in pe.check_invariants(plan)}
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+
+        # reduce-only overrides: every other session as in the plan without them, the same cuts
+        before = {s["key"]: s for w in plan0["weeks"] for s in w["sessions"]}
+        after = {s["key"]: s for w in plan["weeks"] for s in w["sessions"]}
+        self.assertEqual(set(before), set(after))
+        for key, s in before.items():
+            if key not in applied:
+                self.assertEqual(after[key], s, key)
+        self.assertEqual(plan["acwr"]["cuts"], plan0["acwr"]["cuts"])
+        self.assertEqual(plan["acwr"]["held"], plan0["acwr"]["held"])
+
+        # acwr_cap: recomputed on the plan as the cap counts it (the plan before the easy overrides)
+        self.assertTrue(inv["acwr_cap"]["ok"] and not inv["acwr_cap"].get("not_enforced"))
+        ctx = plan0["_check"]["ctx"]
+        loads = dict(ctx.load.actual)
+        for d, v in ctx.load.fixed.items():
+            loads[d] = loads.get(d, 0.0) + v
+        runs = set()
+        for w in plan0["_check"]["weeks"]:
+            for s in w.sessions:
+                if s.date > snap.today:
+                    loads[s.date] = loads.get(s.date, 0.0) + pe.session_load(s, ctx)
+                    if s.counts:
+                        runs.add(s.date)
+        held = {h["date"] for h in plan["acwr"]["held"]}
+        day = snap.today + dt.timedelta(days=1)
+        while day < inputs.race_date:
+            acute = sum(loads.get(day - dt.timedelta(days=i), 0.0) for i in range(7))
+            chronic = sum(loads.get(day - dt.timedelta(days=i), 0.0) for i in range(28)) / 4
+            if chronic > 0 and any(day - dt.timedelta(days=i) in runs for i in range(7)) \
+                    and day.isoformat() not in held:
+                self.assertLessEqual(acute / chronic, 1.3 + 1e-9, day)
+            day += dt.timedelta(days=1)
+
+        # easy_share: 80% of each week's time easy, and an easy run wherever the plan without the cap had one
+        self.assertTrue(inv["easy_share"]["ok"])
+        uncapped = pe.build_plan(inputs, snap, dict(pe.RULES, acwr=dict(pe.RULES["acwr"], max=99.0)),
+                                 what_if_runs=False)
+        for week, loose in zip(plan["weeks"], uncapped["weeks"]):
+            counted = [s for s in week["sessions"] if s["role"] not in ("race", "b_race")]
+            hard = sum(_times(s)[0] for s in counted)
+            total = sum(_times(s)[1] for s in counted)
+            if total > 0:
+                self.assertLessEqual(hard / total, 0.2 + 1e-3, week["start"])
+            if any(s["role"] in ("easy", "strides") for s in loose["sessions"]):
+                self.assertTrue(any(s["role"] in ("easy", "strides") for s in week["sessions"]), week["start"])
 
 
 if __name__ == "__main__":

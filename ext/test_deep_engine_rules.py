@@ -462,7 +462,7 @@ class AcwrModel(Oracle):
         self.assertEqual((got["run"]["minutes"], got["run"]["load"]), (120, None))
         self.assertEqual(got["tri_half"]["minutes"], 330)
 
-    def test_heavy_fixed_rides_cut_easy_runs_only_down_to_the_floor(self):
+    def test_heavy_fixed_rides_cut_down_to_the_floor(self):
         first = pe.week1_start(TODAY)
         rides = tuple(pe.FixedSession(first + dt.timedelta(days=7 * k + d), "bike", False, True, 300.0)
                       for k in (1, 2, 5) for d in (0, 2, 4))
@@ -475,39 +475,37 @@ class AcwrModel(Oracle):
         a, b = pe.plan_answer(held), pe.plan_answer(free)
         for w, wa, wb in zip(weeks, a["weeks"], b["weeks"]):
             self.assertEqual(wa["target_km"], wb["target_km"])
-            self.assertLessEqual(wa["planned_km"], wb["planned_km"] + 0.05)
+            # (a week after a shorter long run fills its target with easy runs: 100 m rounding at most)
+            self.assertLessEqual(wa["planned_km"], wb["planned_km"] + 0.15)
             if w.number in cut:
                 self.assertGreaterEqual(pe._planned(w), 0.6 * float(w.target) - pe.EPS_M)
-            hard_a = sorted((s["date"], s["role"], s["km"]) for s in wa["sessions"] if s["role"] == "long")
-            hard_b = sorted((s["date"], s["role"], s["km"]) for s in wb["sessions"] if s["role"] == "long")
-            self.assertEqual(hard_a, hard_b, wa["start"])   # the long run stays
-        # on every day the cap acts on: at or under 1.3, unless the week is at its floor or held
-        loads = pe.day_loads(weeks, ctx)
-        for w in weeks:
-            if w.acwr_held or pe._planned(w) <= pe._acwr_floor(w, ctx) + pe.EPS_M:
-                continue
-            for d in pe._acwr_days(w, ctx):
-                self.assertLessEqual(pe.acwr_on(d, loads) or 0.0, 1.3 + 1e-9, d)
+            self.assertLessEqual(wa["long_km"] or 0, wb["long_km"] or 0, wa["start"])   # never a longer long run
+            if any(s["role"] in ("easy", "strides") for s in wb["sessions"]):   # an easy run stays
+                self.assertTrue(any(s["role"] in ("easy", "strides") for s in wa["sessions"]), wa["start"])
+        # on every day the cap acts on: at or under 1.3, unless it is reported held (nothing left to cut)
+        held_days = {h["date"] for h in held["acwr"]["held"]}
+        for d, r, _owner in pe.acwr_cap_days(weeks, ctx):
+            if d.isoformat() not in held_days:
+                self.assertLessEqual(r, 1.3 + 1e-9, d)
         ids = [x["id"] for x in held["warnings"]]
         self.assertIn("acwr_cut", ids)
 
-    def test_the_cap_acts_only_from_the_first_easy_run(self):
+    def test_the_cap_acts_on_every_day_a_planned_run_can_lower(self):
         first = pe.week1_start(TODAY)
-        # a huge ride on week 3's Monday: its own day is before any easy run of the week, so it is not cut for
         ride = (pe.FixedSession(first + dt.timedelta(days=14), "bike", False, True, 600.0),)
         _i, _s, plan = self.plan({}, fixed=ride)
         weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
-        w3 = next(w for w in weeks if w.start == first + dt.timedelta(days=14))
-        days = pe._acwr_days(w3, ctx)
-        easy = [s.date for s in w3.sessions if s.role in ("easy", "strides")]
-        if easy:
-            self.assertEqual(days[0], min(easy))
-            self.assertNotIn(w3.start, days)
-        b = (pe.BRace(D(2027, 1, 9), "tri_full"),)
+        runs = {s.date for w in weeks for s in w.sessions if s.counts and s.date > TODAY}
+        for d, _r, owner in pe.acwr_cap_days(weeks, ctx):   # a planned run of the owner week in the 7 days
+            window = [d - dt.timedelta(days=i) for i in range(7)]
+            self.assertTrue(any(x in runs for x in window), d)
+            self.assertTrue(any(s.date in window for s in owner.sessions if s.counts), d)
+        b = (pe.BRace(D(2027, 1, 30), "tri_half"),)
         _i, _s, plan = self.plan({}, b_races=b)
         weeks, ctx = plan["_check"]["weeks"], plan["_check"]["ctx"]
-        for w in weeks:
-            self.assertNotIn(D(2027, 1, 9), pe._acwr_days(w, ctx))
+        mini = [s.date for w in weeks for s in w.sessions if D(2027, 1, 24) <= s.date < D(2027, 1, 30) and s.counts]
+        self.assertTrue(mini)   # its mini-taper runs can lower it: the B race day is a day the cap acts on
+        self.assertIn(D(2027, 1, 30), [d for d, _r, _o in pe.acwr_cap_days(weeks, ctx)])
 
     def test_heavy_load_across_profiles_holds_every_rule(self):
         first = pe.week1_start(TODAY)

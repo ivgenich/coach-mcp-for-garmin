@@ -318,10 +318,13 @@ class Oracle(unittest.TestCase):
                     msg: str = "") -> Dict[str, Any]:
         plan = build(inputs, snap) if plan is None else plan
         self.assertTrue(plan["invariants"]["ok"], f"{msg} {plan['invariants']['failed']}")
+        # acwr_cap is checked while the planned ratio is enforced, else listed as not enforced (never "ok")
+        enforced = plan["acwr"]["enforced"]
         self.assertEqual(plan["invariants"]["checked"], [
             "growth_cap", "no_makeup", "deload_cadence", "deload_depth", "long_cap", "long_step",
             "peak_long_timing", "easy_share", "peak_ceiling", "no_adjacent_hard", "bands_match_roles",
-            "b_windows", "a_taper", "last_quality", "rest_days", "one_run_per_day", "acwr_cap"])
+            "b_windows", "a_taper", "last_quality", "rest_days", "one_run_per_day"] + (["acwr_cap"] if enforced else []))
+        self.assertEqual([i["id"] for i in plan["invariants"]["not_enforced"]], [] if enforced else ["acwr_cap"])
         self.assertEqual(check_plan(inputs, snap, plan), [], msg)
         return plan
 

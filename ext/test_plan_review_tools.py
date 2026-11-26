@@ -68,6 +68,10 @@ def run(coro):
 
 class Flow(unittest.TestCase):
     COMMIT_DAYS = 14
+    # extra preview arguments per test: week 2 capped under week 1, so pain in week 1 leaves nothing to hold
+    # (the planned ACWR cap decides which of the two weeks is lighter; the cap only reduces, so it changes nothing else)
+    PLAN_ARGS = {"test_advice_only_stores_no_version_and_gives_no_token": {
+        "overrides": json.dumps([{"kind": "cap_week_km", "week_start": "2026-12-07", "km": 38}])}}
 
     def setUp(self):
         garmin_paths.allow_plan_writes(set(garmin_paths.WRITE_PATHS))
@@ -96,7 +100,8 @@ class Flow(unittest.TestCase):
         self.review_svc.apply_hook = pw.apply_section
         self.level = None
         # Build and commit 14 days, then a week passes with nothing run.
-        out = json.loads(run(self.plans.preview(**tpt.ARGS, commit_days=self.COMMIT_DAYS)))
+        args = dict(tpt.ARGS, **getattr(self, "PLAN_ARGS", {}).get(self._testMethodName, {}))
+        out = json.loads(run(self.plans.preview(**args, commit_days=self.COMMIT_DAYS)))
         self.assertTrue(out["invariants"]["ok"], out["invariants"]["failed"])
         self.pid = out["stored"]["plan_id"]
         for _ in range(6):   # at most 8 writes per call
