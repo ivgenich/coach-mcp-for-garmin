@@ -83,19 +83,30 @@ The Claude project instructions repeat this ([recipes/coach-project/instructions
     are `acwr.b_races` (date, kind, minutes, load). The A race is not counted. The ratio of a day is the
     load of the last 7 days over the load of the last 28 days / 4, like Garmin's acute and chronic load. The
     model is checked against Garmin's reported ratio today, 14 and 28 days ago (unrounded): when it is within 0.15 on at
-    least 2 of those days, the ratio is enforced. The cap acts on the days of a week a cut can lower: from
-    the week's first easy run on (a B race day itself excepted). When one of them is above 1.3, the easy runs
-    on or before the highest such day are cut in steps of 5% of the week's km (the long run and the quality
-    sessions stay; a quality session goes too if the week would fall under 80% easy); a step that would end
-    the week under 0.6 x its target is made smaller or skipped (warning `acwr_cut`). It stops with
-    `acwr_floor` when no step is left or a step no longer lowers the highest ratio (that step is undone). A
-    cut is not a shortfall: the next weeks grow from the km before it, and they are checked again. Load is
-    never raised. When the model does not track Garmin, or there is no recorded load or Garmin ratio to
-    compare, nothing is cut: `acwr.enforced` is false with the reason (warning `acwr_not_enforced`) and days
-    above 1.3 only warn (`acwr_high`). After an override, the weeks are cut again where the edit raised a
-    later day's ratio. `acwr.planned_max` and `days_over` cover every day after today and before the A race.
-    Invariant `acwr_cap`: while enforced, no day the cap acts on is above 1.3 unless its week is at its
-    floor or stopped with `acwr_floor`.
+    least 2 of those days, the ratio is enforced. The cap acts on every day after today and before the A race
+    with a planned run in the 7 days ending on it (a cut of one lowers it; a B race day too); the day belongs
+    to the week of the latest such run, and only that week is cut for it (a cut of an earlier week would only
+    lower the chronic load of the days a week after it). While a day is above 1.3, the highest such day gets
+    the best cut of its week, again and again: first a shorter session, the one with the most room for its
+    size: a quality session one rep shorter (marathon pace 1 km; down to 1 threshold rep, 3 interval reps, 3 km
+    of marathon pace), the long run 5% of the week's target shorter (not under 15 km nor 0.6 x it as built;
+    only while the plan is built, so the next long runs step from it), an easy run 5% shorter (not under the
+    easy minimum), each only while the week keeps 80% of its time easy; then an easy run dropped, only while
+    the week keeps another one. No cut takes a week under 0.6 x its target. A day still above 1.3 with no cut
+    left is held: it is listed in `acwr.held` and the warning `acwr_floor`. `acwr_cut` says, per week, the km
+    before and after and what each cut changed. A cut is not a shortfall: the next weeks grow from the km
+    before it, and they are checked again. Load is never raised. When the model does not track Garmin, or
+    there is no recorded load or Garmin ratio to compare, nothing is cut: `acwr.enforced` is false with the
+    reason (warning `acwr_not_enforced`) and days above 1.3 only warn (`acwr_high`). Overrides that only
+    reduce load (`easy`, `cap_km`, `rest`, `cap_week_km`) never make the cap cut anything: the cap keeps
+    counting the sessions they changed or removed as they were before (so easing a run, which lowers the
+    chronic load of the weeks after it, changes nothing else) and never cuts those sessions. After an
+    override that moves a session, the weeks are cut again where the edit raised a day's ratio.
+    `acwr.planned_max` and `days_over` cover every day after today and before the A race on the plan as it
+    is; `acwr.cap_max` is the highest ratio on the days the cap acts on, as the cap counts it.
+    Invariant `acwr_cap`: while enforced, every day the cap acts on is at or under 1.3 unless nothing of its
+    week is left to cut for it (held); while not enforced, the invariant is not checked and is listed in
+    `invariants.not_enforced` with the reason (never as passed).
 13. Race pacing (with `course_id`): the course's climbs as `get_course_profile` finds them; each climb is run
     3% slower per 1% of its average grade, the rest of the course at one faster pace, so that the course
     takes the goal time (else Garmin's prediction) scaled to its length. `race_pacing.segments` gives each
@@ -104,7 +115,8 @@ The Claude project instructions repeat this ([recipes/coach-project/instructions
     `race_pacing.missing`.
 
 What changed from v1: the answer has the `acwr` block and the `acwr_cap` invariant; plans whose recorded load
-tracks Garmin can have smaller weeks (only easy runs shorter or dropped); everything else is the same, so a
+tracks Garmin can have smaller weeks (shorter quality sessions, long runs and easy runs, extra easy runs
+dropped); everything else is the same, so a
 plan without recorded load (`missing: training_load`) has v1's weeks.
 
 ## Plan rules v1
@@ -132,8 +144,11 @@ v2](#plan-rules-v2)); every number below is in its `RULES`.
    the longest of the last 8 weeks or a long run placed before it). The cap applies on the day the long run
    lands, also when it moved a day, before the 80%-easy check and the easy runs fill the week.
 4. Quality by phase: threshold, intervals, marathon pace, with dose caps (threshold 10%, intervals 8%,
-   marathon pace 20% of the week's km) and at least 80% of the week's time easy. Strides stay at 6 x 100 m,
-   which `get_daily_status` classifies as easy.
+   marathon pace 20% of the week's km) and at least 80% of the week's time easy. A week with a quality session
+   or a long run has an easy run (or strides run) when a run day is free and its target leaves the easy
+   minimum beside them (not in a week with a blocked date or a fixed session): when rule 4 drops a quality
+   session after the easy runs were sized, an easy run takes its km. Strides stay at 6 x 100 m, which
+   `get_daily_status` classifies as easy.
 5. Pace bands are fractions of the lactate-threshold speed: easy and long 0.70-0.80, threshold 0.97-1.03,
    intervals and strides 1.05-1.10, marathon pace from the goal (clamped to 0.85-0.96 of LT, with a
    warning). Without an LT speed the steps have no pace target and `lt_speed` is listed as missing.
