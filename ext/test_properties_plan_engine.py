@@ -13,6 +13,8 @@ ceiling bind.
 
 import dataclasses
 import datetime as dt
+import math
+import os
 import unittest
 
 import plan_engine as pe
@@ -241,6 +243,107 @@ class AcwrProperties(unittest.TestCase):
         b = pe.plan_answer(pe.build_plan(dataclasses.replace(inputs), dataclasses.replace(snap), what_if_runs=False))
         self.assertEqual(a["content_hash"], b["content_hash"])
         self.assertEqual(a["acwr"], b["acwr"])
+
+
+# DEEP_EXAMPLES (as test_deep_engine_properties reads it) raises the pace properties' examples
+PACE_PROPS = dict(PROPS, max_examples=max(150, int(os.environ.get("DEEP_EXAMPLES") or 0)))
+
+
+@st.composite
+def pace_case(draw):
+    """An athlete with an LT speed and Garmin predictions in a plausible relation to it (the 5K pace 0.98-1.12
+    x LT, the 10K 0.93-0.99 x the 5K pace, the half and marathon anywhere from 0.70 to 1.0 x LT), and a goal or
+    none."""
+    inputs, snap = draw(plan_case())
+    lt = draw(st.floats(2.9, 5.2))
+    v5k = lt * draw(st.floats(0.98, 1.12))
+    preds = [("5k", int(round(5000 / v5k)))]
+    if draw(st.booleans()):
+        preds.append(("10k", int(round(10000 / (v5k * draw(st.floats(0.93, 0.99)))))))
+    for name, dist in (("half", 21097.5), ("marathon", 42195.0)):
+        if draw(st.booleans()):
+            preds.append((name, int(round(dist / (lt * draw(st.floats(0.70, 1.0)))))))
+    if draw(st.booleans()):
+        preds = preds[1:] if len(preds) > 1 and preds[1][0] == "10k" else preds   # sometimes the 10K alone
+    snap = dataclasses.replace(snap, lt_speed_mps=pe.MetersPerSecond(lt), prediction_s=tuple(preds))
+    return inputs, snap
+
+
+@unittest.skipUnless(HAVE_HYPOTHESIS, NEEDS_HYPOTHESIS)
+class PaceProperties(unittest.TestCase):
+    """Marathon pace, the anchored bands and the half's projection (the owner's real-data test, 2026-11-26)."""
+
+    @settings(**PACE_PROPS)
+    @given(pace_case())
+    def test_mp_is_never_faster_than_feasibility_accepts(self, case):
+        inputs, snap = case
+        warnings = []
+        mp = pe.marathon_pace(inputs, snap, pe.RULES, warnings)
+        dist = float(pe.DISTANCES[inputs.race_distance])
+        if mp is None:
+            self.assertFalse(inputs.goal_time_s or snap.prediction(inputs.race_distance))
+            return
+        accept = pe.accepted_speed(inputs, snap, pe.RULES)
+        self.assertIsNotNone(accept)
+        if not inputs.goal_time_s:
+            self.assertLessEqual(mp, accept + 1e-9)
+            # the finish time MP implies is a goal feasibility does not fail
+            goal = int(math.ceil(dist / mp))
+            f = pe.feasibility(dataclasses.replace(inputs, goal_time_s=goal), snap, None, None, None, None)
+            self.assertNotEqual(f["verdict"], "unrealistic", f["checks"])
+            self.assertTrue(all(c["ok"] for c in f["checks"] if c["id"] == "goal_vs_prediction"), f["checks"])
+        else:
+            goal_speed = dist / inputs.goal_time_s
+            self.assertLessEqual(mp, max(goal_speed, accept) + 1e-9)
+            if mp > accept + 1e-9:
+                self.assertIn("goal_beyond_feasible", [w["id"] for w in warnings])
+
+    @settings(**PACE_PROPS)
+    @given(pace_case())
+    def test_intervals_are_never_faster_than_the_3k_equivalent_of_the_5k(self, case):
+        inputs, snap = case
+        plan = pe.build_plan(inputs, snap, what_if_runs=False)
+        self.assertTrue(plan["invariants"]["ok"], plan["invariants"]["failed"])
+        paces = plan["_check"]["ctx"].paces
+        v5k = pe.prediction_speed(snap, "5k", pe.RULES)
+        intervals, threshold = paces.band("intervals"), paces.band("threshold")
+        assume(intervals is not None and threshold is not None and v5k is not None)
+        # never faster than the 3K equivalent of the 5K pace, unless the threshold band's floor (0.91 x LT, so
+        # get_daily_status still calls it hard) is above the 5K pace (a 10K far slower than LT): then of that
+        floor = max(v5k, threshold[1])
+        self.assertLessEqual(intervals[1], floor * (5 / 3) ** 0.06 + 0.001)
+        if v5k >= 0.97 * snap.lt_speed_mps:
+            self.assertLessEqual(intervals[1], v5k * (5 / 3) ** 0.06 + 0.001)
+        self.assertGreaterEqual(intervals[0], v5k - 0.001)
+        self.assertGreaterEqual(intervals[0], threshold[1] - 0.001)   # intervals above the threshold band
+        self.assertGreater((threshold[0] + threshold[1]) / 2, 0.90 * snap.lt_speed_mps)   # still hard daily
+
+    @settings(**PACE_PROPS)
+    @given(plan_case())
+    def test_a_half_never_plans_more_than_a_marathon(self, case):
+        inputs, snap = case
+        # the ACWR cap cuts a marathon's bigger weeks harder (a half week under it may then be the larger)
+        snap = dataclasses.replace(snap, garmin_load=())
+        half = pe.build_plan(dataclasses.replace(inputs, race_distance="half", goal_time_s=None), snap,
+                             what_if_runs=False)
+        full = pe.build_plan(dataclasses.replace(inputs, race_distance="marathon", goal_time_s=None), snap,
+                             what_if_runs=False)
+        self.assertTrue(half["invariants"]["ok"], half["invariants"]["failed"])
+        hs, fs = half["summary"], full["summary"]
+        # the caps themselves: a half's ceiling and long-run cap are never above a marathon's
+        ceiling = pe.peak_ceiling(snap, half["_check"]["ctx"].km0, pe.RULES, "half")[0]
+        self.assertLessEqual(ceiling, pe.peak_ceiling(snap, full["_check"]["ctx"].km0, pe.RULES)[0])
+        self.assertLessEqual(hs["peak_km"] or 0, pe.km(ceiling) + 0.1)
+        self.assertLessEqual(pe.max_long_m(half["_check"]["ctx"]), pe.max_long_m(full["_check"]["ctx"]))
+        # the plans: weeks grow from what was placed, so a marathon week the easy minimum held below its target
+        # (a 24.1 km long run leaving 3.9 km, under the 4 km easy minimum) grows slower: compare the others.
+        # 2%: the race pace of the quality sessions differs, so the 80%-easy check may place a week a little
+        # differently
+        assume(all(w["planned_km"] >= w["target_km"] - 0.5 for w in full["weeks"] if w["kind"] == "normal"))
+        weeks = [[(w["kind"], w["target_km"], w["planned_km"]) for w in p["weeks"]] for p in (half, full)]
+        self.assertLessEqual(hs["peak_km"] or 0, (fs["peak_km"] or 0) * 1.02 + 0.1, weeks)
+        self.assertLessEqual(hs["peak_long_km"] or 0, (fs["peak_long_km"] or 0) * 1.02 + 0.1, weeks)
+        self.assertLessEqual(hs["peak_long_km"] or 0, 24.0)
 
 
 if __name__ == "__main__":

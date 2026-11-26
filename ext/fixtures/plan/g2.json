@@ -32,7 +32,7 @@
    }
   },
   "b_races": [],
-  "content_hash": "2c5d823a21a99d9a981a9937c2d1d064611df9fe458995c7e35c063ef8cffec7",
+  "content_hash": "16bc94c68199272c044218c65ad1e7f3cff549778186d1d2cfa8cf609b69bc55",
   "feasibility": {
    "checks": [
     {
@@ -54,7 +54,7 @@
      "level": "warn",
      "limit": 30.0,
      "ok": true,
-     "value": 36.1
+     "value": 33.5
     },
     {
      "id": "long_run_km",
@@ -136,11 +136,18 @@
    "lt_pace": "5:12"
   },
   "summary": {
-   "peak_km": 36.1,
+   "peak_km": 33.5,
    "peak_long_km": 16.7,
    "weeks": 16.0
   },
   "warnings": [
+   {
+    "dates": [
+     "2027-03-01"
+    ],
+    "detail": "weekly km held at 33.5 km, the larger of 1.2 x the biggest week of the last 8 (17.0 km) and the start 15.5 km + 18 km; deloads still apply",
+    "id": "peak_capped"
+   },
    {
     "dates": [
      "2027-03-01"
@@ -1623,7 +1630,7 @@
      }
     ],
     "start": "2027-03-01",
-    "target_km": 36.1,
+    "target_km": 33.5,
     "week": 14
    },
    {
@@ -1800,7 +1807,7 @@
   ],
   "what_if": [
    {
-    "delta_peak_km": -6.7,
+    "delta_peak_km": -4.1,
     "delta_peak_long_km": -6.5,
     "goal_time": null,
     "invariants_ok": true,
@@ -1810,7 +1817,9 @@
     "variant": "long_share_0.35",
     "verdict": "ambitious",
     "warnings_added": [],
-    "warnings_removed": []
+    "warnings_removed": [
+     "peak_capped"
+    ]
    },
    {
     "delta_peak_km": 0.0,
@@ -1818,7 +1827,7 @@
     "goal_time": null,
     "invariants_ok": true,
     "long_share": 0.45,
-    "peak_km": 36.1,
+    "peak_km": 33.5,
     "peak_long_km": 15.0,
     "variant": "long_share_0.45",
     "verdict": "ambitious",

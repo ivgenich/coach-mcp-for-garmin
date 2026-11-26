@@ -13,6 +13,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import datetime as dt
+import math
 import unittest
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -276,13 +277,35 @@ def check_plan(inputs: pe.PlanInputs, snap: pe.Snapshot, plan: Dict[str, Any]) -
             total_t += t
         if total_t > 0 and hard_t / total_t > 0.2 + 1e-6:
             out.append(f"week {w['week']}: {round(100 * (1 - hard_t / total_t), 1)}% easy")
-    # rule 5: mp band clamped to 0.85-0.96 of LT
+    # rule 5: mp band clamped to 0.85-0.96 of LT, but never raised past the fastest race pace feasibility accepts
     if lt and a["race"]["marathon_pace"]:
         m, s_ = a["race"]["marathon_pace"].split(":")
         speed = 1000.0 / (int(m) * 60 + int(s_))
-        if not 0.85 * lt - 0.02 <= speed <= 0.96 * lt + 0.02:
+        accept = _accepted_speed(inputs, snap)
+        floor = 0.85 * lt if accept is None else min(0.85 * lt, accept)
+        if not inputs.goal_time_s and accept is not None:   # the corrected goal's pace, at most 0.96 x LT
+            floor = min(accept, 0.96 * lt)
+        if not floor - 0.02 <= speed <= 0.96 * lt + 0.02:
             out.append(f"marathon pace {a['race']['marathon_pace']} outside 0.85-0.96 of LT")
+        goal_speed = (21097.5 if inputs.race_distance == "half" else 42195.0) / (inputs.goal_time_s or 1e9)
+        if accept is not None and speed > max(accept, goal_speed) + 0.02:
+            out.append(f"marathon pace {a['race']['marathon_pace']} faster than feasibility accepts")
     return out
+
+
+def _accepted_speed(inputs: pe.PlanInputs, snap: pe.Snapshot) -> Optional[float]:
+    """The fastest race pace feasibility accepts, from the documented numbers: with a goal the slower of
+    0.95 (half 1.02) x LT and 3% faster than the prediction; without one the corrected goal's pace (the
+    slower of the prediction and 0.93 (half 0.97) x LT, up to the minute)."""
+    half = inputs.race_distance == "half"
+    dist = 21097.5 if half else 42195.0
+    lt = snap.lt_speed_mps
+    pred = snap.prediction(inputs.race_distance)
+    if inputs.goal_time_s:
+        limits = ([(1.02 if half else 0.95) * lt] if lt else []) + ([dist / (pred * 0.97)] if pred else [])
+        return min(limits) if limits else None
+    times = ([float(pred)] if pred else []) + ([dist / ((0.97 if half else 0.93) * lt)] if lt else [])
+    return dist / (math.ceil(max(times) / 60.0) * 60) if times else None
 
 
 def _times(s: Dict[str, Any], by_time: bool) -> Tuple[float, float]:

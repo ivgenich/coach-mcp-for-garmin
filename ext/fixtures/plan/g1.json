@@ -2304,7 +2304,9 @@
     "peak_long_km": 29.1,
     "variant": "goal_minus_5min",
     "verdict": "ambitious",
-    "warnings_added": [],
+    "warnings_added": [
+     "goal_beyond_feasible"
+    ],
     "warnings_removed": []
    },
    {
