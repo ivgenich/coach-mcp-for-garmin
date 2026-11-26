@@ -28,7 +28,8 @@ Optional fields beyond the shared contract (all default to "not used"):
 - Case.plan: "memory" serves the training-plan read tools (PLAN_TOOLS) over an in-memory plan store
   (evals/harness/plans.py), full mode only; "tracked" also turns plan tracking on (PLAN_TRACKING=on: log_feedback,
   the plan in get_daily_status / get_weekly_status) over a stored plan whose session today is done and has no
-  feedback yet; "reviewed" is tracked too, over a three-week plan with RPE and pain feedback stored, for the
+  feedback yet; "drafted" is tracked too, but that plan is only a draft (plan_activate starts it, after the
+  user's yes); "reviewed" is tracked too, over a three-week plan with RPE and pain feedback stored, for the
   weekly review (plan_review_week); "off" (the default) leaves them out.
 - Case.writes (needs plan = "memory"): the Garmin plan writes (PLAN_WRITES=on) add plan_commit and plan_cancel
   (PLAN_WRITE_TOOLS) and the PLAN_WRITES=on instructions, Stage 2's real tools (evals/harness/plans.py): "on"
@@ -79,10 +80,12 @@ FIXTURE_FOLDERS = ("overlays", "variants")
 HISTORY_FIXTURES = ("athlete", "partial", "two_weeks", "mismatch", "off")
 HISTORY_TOOLS = ("find_similar_weeks", "search_history")
 # evals/harness/plans.FIXTURES and ext/launch.PLAN_READ_TOOLS (test_cases checks they are equal).
-PLAN_FIXTURES = ("memory", "tracked", "reviewed", "off")
+PLAN_FIXTURES = ("memory", "tracked", "reviewed", "drafted", "off")
+# The plan fixtures that turn PLAN_TRACKING on (evals/harness/plans.TRACKED_FIXTURES).
+TRACKED_PLAN_FIXTURES = ("tracked", "reviewed", "drafted")
 PLAN_TOOLS = ("plan_assess", "plan_get", "plan_preview")
-# ext/launch.PLAN_TRACKING_TOOLS (test_cases checks they are equal): served with plan = "tracked".
-PLAN_TRACKING_TOOLS = ("log_feedback",)
+# ext/launch.PLAN_TRACKING_TOOLS (test_cases checks they are equal): served with TRACKED_PLAN_FIXTURES.
+PLAN_TRACKING_TOOLS = ("log_feedback", "plan_activate")
 # ext/launch.PLAN_REVIEW_TOOLS (test_cases checks they are equal): served with plan = "tracked" or "reviewed".
 PLAN_REVIEW_TOOLS = ("plan_review_week",)
 # evals/harness/plans.WRITES_FIXTURES and WRITE_TOOLS, ext/launch.PLAN_WRITE_TOOLS (test_cases checks they are equal).
@@ -206,7 +209,7 @@ def case_tools(mode: str, history: str = "off", plan: str = "off", writes: str =
     plan writes `writes`."""
     return (tool_names(mode) | (frozenset(HISTORY_TOOLS) if history != "off" else frozenset())
             | (frozenset(PLAN_TOOLS) if plan != "off" else frozenset())
-            | (frozenset(PLAN_TRACKING_TOOLS + PLAN_REVIEW_TOOLS) if plan in ("tracked", "reviewed") else frozenset())
+            | (frozenset(PLAN_TRACKING_TOOLS + PLAN_REVIEW_TOOLS) if plan in TRACKED_PLAN_FIXTURES else frozenset())
             | (frozenset(PLAN_WRITE_TOOLS) if writes != "off" else frozenset()))
 
 

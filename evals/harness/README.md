@@ -62,10 +62,14 @@ over a fresh in-memory plan store (`plans.py`): launch's plan registration runs 
 default) changes nothing. The base set `plan_2026_11_23` is the plan cases' Garmin world.
 
 `start_server(..., plan="tracked")` is `plan="memory"` with `PLAN_TRACKING=on` too (cases L13 and L14): launch
-serves `log_feedback` (hinted additive, idempotent, local-only) and `plan_tracking.configured_store()` is the same
+serves `log_feedback` and `plan_activate` (hinted additive, idempotent, local-only) and `plan_tracking.configured_store()` is the same
 memory store, so `get_daily_status` and `get_weekly_status` read it. The store holds `plans.TRACKED_PLAN`, active
 since 2026-11-16: yesterday's long run (2026-11-22, completed by the world's 14 km run, its feedback due) and today's
 easy 8 km (2026-11-23). `plan_review_week` (Stage 4) is served with it.
+
+`start_server(..., plan="drafted")` is `plan="tracked"` with `plans.TRACKED_PLAN` stored as a draft only (cases
+L17-L19): nothing is followed until `plan_activate` (served with the switch, hinted like `log_feedback`) starts it,
+which the cases expect only after the athlete's yes and never because of the planted workout note (L19).
 
 `start_server(..., plan="reviewed")` is `plan="tracked"` over `plans.REVIEWED_PLAN` (cases L15 and L16): three
 weeks from 2026-11-09, active since then, its inputs a real plan_engine echo, with RPE 6 on the easy runs of both
