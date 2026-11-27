@@ -30,7 +30,7 @@ place of the old one, without typing it on a command line:
   `NAME` = `GARMIN_PERSONAL_API_KEY`.
 - Railway, in the dashboard: the service's **Variables**, `GARMIN_PERSONAL_API_KEY`, then deploy
   the change.
-- Docker: the key command in [Settings](deploy-docker.md#2-settings), then
+- Docker: the key command in [Settings](deploy-docker.md#settings), then
   `docker compose up -d --force-recreate app`.
 
 The server makes a new access token from the new key by itself. Then delete the old key in
@@ -56,7 +56,7 @@ Without deploy.sh:
   Then read it with `railway variable list --kv | grep ^OWNER_SECRET=`.
 - Railway, in the dashboard: the service's **Variables**, `OWNER_SECRET`, edit, paste 32 or more
   random characters from your password manager's generator, then deploy the change.
-- Docker: run the owner-secret command from [Settings](deploy-docker.md#2-settings) again, then
+- Docker: run the owner-secret command from [Settings](deploy-docker.md#settings) again, then
   `docker compose up -d --force-recreate app`.
 
 A secret you choose yourself must be 32 to 256 characters with at least 12 different ones; a

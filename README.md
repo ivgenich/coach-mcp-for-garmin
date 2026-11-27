@@ -67,6 +67,7 @@ time zone as an IANA name such as `Europe/London`, about an hour, a terminal and
 
    It creates your **owner secret**: save it in your password manager ([details](docs/deploy-railway.md)).
    Advanced, partly untested: [Docker](docs/deploy-docker.md) on your own computer, behind a Cloudflare Tunnel.
+   Docker on any server of your own is supported with `scripts/setup.sh`: [Deploy with Docker](docs/deploy-docker.md).
 3. **Connect Garmin** (`full` only): the one-time login runs on your server, not on your computer
    (the `garmin-mcp-auth` command exists only there). deploy.sh offers to start it for you over
    `railway ssh` ([how](docs/garmin-login.md#full-mode-the-one-time-login)). `key`: nothing to do.

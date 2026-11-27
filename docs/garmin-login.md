@@ -99,7 +99,7 @@ check that `https://<your-host>/readyz` answers ready.
 4. Click **Create Key**. Garmin shows the key only once: copy it into your password manager. It is
    a secret like a password: never paste it into a chat, an issue or a command line.
 5. Keep it for the deploy, which asks for it: [Railway](deploy-railway.md#deploy-with-deploysh) or
-   [Docker](deploy-docker.md#2-settings). To change it later:
+   [Docker](deploy-docker.md#3-run-setupsh). To change it later:
    [Renew the Garmin key](maintenance.md#renew-the-garmin-key-key-mode).
 
 Garmin emails you about a week before the key expires. Then create a new key and replace the old
@@ -111,7 +111,7 @@ Change `GARMIN_AUTH` and deploy again:
 
 - From `full` to `key`: create a key first. Railway: `GARMIN_AUTH=key ./scripts/deploy.sh` asks
   for it. Docker: set `GARMIN_AUTH=key` in `.env`, add the key with the command in
-  [Settings](deploy-docker.md#2-settings), then run `docker compose up -d --force-recreate app`.
+  [Settings](deploy-docker.md#settings), then run `docker compose up -d --force-recreate app`.
   The Garmin login tokens stay on `/data` until you delete them: `railway ssh -- rm -rf /data/tokens`
   on Railway, `docker compose exec app rm -rf /data/tokens` with Docker.
 - From `key` to `full`: remove the key setting first, since the server does not start in `full`
