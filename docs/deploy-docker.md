@@ -4,9 +4,11 @@ Run the server with Docker Compose on a computer of your own that stays on, and 
 Claude through a Cloudflare Tunnel. Claude needs a public HTTPS address that never changes; the
 tunnel gives your server one without opening a port on your router.
 
-This is the advanced path, and partly untested: the Cloudflare Tunnel steps follow Cloudflare's
-documentation and were not yet tested end to end. History search is not available here yet: it
-needs Railway ([History search](history-search.md)).
+This is the advanced path. CI builds `compose.yaml` from source on amd64 and arm64 and tests the
+server behind a stand-in for the tunnel, sign-in included ([How this path is tested](#how-this-path-is-tested)).
+The real Cloudflare Tunnel is still untested: those steps follow Cloudflare's documentation and were
+not yet tested end to end. History search is not available here yet: it needs Railway
+([History search](history-search.md)).
 
 ## What you need
 
@@ -176,3 +178,13 @@ cloudflared image.
 Remove everything: `docker compose down --volumes --rmi all` deletes the containers, the images
 and the volume, with the Garmin login or key cache and every sign-in. Then run `rm .env tunnel.env`,
 and delete the tunnel and its DNS record in Cloudflare ([Uninstall and revoke](../README.md#uninstall-and-revoke)).
+
+## How this path is tested
+
+On every change, CI runs `scripts/ci-compose.sh` on amd64 and arm64 (you can run it too; it needs
+Docker). It builds this `compose.yaml` from source, with fake secrets, and puts a small test edge in
+the tunnel's place: it forwards to `http://app:8080` and sets `CF-Connecting-IP` as Cloudflare does.
+Through that edge it checks the health checks, the sign-in end to end in `full` mode (no Garmin
+login) and in `key` mode (a fake key, no network), that the server takes the caller's address from
+the edge's `CF-Connecting-IP` and not from one the caller sent, and that the sign-ins on the volume
+survive a stop, a start and a crash. It never runs the real tunnel or calls Garmin.

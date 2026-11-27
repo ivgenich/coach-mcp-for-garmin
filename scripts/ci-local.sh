@@ -4,11 +4,15 @@
 #                                  venvs and fetch the pinned tools (needs network)
 #   scripts/ci-local.sh            run the steps; each ends PASS, FAIL or SKIP
 #   scripts/ci-local.sh --strict   a step that cannot run here fails instead
+#   scripts/ci-local.sh --compose  also run the Docker Compose path test
+#                                  (scripts/ci-compose.sh; needs Docker)
 # It writes nothing into the repository. Everything it builds lives in CI_CACHE
 # (default ${XDG_CACHE_HOME:-$HOME/.cache}/coach-mcp-ci). Pythons: CI_PY310
 # (default python3.10; it must have no mcp and no upstream: the stdlib leg) and
 # CI_PY312 (default python3.12; --setup builds the venvs with it).
-# The container smoke test needs Docker: scripts/ci-smoke.sh.
+# The container smoke test needs Docker: scripts/ci-smoke.sh. So does the
+# Docker Compose path test, scripts/ci-compose.sh, which --compose runs with
+# venv-full's Python (it builds the image, so it takes a few minutes).
 # The optional features: venv-full holds the image's packages, the tracing
 # ones included (tests-full requires them); venv-history adds the history
 # packages of an image built with HISTORY=1 (tests-history). Both also get the
@@ -32,12 +36,14 @@ EVALS="$CACHE/venv-evals"
 HISTORYV="$CACHE/venv-history"
 SETUP=no
 STRICT=no
+COMPOSE=no
 for arg in "$@"; do
 	case "$arg" in
 	--setup) SETUP=yes ;;
 	--strict) STRICT=yes ;;
+	--compose) COMPOSE=yes ;;
 	*)
-		echo "usage: $0 [--setup] [--strict]" >&2
+		echo "usage: $0 [--setup] [--strict] [--compose]" >&2
 		exit 2
 		;;
 	esac
@@ -228,8 +234,18 @@ else
 	skip pip-audit "no tools venv (run --setup)"
 fi
 
+if [ "$COMPOSE" = yes ]; then
+	if ! have docker || ! docker info >/dev/null 2>&1; then
+		skip compose-path "no Docker daemon"
+	elif [ ! -x "$FULL/bin/python" ]; then
+		skip compose-path "no full venv (run --setup)"
+	else
+		step compose-path env COMPOSE_TEST_PYTHON="$FULL/bin/python" scripts/ci-compose.sh
+	fi
+fi
+
 echo
-echo "ci-local summary (container smoke test: scripts/ci-smoke.sh, needs Docker):"
+echo "ci-local summary (container smoke test: scripts/ci-smoke.sh; Compose path: --compose; both need Docker):"
 printf '  %s\n' "${RESULTS[@]}"
 for r in "${RESULTS[@]}"; do
 	case "$r" in FAIL*) exit 1 ;; esac

@@ -1,6 +1,7 @@
 # CI: unit tests (two legs; the full one with a coverage floor), the sign-in end
 # to end, the eval tests offline, lint and the type check, secrets, known
-# vulnerabilities and a container smoke test. Nothing here needs a secret or a
+# vulnerabilities, a container smoke test and the Docker Compose path on amd64
+# and arm64. Nothing here needs a secret or a
 # Garmin login. Every action is pinned to a full commit SHA; the tools are
 # pinned in scripts/ci-tools.sh and .github/ci-requirements.txt.
 # The same steps without Docker or GitHub: scripts/ci-local.sh
@@ -293,3 +294,39 @@ jobs:
         run: scripts/ci-smoke.sh
       - name: The history image builds too (HISTORY=1; build only)
         run: docker build --build-arg HISTORY=1 -t coach-mcp:history .
+
+  compose:
+    # The Docker path as a user runs it: compose.yaml builds from source (build: .) and starts with fake
+    # secrets; a test-only edge stands in for the Cloudflare tunnel (scripts/tests/compose-edge.yaml).
+    # On amd64 and on arm64 (Apple silicon, Raspberry Pi), the two platforms docs/deploy-docker.md names.
+    name: docker path (compose)${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            label: ""
+          - runner: ubuntu-24.04-arm
+            label: " arm64"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.FULL_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            constraints.txt
+            Dockerfile
+            config/requirements-build.txt
+            config/requirements-core.txt
+            config/requirements-telemetry.txt
+      - name: The mcp client for scripts/test-protocol.py (the image's pins, every package by hash)
+        run: python -B scripts/ci-checks.py install-full
+      - name: Build with compose.yaml, start it behind a test edge, sign in, restart, switch to key mode
+        env:
+          COMPOSE_TEST_PYTHON: python
+        run: scripts/ci-compose.sh

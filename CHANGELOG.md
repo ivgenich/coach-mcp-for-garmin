@@ -8,6 +8,13 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+### Added
+
+- CI tests the Docker Compose path on amd64 and arm64: `scripts/ci-compose.sh` builds `compose.yaml`
+  from source with fake secrets, puts a test edge in the Cloudflare tunnel's place, and checks the
+  sign-in in `full` and `key` mode, the caller address, and that the sign-ins survive a restart
+  (`scripts/ci-local.sh --compose` runs it locally). The real tunnel is still untested.
+
 ## [1.1.1] - 2026-11-26
 
 Fixes to the training plan builder. Plan rules version 3 (old: 2), so a plan stored by 1.1.0 says
