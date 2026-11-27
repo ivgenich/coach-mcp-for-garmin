@@ -8,6 +8,33 @@ and so what a MAJOR, MINOR or PATCH release may change:
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-27
+
+Docker on any server: one setup script and a tested Compose path. No change to the server's code,
+settings or tools, so a Railway server needs no update.
+
+### Added
+
+- `scripts/setup.sh`: one script for the Docker and Cloudflare Tunnel setup on any server, built
+  from a release tag. It asks for the host name, the Garmin mode, the time zone (it suggests the
+  computer's own), the key and the tunnel token (hidden), writes `.env` and `tunnel.env` (mode
+  600), shows a new owner secret once, starts the server and prints the connector URL with a
+  link that fills in claude.ai's form. `--check` (read-only, settings by name only), `--backup`,
+  `--restore` and `--upgrade <tag>` (a backup first; it prints the command to roll back).
+  [Deploy with Docker](docs/deploy-docker.md).
+- CI tests the Docker Compose path on amd64 and arm64: `scripts/ci-compose.sh` builds `compose.yaml`
+  from source with fake secrets, puts a test edge in the Cloudflare tunnel's place, and checks the
+  sign-in in `full` and `key` mode, the caller address, and that the sign-ins survive a restart
+  (`scripts/ci-local.sh --compose` runs it locally). The real tunnel is still untested.
+
+### Changed
+
+- [Deploy with Docker](docs/deploy-docker.md) now starts with setup.sh; the manual steps are under
+  Manual setup. New sections: Requirements, Backup and restore, Upgrade and roll back, Who can see
+  your traffic. A Docker roll back now uses `setup.sh --upgrade <previous tag>` and, when the
+  sign-in database changed, `--restore` ([Updates](docs/updates.md#roll-back)).
+- SECURITY.md: the supported versions table lists only 1.x releases.
+
 ## [1.1.1] - 2026-11-26
 
 Fixes to the training plan builder. Plan rules version 3 (old: 2), so a plan stored by 1.1.0 says

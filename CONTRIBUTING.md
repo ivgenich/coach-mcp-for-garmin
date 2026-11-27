@@ -23,7 +23,8 @@ The other CI steps (the full test leg with upstream garmin_mcp and the pinned mc
 the secret scan) run on your computer with `scripts/ci-local.sh`: run
 `scripts/ci-local.sh --setup` once (it needs network and `python3.10` and `python3.12`), then
 `scripts/ci-local.sh`. It writes nothing into the repository. The container smoke test needs
-Docker: `scripts/ci-smoke.sh`. More: [ext/README.md](ext/README.md).
+Docker: `scripts/ci-smoke.sh`; so does the Docker Compose path test, `scripts/ci-compose.sh`
+(`scripts/ci-local.sh --compose`). More: [ext/README.md](ext/README.md).
 
 ## Style
 

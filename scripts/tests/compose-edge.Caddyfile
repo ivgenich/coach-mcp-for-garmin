@@ -1,0 +1,20 @@
+# Test only (scripts/tests/compose-edge.yaml): the edge that stands in for
+# Cloudflare's edge and the tunnel in scripts/ci-compose.sh.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+http://:8080 {
+	reverse_proxy app:8080 {
+		# Cloudflare names the caller in CF-Connecting-IP and replaces any
+		# value the caller sent. The Host header goes through unchanged, as
+		# the tunnel sends the public hostname.
+		header_up CF-Connecting-IP {remote_host}
+		flush_interval -1
+	}
+	# For the test only: the address this edge named, to compare with the
+	# client_ip in the app's access log.
+	header X-CI-Edge-Client-IP {remote_host}
+}

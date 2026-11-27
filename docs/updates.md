@@ -63,8 +63,9 @@ Your Garmin login or key and your Claude sign-ins stay, so you don't reconnect C
 - Railway with deploy.sh: in your clone, `git fetch --tags`, `git checkout vX.Y.Z` (the release
   you want), then `./scripts/deploy.sh`. With history search on, also redeploy the worker and the
   scheduler from the same checkout ([History worker](history-worker.md#stopping-redeploying-forgetting)).
-- Docker: in the project folder, `git fetch --tags`, `git checkout vX.Y.Z` (the release you
-  want), then `docker compose up -d --build`. Your settings and the volume stay.
+- Docker: in the project folder, `./scripts/setup.sh --upgrade vX.Y.Z` (the release you want).
+  It backs up the volume first, then fetches the tags, checks out the release and rebuilds. Your
+  settings and the volume stay ([Upgrade and roll back](deploy-docker.md#upgrade-and-roll-back)).
 
 Updating a copy from before 1.0.0: set `GARMIN_AUTH=full` first
 ([Moving from the token-in-URL version](maintenance.md#moving-from-the-token-in-url-version)).
@@ -78,9 +79,11 @@ Roll back if a new version misbehaves: redeploy the previous deployment or image
 Railway: dashboard → the service → **Deployments** → the last deployment from before the
 change → **Redeploy**. The `/data` volume (Garmin login) is untouched.
 
-With Docker: `git checkout` the previous release tag (on `main`, the previous commit), then
-`docker compose up -d --build`. If a
-release changes the sign-in database, its CHANGELOG entry says whether rolling back is safe.
+With Docker: `./scripts/setup.sh --upgrade <previous tag>`; the upgrade printed this command
+with the tag you came from. If a release changes the sign-in database, its CHANGELOG entry says
+whether rolling back is safe; if not, also put back the backup the upgrade made:
+`./scripts/setup.sh --restore backups/coach-data-<date>-<time>.tar.gz`
+([Backup and restore](deploy-docker.md#backup-and-restore)).
 
 ## Support
 

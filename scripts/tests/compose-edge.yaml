@@ -1,0 +1,41 @@
+# Test only: scripts/ci-compose.sh starts the repository's real compose.yaml
+# with this file on top. Never use it on a real server. Needs Docker Compose
+# 2.24.4 or newer (the !override tag).
+#   app     reads the test's own settings file, not the repository's .env, and
+#           joins only the internal network "inside": it has no way out, so no
+#           Garmin call can be made.
+#   tunnel  stays off (a profile nobody starts): it needs a real Cloudflare token.
+#   edge    stands in for Cloudflare's edge and the tunnel: Caddy proxies
+#           127.0.0.1:$CI_EDGE_PORT to http://app:8080, the tunnel's route, and
+#           sets CF-Connecting-IP to the caller's address, replacing any value
+#           the caller sent (compose-edge.Caddyfile).
+services:
+  app:
+    env_file: !override
+      - ${CI_COMPOSE_ENV:?set by scripts/ci-compose.sh}
+    networks: [inside]
+
+  tunnel:
+    profiles: [real-tunnel]
+    env_file: !override
+      - ${CI_COMPOSE_TUNNEL_ENV:?set by scripts/ci-compose.sh}
+
+  edge:
+    # The Caddy image the Dockerfile copies Caddy from (scripts/ci-compose.sh reads it there).
+    image: ${CI_EDGE_IMAGE:?set by scripts/ci-compose.sh}
+    command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+    volumes:
+      - ./scripts/tests/compose-edge.Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - 127.0.0.1:${CI_EDGE_PORT:?set by scripts/ci-compose.sh}:8080
+    networks: [inside, outside]
+    depends_on:
+      app:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  inside:
+    internal: true
+  outside: {}

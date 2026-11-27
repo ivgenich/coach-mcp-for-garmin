@@ -16,8 +16,7 @@ only that you have a security report to send, with no details, and the maintaine
 send it.
 
 This is a personal project, maintained on a best-effort basis. Expect a first answer within 14
-days. A fix goes into the newest release (until the first release is out, into the `main`
-branch), and the CHANGELOG describes it once the fix is out.
+days. A fix goes into the newest release, and the CHANGELOG describes it once the fix is out.
 
 ## Supported versions
 
@@ -25,8 +24,6 @@ branch), and the CHANGELOG describes it once the fix is out.
 |---|---|
 | The newest 1.x release | Yes |
 | Older 1.x releases | No: update to the newest 1.x release |
-| The `main` branch, until 1.0.0 is released | Yes |
-| Copies from before 1.0.0, once 1.0.0 is released | No |
 
 ## Scope
 

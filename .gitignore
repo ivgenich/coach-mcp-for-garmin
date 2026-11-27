@@ -29,3 +29,5 @@ evals/runs/
 
 # OS noise
 .DS_Store
+# scripts/setup.sh --backup: copies of the coach-data volume (the Garmin login and sign-ins)
+backups/
