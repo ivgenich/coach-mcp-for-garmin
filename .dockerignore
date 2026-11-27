@@ -44,3 +44,5 @@ ext/fixtures/
 ext/README.md
 **/__pycache__
 **/*.pyc
+# scripts/setup.sh --backup's copies of the volume: Garmin login and sign-ins.
+backups/

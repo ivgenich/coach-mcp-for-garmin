@@ -85,7 +85,7 @@ tells uvicorn to trust no proxy header (an empty `FORWARDED_ALLOW_IPS`), so call
 reach it through the same edge never share one limit.
 
 With Docker, the tunnel token in `tunnel.env` is a secret like the owner secret: anyone who
-has it can run your tunnel ([3. Create the tunnel](deploy-docker.md#3-create-the-tunnel)
+has it can run your tunnel ([2. Create the tunnel](deploy-docker.md#2-create-the-tunnel)
 says what to do if it leaked).
 
 Caddy still passes a caller's own `X-Forwarded-Proto` and `X-Forwarded-Host` through, so

@@ -193,7 +193,7 @@ curl -s -o /dev/null -D "$WORK/hprobe" --max-time 10 -H 'CF-Connecting-IP: 198.5
 edge_ip=$(sed -n 's/^[Xx]-[Cc][Ii]-[Ee]dge-[Cc]lient-[Ii][Pp]: *\([^[:space:]]*\).*/\1/p' "$WORK/hprobe")
 sleep 1
 dc logs --no-color --no-log-prefix app >"$WORK/app.log" 2>&1 || true
-seen=$(grep -F "\"uri\":\"$probe\"" "$WORK/app.log" | sed -n 's/.*"client_ip":"\([^"]*\)".*/\1/p' | head -n 1)
+seen=$(grep -F "\"uri\":\"$probe\"" "$WORK/app.log" | sed -n 's/.*"client_ip":"\([^"]*\)".*/\1/p' | head -n 1 || true)
 ok=no
 [ -n "$edge_ip" ] && [ "$seen" = "$edge_ip" ] && ok=yes
 check full/client-ip "$ok" "planted CF-Connecting-IP, X-Real-IP, X-Client-IP; the app logged client_ip ${seen:-none} (want the edge's ${edge_ip:-none})"
@@ -205,7 +205,7 @@ dc exec -T edge wget -q -O /dev/null --header 'CF-Connecting-IP: 198.51.100.10' 
 	>/dev/null 2>&1 || true
 sleep 1
 dc logs --no-color --no-log-prefix app >"$WORK/app.log" 2>&1 || true
-seen=$(grep -F "\"uri\":\"$probe2\"" "$WORK/app.log" | sed -n 's/.*"client_ip":"\([^"]*\)".*/\1/p' | head -n 1)
+seen=$(grep -F "\"uri\":\"$probe2\"" "$WORK/app.log" | sed -n 's/.*"client_ip":"\([^"]*\)".*/\1/p' | head -n 1 || true)
 check full/direct-peer "$(yes_if test "$seen" = 198.51.100.10)" \
 	"a peer on the Compose network that skips the edge is trusted for CF-Connecting-IP (by design, no port is published): client_ip ${seen:-none}"
 # shellcheck disable=SC2016 # a Go template, not a shell expansion

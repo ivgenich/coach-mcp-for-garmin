@@ -10,12 +10,19 @@ The real Cloudflare Tunnel is still untested: those steps follow Cloudflare's do
 not yet tested end to end. History search is not available here yet: it needs Railway
 ([History search](history-search.md)).
 
-## What you need
+`scripts/setup.sh` does the setup for you: it asks a few questions, writes the two settings files,
+builds and starts the server, and prints the connector URL. If you'd rather type each step
+yourself, follow [Manual setup](#manual-setup) instead.
 
-- A computer that stays on, with Docker and Docker Compose. The image runs on 64-bit x86 (amd64)
-  and 64-bit ARM (arm64), such as Apple silicon or a Raspberry Pi 4 or 5 with a 64-bit system.
-  32-bit ARM is not supported. Plan for 1 GB of free memory, and turn off sleep: while the
-  computer sleeps, Claude cannot reach the server.
+## Requirements
+
+Each server builds the image itself from a release tag of this repository: there is no ready-made
+image to download.
+
+- A computer that stays on, with Docker and Docker Compose 2.20 or newer. The image runs on 64-bit
+  x86 (amd64) and 64-bit ARM (arm64), such as Apple silicon or a Raspberry Pi 4 or 5 with a 64-bit
+  system. 32-bit ARM is not supported. Plan for 1 GB of free memory, and turn off sleep: while
+  the computer sleeps, Claude cannot reach the server.
 - A Cloudflare account and a domain on Cloudflare: Cloudflare requires one to publish an
   application through a tunnel ([Cloudflare](https://developers.cloudflare.com/tunnel/get-started/),
   checked November 2026). If your domain is not on Cloudflare yet, add it first: you change its
@@ -23,20 +30,25 @@ not yet tested end to end. History search is not available here yet: it needs Ra
   ([Cloudflare](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/)).
   Cloudflare's quick tunnels don't fit: their `trycloudflare.com` address is temporary, and
   Claude's sign-in needs one that stays the same.
-- Your Garmin mode (`full` or `key`: [Garmin modes and login](garmin-login.md)) and your time
-  zone as an IANA name, such as `Europe/London`. In `key` mode, your Garmin Personal API key:
-  [create it first](garmin-login.md#key-mode-create-a-key).
+- Your Garmin mode (`key` or `full`: [Garmin modes and login](garmin-login.md)) and your time
+  zone as an IANA name, such as `Europe/London` (setup.sh suggests your computer's own). In
+  `key` mode, your Garmin Personal API key: [create it first](garmin-login.md#key-mode-create-a-key).
 - git and a bash or zsh shell. The commands below are for macOS and Linux; on Windows, use WSL
   (this guide was not tested there).
 
-## What Cloudflare sees
+## Who can see your traffic
 
-Read this before you create the tunnel. Cloudflare ends HTTPS at its edge and passes the
-traffic through the tunnel, so it can read the requests and answers, your Garmin data and the
-sign-in pages included.
+Cloudflare ends HTTPS at its edge and passes the traffic through the tunnel to your computer, so
+Cloudflare can read the requests and answers, your Garmin data and the sign-in pages included.
+Your computer keeps the settings files and the `coach-data` volume (the Garmin login or key cache,
+and the sign-ins). If you don't want Cloudflare in the path, use Railway instead
+([Deploy on Railway](deploy-railway.md)).
 
-Claude calls your server from Anthropic's servers, not from a browser, and some Cloudflare
-features block such calls ([Claude connectors: troubleshooting](https://claude.com/docs/connectors/building/troubleshooting.md)).
+## Cloudflare settings that block Claude
+
+Read this before you create the tunnel. Claude calls your server from Anthropic's servers, not
+from a browser, and some Cloudflare features block such calls
+([Claude connectors: troubleshooting](https://claude.com/docs/connectors/building/troubleshooting.md)).
 For this hostname:
 - Don't put a Cloudflare Access application on it. Claude cannot sign in through Access; your
   server has its own sign-in.
@@ -63,9 +75,136 @@ git checkout v1.1.1
 Use the newest release tag from the repository's **Releases** page in place of `v1.1.1`.
 
 Clone it into a folder that no cloud drive syncs (not the iCloud Desktop or Documents folders,
-Dropbox or OneDrive): the two settings files you create next hold your secrets in plain text.
+Dropbox or OneDrive): the two settings files hold your secrets in plain text.
 
-## 2. Settings
+## 2. Create the tunnel
+
+Choose the server's host name now: a first-level subdomain of your domain on Cloudflare, such as
+`coach.example.com`.
+
+In the Cloudflare dashboard: **Networking → Tunnels → Create Tunnel**. Then open the tunnel and,
+under **Routes**, choose **Add route → Published application**: your host name and the service
+URL `http://app:8080` (`app` is the server's name inside Docker Compose).
+
+Then find the tunnel's token: the install command Cloudflare shows for the tunnel ends with
+`--token` and the token. You paste only the token in the next step.
+
+Anyone who has this token can run your tunnel. If it may have leaked, follow Cloudflare's steps
+for a compromised token ([Tunnel permissions](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/remote-tunnel-permissions/)):
+open the tunnel, click **Refresh token** on its **Overview** tab, then drop all of its connections
+with Cloudflare's API, because a refresh leaves connectors that already run connected. Then put
+the new token in place: `rm tunnel.env`, run `./scripts/setup.sh` again (it keeps `.env` and asks
+only for the token), or use the command in [Tunnel token by hand](#tunnel-token-by-hand).
+
+## 3. Run setup.sh
+
+In the project folder:
+
+```
+./scripts/setup.sh
+```
+
+It checks Docker and Compose, then asks:
+- the host name (it sets `PUBLIC_URL=https://<your-host>`; it refuses `http://`, ports, paths and
+  IP addresses),
+- the Garmin mode (`key` is the default and the simpler one),
+- your time zone (Enter takes your computer's),
+- in `key` mode, the Garmin Personal API key, and the tunnel token. These two are read at a
+  prompt that does not show what you paste.
+
+It writes `.env` and `tunnel.env` (only you may read them: mode 600), generates your owner secret,
+runs `docker compose up -d --build` (the first build takes a few minutes), waits until the server
+is healthy and checks the tunnel. In `full` mode it offers to run the Garmin login
+([More](garmin-login.md#with-docker)). At the end it prints:
+- the connector URL, `https://<your-host>/mcp`, and a link that opens claude.ai's **Add custom
+  connector** form with it filled in;
+- your **owner secret**, once. Save it in your password manager right away. Later you can read it
+  with `grep '^OWNER_SECRET=' .env`.
+
+Run it again at any time: it keeps `.env`, `tunnel.env` and the owner secret, and only asks
+before it changes them. Without a terminal (a provisioning script, CI), set
+`SETUP_NONINTERACTIVE=1` and the answers as environment variables: the list is at the top of
+`scripts/setup.sh`.
+
+## 4. Connect Claude
+
+Add the server to Claude with the connector URL `https://<your-host>/mcp`, exactly, with no
+trailing slash, or open the link setup.sh printed: [Connect Claude](connect-claude.md).
+
+## Check
+
+```
+./scripts/setup.sh --check
+```
+
+It changes nothing. It lists the settings by name (never their values), the state of the two
+containers, what `/readyz` says, and runs `./scripts/test-connector.sh https://<your-host>` when
+this computer can reach the server's public URL. Each problem comes with a next step. Before the
+`full`-mode Garmin login, `/readyz` answers 503: that is expected until you log in.
+
+## Backup and restore
+
+The `coach-data` volume holds all the server keeps: the Garmin login (`full` mode) or the key's
+token cache (`key` mode), and the sign-ins.
+
+```
+./scripts/setup.sh --backup            # into backups/ in the project folder
+./scripts/setup.sh --backup /some/dir  # or a folder of your choice
+```
+
+It stops the server for a few seconds, so the sign-in database is copied whole, writes
+`coach-data-<date>-<time>.tar.gz` (mode 600) with the server's own image (it pulls no other
+image), and starts the server again. The file holds your Garmin login: keep it as private as
+`.env`. It does not hold `.env` or `tunnel.env`: keep copies of them in your password manager.
+git and the image build both ignore `backups/`.
+
+Restore a backup, on this computer or on a new one where `.env` and `tunnel.env` are in place:
+
+```
+./scripts/setup.sh --restore backups/coach-data-<date>-<time>.tar.gz
+```
+
+It asks first, stops the server, replaces everything on the volume with the backup, and starts
+the server again.
+
+## Upgrade and roll back
+
+Upgrade to a release by its tag (the **Releases** page and [CHANGELOG.md](../CHANGELOG.md) list
+them):
+
+```
+./scripts/setup.sh --upgrade v1.2.0
+```
+
+It refuses to run if the checkout has local changes. It makes a backup first, then runs
+`git fetch --tags`, checks out the tag, runs `docker compose up -d --build` and waits until the
+server is healthy. Your settings and the volume stay. At the end it prints the rollback command:
+the same command with the tag you came from, such as `./scripts/setup.sh --upgrade v1.1.1`. If
+the CHANGELOG says a release changed the sign-in database, roll back with the backup too:
+`./scripts/setup.sh --restore <the backup it made>`. A release of this project also updates the
+pinned cloudflared image. More: [Updates and versions](updates.md).
+
+Releases from before setup.sh (1.1.1 and older) do not have it: after a roll back to one of them,
+use the commands in [Upgrade and roll back by hand](#upgrade-and-roll-back-by-hand).
+
+## Logs and removal
+
+```
+docker compose logs -f app       # the server; Ctrl+C stops following
+docker compose logs tunnel       # the tunnel
+```
+
+Remove everything: `docker compose down --volumes --rmi all` deletes the containers, the images
+and the volume, with the Garmin login or key cache and every sign-in. Then run
+`rm .env tunnel.env`, delete `backups/` if you made backups, and delete the tunnel and its DNS
+record in Cloudflare ([Uninstall and revoke](../README.md#uninstall-and-revoke)).
+
+## Manual setup
+
+The same setup without the script: after [1. Get the files](#1-get-the-files) and
+[2. Create the tunnel](#2-create-the-tunnel), in the project folder.
+
+### Settings
 
 Create the settings file. It holds secrets, so only you may read it:
 
@@ -78,9 +217,7 @@ Open `.env` in a text editor and set:
 - `GARMIN_AUTH=full` or `GARMIN_AUTH=key`.
 - `REPORT_TZ=` your time zone, such as `Europe/London`.
 - `PUBLIC_URL=https://<your-host>`: remove the `#` in front of it. It is required here, since
-  there is no Railway domain. Choose `<your-host>` now: a first-level subdomain of your domain
-  on Cloudflare, such as `coach.example.com`. You give the tunnel this same hostname in
-  [3. Create the tunnel](#3-create-the-tunnel).
+  there is no Railway domain. `<your-host>` is the host name of the tunnel's route.
 
 Generate your owner secret. This command writes it into `.env` and prints nothing:
 
@@ -100,28 +237,17 @@ in bash or zsh, paste the key at the silent prompt, and press Enter:
 If you edit `.env` by hand, put any value that contains a `$` in single quotes
 (`NAME='a$b'`): Docker Compose replaces `$NAME` in values with another variable.
 
-## 3. Create the tunnel
+### Tunnel token by hand
 
-In the Cloudflare dashboard: **Networking → Tunnels → Create Tunnel**. Then open the tunnel and,
-under **Routes**, choose **Add route → Published application**: the hostname you chose for
-`<your-host>` in [2. Settings](#2-settings) and the service URL `http://app:8080` (`app` is the
-server's name inside Docker Compose).
-
-Then copy the tunnel's token: the install command Cloudflare shows for the tunnel ends with
-`--token` and the token. Copy only the token. In the project folder, run this, paste the token at
-the silent prompt, and press Enter:
+In the project folder, run this, paste the tunnel's token at the silent prompt, and press Enter:
 
 ```
 (umask 077; IFS= read -rs T; printf 'TUNNEL_TOKEN=%s\n' "$T" > tunnel.env)
 ```
 
-Anyone who has this token can run your tunnel. If it may have leaked, follow Cloudflare's steps
-for a compromised token ([Tunnel permissions](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/remote-tunnel-permissions/)):
-open the tunnel, click **Refresh token** on its **Overview** tab, then drop all of its connections
-with Cloudflare's API, because a refresh leaves connectors that already run connected. Put the new
-token in `tunnel.env` with the command above, then run `docker compose up -d --force-recreate tunnel`.
+After a new token, run `docker compose up -d --force-recreate tunnel`.
 
-## 4. Start
+### Start
 
 ```
 docker compose up -d --build
@@ -133,7 +259,7 @@ tunnel starts. `docker compose logs app` should show `launch: config OK`. If the
 because `app` is unhealthy, `docker compose logs app` names the setting to fix. Fix it in `.env`
 and run `docker compose up -d` again.
 
-## 5. Connect Garmin and Claude
+### Garmin login and Claude
 
 `full` mode: log in to Garmin once, in the project folder:
 
@@ -145,9 +271,7 @@ docker compose exec app garmin-mcp-auth --token-path /data/tokens
 Then add the server to Claude with the connector URL `https://<your-host>/mcp`, exactly, with no
 trailing slash: [Connect Claude](connect-claude.md).
 
-## 6. Check
-
-In the project folder:
+### Check by hand
 
 ```
 ./scripts/test-connector.sh https://<your-host>
@@ -157,14 +281,12 @@ It should end with `RESULT: PASS`. Before the `full`-mode Garmin login, `/readyz
 that check fails; `./scripts/test-connector.sh --expect-unready https://<your-host>` expects
 exactly that.
 
-## Logs, updates and removal
+### Upgrade and roll back by hand
 
-```
-docker compose logs -f app       # the server; Ctrl+C stops following
-docker compose logs tunnel       # the tunnel
-```
-
-Update to a new release (your settings and the volume stay):
+Make a backup first: `./scripts/setup.sh --backup`. By hand: `docker compose stop app`, then
+`(umask 077; mkdir -p backups && docker compose run --rm --no-deps -T --entrypoint tar app -czf - -C /data . > backups/coach-data.tar.gz)`,
+then `docker compose up -d`. The archive holds your Garmin login and sign-ins: `backups/` is
+git-ignored, and `umask 077` keeps the file readable by you only. Then:
 
 ```
 git fetch --tags
@@ -172,12 +294,7 @@ git checkout <new tag>
 docker compose up -d --build
 ```
 
-To go back, do the same with the previous tag. A release of this project also updates the pinned
-cloudflared image.
-
-Remove everything: `docker compose down --volumes --rmi all` deletes the containers, the images
-and the volume, with the Garmin login or key cache and every sign-in. Then run `rm .env tunnel.env`,
-and delete the tunnel and its DNS record in Cloudflare ([Uninstall and revoke](../README.md#uninstall-and-revoke)).
+To go back, do the same with the previous tag.
 
 ## How this path is tested
 
